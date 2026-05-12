@@ -23,6 +23,7 @@ async def test_canvas_pagination(settings: Settings):
     calls = []
 
     async with CanvasClient("token", settings) as client:
+
         async def fake_request(method: str, url: str, params: dict | None = None, **kwargs):
             calls.append((method, url, params))
             if len(calls) == 1:
