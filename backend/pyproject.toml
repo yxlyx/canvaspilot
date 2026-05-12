@@ -1,0 +1,46 @@
+[project]
+name = "canvaspilot-backend"
+version = "0.1.0"
+description = "CanvasPilot backend — Canvas LMS academic copilot API"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "sqlalchemy[asyncio]>=2.0.0",
+    "asyncpg>=0.30.0",
+    "alembic>=1.14.0",
+    "pgvector>=0.3.0",
+    "httpx>=0.28.0",
+    "openai>=1.60.0",
+    "tiktoken>=0.8.0",
+    "beautifulsoup4>=4.12.0",
+    "cryptography>=44.0.0",
+    "itsdangerous>=2.2.0",
+    "pydantic-settings>=2.7.0",
+    "sse-starlette>=2.2.0",
+    "PyJWT>=2.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.25.0",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.9.0",
+    "respx>=0.22.0",
+    "factory-boy>=3.3.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"app/db/migrations/**" = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

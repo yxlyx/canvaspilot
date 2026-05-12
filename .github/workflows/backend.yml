@@ -1,0 +1,63 @@
+name: Backend CI
+
+on:
+  push:
+    paths:
+      - "backend/**"
+      - "shared/**"
+  pull_request:
+    paths:
+      - "backend/**"
+      - "shared/**"
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check .
+      - run: ruff format --check .
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: canvaspilot_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/canvaspilot_test
+      SESSION_SECRET: test-secret-key-not-for-production
+      CANVAS_TOKEN_SECRET: dGVzdC1mZXJuZXQta2V5LW5vdC1mb3ItcHJvZHVjdGlvbg==
+      CANVAS_BASE_URL: https://canvas.test.example.com
+      CANVAS_CLIENT_ID: test-client-id
+      CANVAS_CLIENT_SECRET: test-client-secret
+      OPENAI_API_KEY: test-openai-key
+      FRONTEND_URL: http://localhost:3000
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: alembic upgrade head
+      - run: pytest --cov=app --cov-report=term-missing --cov-fail-under=60
