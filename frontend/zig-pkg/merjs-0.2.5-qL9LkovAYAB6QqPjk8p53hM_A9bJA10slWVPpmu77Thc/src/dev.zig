@@ -103,7 +103,7 @@ pub fn serveDebug(
     const w = &body.writer;
 
     if (want_json) {
-        // JSON mode — for agents and programmatic access.
+        // JSON mode for programmatic access.
         try w.writeAll("{\"version\":\"");
         try w.writeAll(version);
         try w.writeAll("\",\"zig\":\"");
