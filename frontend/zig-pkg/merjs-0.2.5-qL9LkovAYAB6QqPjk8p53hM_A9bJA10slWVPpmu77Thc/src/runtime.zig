@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 
 /// Runtime Io instance with platform-conditional backend.
 ///
-/// - Linux: Uses Evented (io_uring) for best performance
+/// - Linux: Uses Threaded until the Evented compile path is stable
 /// - macOS/BSD: Uses Threaded (blocking syscalls) - Evented has a stdlib bug in 0.16
 /// - Other: Uses Threaded as safe fallback
 pub var threaded: std.Io.Threaded = undefined;
@@ -13,9 +13,8 @@ pub var io: std.Io = undefined;
 const use_evented = blk: {
     if (!@hasDecl(std.Io, "Evented")) break :blk false;
     if (std.Io.Evented == void) break :blk false;
-    // Only use Evented on Linux where Uring (io_uring) is available
-    // macOS Dispatch has a bug in deinit() (Dispatch.zig:584)
-    break :blk builtin.os.tag == .linux;
+    // The Linux Evented backend currently fails to compile under Zig 0.16.
+    break :blk false;
 };
 
 // Evented storage only exists when supported

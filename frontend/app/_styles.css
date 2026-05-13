@@ -288,7 +288,7 @@ button { font: inherit; cursor: pointer; }
     color: #fff;
     border-bottom-right-radius: 4px;
 }
-.cp-chat-msg-assistant {
+.cp-chat-msg-reply {
     align-self: flex-start;
     background: var(--cp-bg);
     border: 1px solid var(--cp-border);
