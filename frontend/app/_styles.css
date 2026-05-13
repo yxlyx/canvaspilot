@@ -407,6 +407,71 @@ button { font: inherit; cursor: pointer; }
     gap: 10px;
 }
 
+.cp-auth-shell {
+    max-width: 560px;
+    margin: 40px auto 0;
+}
+.cp-auth-copy {
+    text-align: center;
+    margin-bottom: 18px;
+}
+.cp-auth-tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    padding: 4px;
+    border: 1px solid var(--cp-border);
+    border-radius: var(--cp-radius);
+    background: var(--cp-bg-elev);
+    margin-bottom: 14px;
+}
+.cp-auth-tab {
+    text-align: center;
+    padding: 9px 12px;
+    border-radius: 8px;
+    color: var(--cp-muted);
+    font-size: 13.5px;
+    font-weight: 500;
+}
+.cp-auth-tab-active {
+    background: var(--cp-accent);
+    color: #fff;
+}
+.cp-auth-form {
+    background: var(--cp-surface);
+    border: 1px solid var(--cp-border);
+    border-radius: var(--cp-radius-lg);
+    box-shadow: var(--cp-shadow-sm);
+    padding: 20px;
+    display: grid;
+    gap: 14px;
+}
+.cp-field {
+    display: grid;
+    gap: 6px;
+    text-align: left;
+    color: var(--cp-muted);
+    font-size: 13px;
+    font-weight: 500;
+}
+.cp-field input {
+    width: 100%;
+    border: 1px solid var(--cp-border);
+    border-radius: var(--cp-radius);
+    background: var(--cp-bg);
+    color: var(--cp-text);
+    padding: 10px 12px;
+    font: inherit;
+}
+.cp-field input:focus {
+    outline: 2px solid var(--cp-accent);
+    outline-offset: 1px;
+}
+.cp-auth-submit {
+    justify-content: center;
+    margin-top: 4px;
+}
+
 .cp-footer {
     max-width: 1200px;
     margin: 24px auto 0;

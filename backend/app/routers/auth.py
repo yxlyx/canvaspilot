@@ -1,116 +1,117 @@
+import base64
+import hashlib
+import hmac
 import secrets
-from urllib.parse import urlencode
 
-import httpx
-from cryptography.fernet import Fernet
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import Settings, get_settings
 from app.db.database import get_db
 from app.dependencies import create_app_token, get_current_user
+from app.exceptions import CanvasPilotError
 from app.models.user import User
-from app.schemas.auth import UserResponse
+from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-
-def _get_fernet(settings: Settings) -> Fernet:
-    return Fernet(settings.canvas_token_secret.encode())
-
-
-@router.get("/canvas/start")
-async def oauth_start(request: Request, settings: Settings = Depends(get_settings)):
-    state = secrets.token_urlsafe(32)
-    request.session["oauth_state"] = state
-
-    params = urlencode(
-        {
-            "client_id": settings.canvas_client_id,
-            "response_type": "code",
-            "redirect_uri": settings.canvas_oauth_redirect_uri,
-            "state": state,
-            "scope": "url:GET|/api/v1/users/:user_id/profile "
-            "url:GET|/api/v1/courses "
-            "url:GET|/api/v1/courses/:course_id/discussion_topics "
-            "url:GET|/api/v1/courses/:course_id/assignments "
-            "url:GET|/api/v1/courses/:course_id/files "
-            "url:GET|/api/v1/calendar_events",
-        }
-    )
-    return RedirectResponse(f"{settings.canvas_base}/login/oauth2/auth?{params}")
+PASSWORD_SCHEME = "pbkdf2_sha256"
+PASSWORD_ITERATIONS = 210_000
 
 
-@router.get("/canvas/callback")
-async def oauth_callback(
-    request: Request,
-    code: str,
-    state: str,
-    settings: Settings = Depends(get_settings),
-    db: AsyncSession = Depends(get_db),
-):
-    expected_state = request.session.pop("oauth_state", None)
-    if not expected_state or state != expected_state:
-        return RedirectResponse(f"{settings.frontend_url}/login?error=oauth_failed")
+class BadAuthRequestError(CanvasPilotError):
+    def __init__(self, error: str, detail: str, status_code: int = status.HTTP_400_BAD_REQUEST):
+        super().__init__(status_code, error, detail)
 
-    async with httpx.AsyncClient() as client:
-        token_resp = await client.post(
-            f"{settings.canvas_base}/login/oauth2/token",
-            data={
-                "grant_type": "authorization_code",
-                "client_id": settings.canvas_client_id,
-                "client_secret": settings.canvas_client_secret,
-                "redirect_uri": settings.canvas_oauth_redirect_uri,
-                "code": code,
-            },
-        )
-        if token_resp.status_code != 200:
-            return RedirectResponse(f"{settings.frontend_url}/login?error=oauth_failed")
 
-        token_data = token_resp.json()
-        access_token = token_data["access_token"]
-        refresh_token = token_data.get("refresh_token", "")
+def _normalize_email(email: str) -> str:
+    return email.strip().lower()
 
-        profile_resp = await client.get(
-            f"{settings.canvas_base}/api/v1/users/self/profile",
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        if profile_resp.status_code != 200:
-            return RedirectResponse(f"{settings.frontend_url}/login?error=oauth_failed")
 
-        profile = profile_resp.json()
+def _validate_email(email: str) -> None:
+    if "@" not in email or email.startswith("@") or email.endswith("@"):
+        raise BadAuthRequestError("invalid_email", "Enter a valid email address")
+    local, domain = email.rsplit("@", 1)
+    if not local or "." not in domain or domain.endswith("."):
+        raise BadAuthRequestError("invalid_email", "Enter a valid email address")
 
-    fernet = _get_fernet(settings)
-    encrypted_access = fernet.encrypt(access_token.encode()).decode()
-    encrypted_refresh = fernet.encrypt(refresh_token.encode()).decode()
 
-    canvas_user_id = profile["id"]
-    result = await db.execute(select(User).where(User.canvas_user_id == canvas_user_id))
+def _validate_password(password: str) -> None:
+    if len(password) < 8:
+        raise BadAuthRequestError("weak_password", "Password must be at least 8 characters")
+
+
+def _hash_password(password: str) -> str:
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PASSWORD_ITERATIONS)
+    salt_b64 = base64.urlsafe_b64encode(salt).decode()
+    digest_b64 = base64.urlsafe_b64encode(digest).decode()
+    return f"{PASSWORD_SCHEME}${PASSWORD_ITERATIONS}${salt_b64}${digest_b64}"
+
+
+def _verify_password(password: str, encoded: str | None) -> bool:
+    if not encoded:
+        return False
+    try:
+        scheme, iterations_raw, salt_b64, digest_b64 = encoded.split("$", 3)
+        if scheme != PASSWORD_SCHEME:
+            return False
+        iterations = int(iterations_raw)
+        salt = base64.urlsafe_b64decode(salt_b64.encode())
+        expected = base64.urlsafe_b64decode(digest_b64.encode())
+    except (ValueError, TypeError):
+        return False
+
+    actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
+    return hmac.compare_digest(actual, expected)
+
+
+def _token_response(user: User) -> TokenResponse:
+    return TokenResponse(token=create_app_token(user.id), user=UserResponse.model_validate(user))
+
+
+@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+async def register(payload: RegisterRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    name = payload.name.strip()
+    email = _normalize_email(payload.email)
+
+    if not name:
+        raise BadAuthRequestError("missing_name", "Enter your name")
+    _validate_email(email)
+    _validate_password(payload.password)
+
+    result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
-
     if user:
-        user.name = profile.get("name", user.name)
-        user.email = profile.get("primary_email", user.email)
-        user.encrypted_access_token = encrypted_access
-        user.encrypted_refresh_token = encrypted_refresh
-    else:
-        user = User(
-            canvas_user_id=canvas_user_id,
-            name=profile.get("name", ""),
-            email=profile.get("primary_email", ""),
-            encrypted_access_token=encrypted_access,
-            encrypted_refresh_token=encrypted_refresh,
+        raise BadAuthRequestError(
+            "email_taken",
+            "An account already exists for that email",
+            status.HTTP_409_CONFLICT,
         )
-        db.add(user)
 
+    user = User(name=name, email=email, password_hash=_hash_password(payload.password))
+    db.add(user)
     await db.commit()
     await db.refresh(user)
 
     request.session["user_id"] = str(user.id)
-    app_token = create_app_token(user.id)
-    return RedirectResponse(f"{settings.frontend_url}/dashboard?token={app_token}")
+    return _token_response(user)
+
+
+@router.post("/login", response_model=TokenResponse)
+async def login(payload: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    email = _normalize_email(payload.email)
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+    if not user or not _verify_password(payload.password, user.password_hash):
+        raise BadAuthRequestError(
+            "invalid_credentials",
+            "Email or password is incorrect",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    request.session["user_id"] = str(user.id)
+    return _token_response(user)
 
 
 @router.get("/me", response_model=UserResponse)

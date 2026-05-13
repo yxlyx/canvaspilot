@@ -34,8 +34,7 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     // Authentication state is approximated by checking if a `cp_session`
     // cookie is present *anywhere* in the request — pages re-check this
     // properly via `lib.session.requireAuth(req)` before rendering data.
-    const signed_in = std.mem.indexOf(u8, path, "/login") == null and
-        std.mem.indexOf(u8, path, "/callback") == null;
+    const signed_in = std.mem.indexOf(u8, path, "/login") == null;
 
     w.writeAll(
         \\<!DOCTYPE html>

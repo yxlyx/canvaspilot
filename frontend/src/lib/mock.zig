@@ -9,7 +9,7 @@ pub const me: types.User = .{
     .id = "00000000-0000-0000-0000-000000000001",
     .name = "Lim Yu Xi",
     .email = "yuxi@u.nus.edu",
-    .canvas_user_id = 1042,
+    .canvas_user_id = null,
 };
 
 pub const demo_module: types.Module = .{

@@ -16,5 +16,5 @@ pub fn render(req: mer.Request) mer.Response {
         return mer.internalError("could not clear session cookie");
     };
     cookies[0] = lib.session.clearCookie();
-    return mer.withCookies(mer.redirect("/login", .see_other), cookies);
+    return mer.withCookies(mer.redirect("/login?signed_out=1", .see_other), cookies);
 }

@@ -25,7 +25,7 @@ class TestSnakeCaseSerialization:
             id=uuid.uuid4(),
             name="Test",
             email="test@nus.edu",
-            canvas_user_id=123,
+            canvas_user_id=None,
         )
         data = resp.model_dump()
         assert "canvas_user_id" in data

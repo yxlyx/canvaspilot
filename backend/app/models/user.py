@@ -11,11 +11,12 @@ class User(TimestampMixin, Base):
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=gen_uuid)
-    canvas_user_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    canvas_user_id: Mapped[int | None] = mapped_column(Integer, unique=True, index=True)
     name: Mapped[str] = mapped_column(String(255))
-    email: Mapped[str] = mapped_column(String(255))
-    encrypted_access_token: Mapped[str] = mapped_column(String(1024))
-    encrypted_refresh_token: Mapped[str] = mapped_column(String(1024))
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    password_hash: Mapped[str | None] = mapped_column(String(512))
+    encrypted_access_token: Mapped[str | None] = mapped_column(String(1024))
+    encrypted_refresh_token: Mapped[str | None] = mapped_column(String(1024))
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     modules: Mapped[list["Module"]] = relationship(back_populates="user", lazy="selectin")  # noqa: F821

@@ -1,6 +1,6 @@
-// src/lib/session.zig — cookie-based session helpers. The backend issues a
-// JWT in `?token=` on the OAuth redirect; `/callback` stores it as an
-// HttpOnly cookie called `cp_session` (name configurable in lib/config.zig).
+// src/lib/session.zig — cookie-based session helpers. The frontend auth
+// handlers store the backend-issued JWT in an HttpOnly cookie called
+// `cp_session` (name configurable in lib/config.zig).
 
 const std = @import("std");
 const mer = @import("mer");
