@@ -1,8 +1,8 @@
 # CanvasPilot — Milestone 1 (Lift-off / Technical PoC) submission
 
 Living tracker for the Milestone 1 submission deliverables called out in
-[issue #9](https://github.com/yxlyx/canvaspilot/issues/9). Anything that says
-`TODO` is a placeholder waiting on the artefact link / screenshot / file.
+[issue #9](https://github.com/yxlyx/canvaspilot/issues/9). Items marked
+`Pending` are waiting on artefact links, screenshots, or final uploaded files.
 
 Team: Lim Yu Xi (@yxlyx) · Pranav Pappu (@pranavp311)
 Level of Achievement: **Artemis**
@@ -13,12 +13,11 @@ Due: **2026-05-18** (Lift-off / Technical PoC), **2026-06-01** (M1 - Ideation)
 ## 1. README
 
 The repo-level [`README.md`](../README.md) introduces the project, lists the
-core M1 features, and points readers to this document for the full M1
-submission.
+core M1 features, shows the repo layout and architecture flow, and includes
+local setup instructions for both `frontend/` and `backend/`.
 
-- [ ] TODO: expand `README.md` with a 1-paragraph project pitch, repo layout
-      diagram, "how to run locally" instructions for both `frontend/` and
-      `backend/`, and links to the live PoC deploy URLs once #2 lands.
+- [x] README expanded for M1 review.
+- [ ] Add live PoC deploy URLs once backend deployment is ready.
 
 ## 2. Proposal & plan documents
 
@@ -26,7 +25,9 @@ submission.
 | ------------------------------------------------------------------- | ------ |
 | Orbital proposal PDF (`A0322845A-A0317720L - Pranav Pappu.pdf`)     | ✅ Locked. Source of truth for milestone scope. |
 | Frontend implementation PRs #24-#27                                 | ✅ Capture the merjs scaffold, dashboard, chat flow, and deploy files. |
-| `docs/architecture.md`                                              | [ ] TODO: high-level system diagram (Canvas API → FastAPI ingest → pgvector → RAG → merjs frontend). Will be expanded at the end of M1. |
+| `docs/architecture.md`                                              | ✅ High-level system diagram, component notes, data model, and risks documented. |
+| `docs/testing-strategy.md`                                          | ✅ Automated checks, smoke tests, and milestone acceptance criteria documented. |
+| `docs/project-log.md`                                               | 🟡 Log structure ready; member hours still need to be filled in before submission. |
 
 ## 3. M1 issue checklist (frontend side, assigned to @yxlyx)
 
@@ -42,32 +43,9 @@ submission.
 
 ## 4. Project log
 
-Reverse-chronological summary of the M1 frontend work. Bullet style, keep
-each entry to a single sentence. Update as work lands.
-
-- `2026-05-12` — Branch protection (1 approval, dismiss stale, require
-  conversation resolution) enabled on `main`. Adviser invited as a reader.
-- `2026-05-12` — Pruned multi-module dashboard / tasks page / module-detail
-  routes that overshot into M2. Strict M1 frontend now: scaffold + auth UI +
-  one-module dashboard + chat with citations + Dockerfile.
-- `2026-05-12` — Real FastAPI SSE aggregation added to `api/chat.zig`:
-  parses `event: token` / `event: citations` / `event: done` frames from
-  `backend/app/services/llm.py`, returns a single JSON reply with citations.
-  Mock fallback for the demo flow when the backend isn't running.
-- `2026-05-12` — CI workflow (`.github/workflows/frontend.yml`) added:
-  `zig fmt --check`, `zig build`, `zig build test --summary all`, and a
-  boot smoke test against `/`.
-- `2026-05-12` — Patched two upstream merjs 0.2.5 scaffold bugs that the
-  team would otherwise hit on first `mer init`: `mercss_jit` import in
-  `tools/codegen.zig`, and the missing `runtime.init()` call in
-  `src/main.zig` that segfaulted the dev server on startup.
-- `2026-05-12` — Hermetic build: vendored merjs and its transitive Zig
-  dependencies under `frontend/zig-pkg/` so the build doesn't depend on
-  network fetches at compile time. Switched the global cache to a
-  workspace-local directory for the same reason.
-- `2026-05-12` — Initial merjs scaffold (`mer init`) wired into the repo at
-  `frontend/`. Added shared `lib` module (config, session, backend client,
-  mock data, types, time helpers, UI helpers) and the app shell layout.
+Detailed contribution tracking lives in [`docs/project-log.md`](project-log.md).
+Fill in realistic hours before submission; the work items and evidence links
+are already structured.
 
 ## 5. CI evidence (for #22)
 
@@ -84,19 +62,19 @@ runs on every PR touching `frontend/**` and exercises:
 Companion backend workflow: [`.github/workflows/backend.yml`](../.github/workflows/backend.yml)
 (Ruff + pytest with a Postgres + pgvector service container).
 
-- [ ] TODO: attach a screenshot of a successful Frontend CI run on `main`.
-- [ ] TODO: attach a screenshot of a successful Backend CI run.
-- [ ] TODO: paste the URL of one passing PR check run.
+- [ ] Pending: attach a screenshot of a successful Frontend CI run on `main`.
+- [ ] Pending: attach a screenshot of a successful Backend CI run.
+- [ ] Pending: paste the URL of one passing PR check run.
 
 ## 6. Poster
 
-- [ ] TODO: 1-page poster PDF — design draft to be added at
+- [ ] Pending: 1-page poster PDF — design draft to be added at
       `docs/m1-poster.pdf` once finalised.
-- [ ] TODO: poster mirror link (Google Drive / Notion).
+- [ ] Pending: poster mirror link (Google Drive / Notion).
 
 ## 7. Demo video
 
-- [ ] TODO: 90-second demo recording walking through the OAuth UI →
+- [ ] Pending: 90-second demo recording walking through the OAuth UI →
       dashboard with mock data → chat with a grounded citation reply.
       Hosted on YouTube unlisted or Google Drive; paste the link here.
 
