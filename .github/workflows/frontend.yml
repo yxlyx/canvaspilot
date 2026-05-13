@@ -1,0 +1,80 @@
+name: Frontend CI
+
+on:
+  push:
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend.yml"
+  pull_request:
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend.yml"
+
+defaults:
+  run:
+    working-directory: frontend
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig 0.16.0
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+
+      - name: Check formatting
+        run: zig fmt --check src app api tools
+
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig 0.16.0
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+
+      - name: Cache Zig global cache
+        uses: actions/cache@v4
+        with:
+          path: frontend/.zig-cache-global
+          key: ${{ runner.os }}-zig-global-${{ hashFiles('frontend/build.zig.zon') }}
+          restore-keys: |
+            ${{ runner.os }}-zig-global-
+
+      - name: Cache Zig local cache
+        uses: actions/cache@v4
+        with:
+          path: frontend/.zig-cache
+          key: ${{ runner.os }}-zig-local-${{ hashFiles('frontend/build.zig', 'frontend/build.zig.zon', 'frontend/src/**', 'frontend/app/**', 'frontend/api/**', 'frontend/tools/**') }}
+          restore-keys: |
+            ${{ runner.os }}-zig-local-
+
+      - name: Build (codegen + compile)
+        env:
+          ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/frontend/.zig-cache-global
+        run: zig build
+
+      - name: Run tests
+        env:
+          ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/frontend/.zig-cache-global
+        run: zig build test --summary all
+
+      - name: Boot smoke test
+        env:
+          ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/frontend/.zig-cache-global
+        run: |
+          ./zig-out/bin/app --port 3001 --no-dev &
+          APP_PID=$!
+          sleep 4
+          status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/)
+          kill $APP_PID || true
+          if [ "$status" != "200" ]; then
+            echo "Home page returned $status (expected 200)"
+            exit 1
+          fi
+          echo "Home page returned 200 - boot smoke test passed."
