@@ -1,0 +1,14 @@
+# Keep the build context small. zig-pkg/ stays in (it's the vendored merjs
+# package the build needs); .zig-cache* and zig-out are excluded since they'll
+# be rebuilt inside the container.
+
+.zig-cache
+.zig-cache-global
+zig-out
+dist
+.git
+.github
+node_modules
+*.log
+.DS_Store
+README*.bak

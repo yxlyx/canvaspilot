@@ -1,0 +1,22 @@
+.{
+    .name = .merjs,
+    .fingerprint = 0xaa135c45924bbfa8,
+    .version = "0.2.5",
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .dhi = .{
+            .path = "../dhi-0.1.0-Fz3bn3g6AwCFCeeGWyrLnJo-V95C5VkFxdVaWMEqc7iy",
+        },
+        .turboapi_core = .{
+            .path = "../turboapi_core-0.1.0-DjdHgu19AABfWBxcHyuAg51BxbZ7jmtlJ5VRt9GTURAP",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "build",
+        "src",
+        "tools",
+        "cli.zig",
+    },
+}

@@ -10,3 +10,9 @@ build/
 venv/
 node_modules/
 codedb.snapshot
+
+# Local tool installs (mer CLI etc.) shouldn't be committed.
+.tools/
+
+# Filesystem cruft
+.DS_Store
