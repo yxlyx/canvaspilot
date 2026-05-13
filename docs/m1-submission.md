@@ -25,18 +25,18 @@ submission.
 | Document                                                            | Status |
 | ------------------------------------------------------------------- | ------ |
 | Orbital proposal PDF (`A0322845A-A0317720L - Pranav Pappu.pdf`)     | ✅ Locked. Source of truth for milestone scope. |
-| [`FRONTEND_PLAN_YUXI.md`](../FRONTEND_PLAN_YUXI.md)                 | ✅ Captures the Next.js → merjs swap rationale and frontend milestone breakdown. Landed in PR #24. |
+| Frontend implementation PRs #24-#27                                 | ✅ Capture the merjs scaffold, dashboard, chat flow, and deploy files. |
 | `docs/architecture.md`                                              | [ ] TODO: high-level system diagram (Canvas API → FastAPI ingest → pgvector → RAG → merjs frontend). Will be expanded at the end of M1. |
 
 ## 3. M1 issue checklist (frontend side, assigned to @yxlyx)
 
 | # | Title | Status | Evidence |
 |---|---|---|---|
-| #5  | Build frontend application scaffold      | ✅ Done — pending merge | PR [#24](https://github.com/yxlyx/canvaspilot/pull/24) |
-| #3  | Build basic module dashboard             | ✅ Done — pending merge | PR [#25](https://github.com/yxlyx/canvaspilot/pull/25) |
-| #4  | Build basic chat interface               | ✅ Done — pending merge | PR [#26](https://github.com/yxlyx/canvaspilot/pull/26) |
-| #2  | Deploy proof of concept stack            | 🟡 Frontend half done — PR [#27](https://github.com/yxlyx/canvaspilot/pull/27); backend deploy pending @pranavp311 | — |
-| #22 | Document CI evidence                     | 🟡 Workflow file shipped in #24; screenshots after first run on `main` | See §5 below |
+| #5  | Build frontend application scaffold      | ✅ Done | PR [#24](https://github.com/yxlyx/canvaspilot/pull/24) merged 2026-05-13 |
+| #3  | Build basic module dashboard             | ✅ Done | PR [#25](https://github.com/yxlyx/canvaspilot/pull/25) merged 2026-05-13 |
+| #4  | Build basic chat interface               | ✅ Done | PR [#26](https://github.com/yxlyx/canvaspilot/pull/26) merged 2026-05-13 |
+| #2  | Deploy proof of concept stack            | 🟡 Frontend deploy files done in PR [#27](https://github.com/yxlyx/canvaspilot/pull/27); backend deploy pending @pranavp311 | — |
+| #22 | Document CI evidence                     | 🟡 Frontend workflow passing on PRs #24-#27; screenshots still needed | See §5 below |
 | #21 | Enable pull request branch rules         | ✅ Closed — branch protection live on `main` | — |
 | #23 | Invite adviser to repository             | ✅ Closed — @thienkimtranhoang invited with read access | — |
 
@@ -56,7 +56,7 @@ each entry to a single sentence. Update as work lands.
   Mock fallback for the demo flow when the backend isn't running.
 - `2026-05-12` — CI workflow (`.github/workflows/frontend.yml`) added:
   `zig fmt --check`, `zig build`, `zig build test --summary all`, and a
-  boot smoke test against `/dashboard?mock=1`.
+  boot smoke test against `/`.
 - `2026-05-12` — Patched two upstream merjs 0.2.5 scaffold bugs that the
   team would otherwise hit on first `mer init`: `mercss_jit` import in
   `tools/codegen.zig`, and the missing `runtime.init()` call in
@@ -79,13 +79,12 @@ runs on every PR touching `frontend/**` and exercises:
 2. `zig build` (codegen + ReleaseSafe compile)
 3. `zig build test --summary all` (unit tests in `src/lib/time.zig`)
 4. Boot smoke test: spin up `./zig-out/bin/app --port 3001 --no-dev` and
-   `curl /dashboard?mock=1` → expect HTTP 200.
+   `curl /` → expect HTTP 200.
 
 Companion backend workflow: [`.github/workflows/backend.yml`](../.github/workflows/backend.yml)
 (Ruff + pytest with a Postgres + pgvector service container).
 
-- [ ] TODO: attach a screenshot of the first successful Frontend CI run on
-      `main` (will appear once PR #24 merges).
+- [ ] TODO: attach a screenshot of a successful Frontend CI run on `main`.
 - [ ] TODO: attach a screenshot of a successful Backend CI run.
 - [ ] TODO: paste the URL of one passing PR check run.
 
