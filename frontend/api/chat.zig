@@ -134,7 +134,7 @@ fn callBackend(
 //   event: done
 //   data: {"grounded": true, "confidence": 0.78, "message": "..."}
 //
-// We concatenate `token.text` into the assistant message, collect the
+// We concatenate `token.text` into the reply message, collect the
 // citations frame (if any), and read `grounded`/`confidence` from `done`.
 // `done` may also carry a `message` field for the no-results path.
 

@@ -1,5 +1,5 @@
 // telemetry.zig — opt-in Sentry + Datadog integration.
-// Activates when SENTRY_DSN or DD_AGENT_HOST env vars are set.
+// Activates when SENTRY_DSN or DD_STATSD_HOST env vars are set.
 // All sends are fire-and-forget — never blocks request handling.
 
 const std = @import("std");
@@ -98,8 +98,8 @@ fn sentrySendThread(gpa: *std.heap.DebugAllocator(.{}), url: []const u8, payload
 }
 
 // ── Datadog (DogStatsD) ─────────────────────────────────────────────────────
-// Sends metrics via UDP to the local Datadog agent.
-// Set DD_AGENT_HOST (default: 127.0.0.1) and DD_DOGSTATSD_PORT (default: 8125).
+// Sends metrics via UDP to the local Datadog StatsD endpoint.
+// Set DD_STATSD_HOST (default: 127.0.0.1) and DD_DOGSTATSD_PORT (default: 8125).
 // 0.16: std.net.Address → std.Io.net.IpAddress; std.posix.socket/sendto → std.Io.net.Socket.
 
 var statsd_addr: ?std.Io.net.IpAddress = null;
@@ -110,7 +110,7 @@ fn getStatsdSocket() ?*const std.Io.net.Socket {
     if (comptime builtin.os.tag == .freestanding) return null;
     if (statsd_sock != null) return &statsd_sock.?;
 
-    const host = env("DD_AGENT_HOST") orelse return null;
+    const host = env("DD_STATSD_HOST") orelse return null;
     const port_str = env("DD_DOGSTATSD_PORT") orelse "8125";
     const port = std.fmt.parseInt(u16, port_str, 10) catch 8125;
     statsd_addr = std.Io.net.IpAddress.parse(host, port) catch return null;
