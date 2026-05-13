@@ -63,7 +63,7 @@
     userBubble.textContent = message;
     history.push({ role: "user", content: message });
 
-    const pending = bubble("assistant");
+    const pending = bubble("reply");
     pending.textContent = "…thinking";
 
     try {
@@ -89,13 +89,9 @@
         tag.textContent = "Demo answer — backend not connected.";
         pending.appendChild(tag);
       }
-      history.push({
-        role: "assistant",
-        content: data.message || "",
-      });
       input.value = "";
     } catch (err) {
-      pending.classList.remove("cp-chat-msg-assistant");
+      pending.classList.remove("cp-chat-msg-reply");
       pending.classList.add("cp-chat-msg-system");
       pending.textContent =
         "Couldn't reach CanvasPilot: " + err.message + ". ";
