@@ -2,12 +2,26 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import Select, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.exceptions import IngestionJobConflictError, NotFoundError
 from app.models.ingestion_job import ACTIVE_INGESTION_JOB_STATUSES, IngestionJob, IngestionJobStatus
 from app.models.source import Source
 from app.models.user import User
+
+
+async def _find_active_job_for_batch(
+    user_id: uuid.UUID, batch_key: str, db: AsyncSession
+) -> IngestionJob | None:
+    result = await db.execute(
+        select(IngestionJob).where(
+            IngestionJob.user_id == user_id,
+            IngestionJob.batch_key == batch_key,
+            IngestionJob.status.in_(ACTIVE_INGESTION_JOB_STATUSES),
+        )
+    )
+    return result.scalar_one_or_none()
 
 
 def build_batch_key(source_ids: list[uuid.UUID]) -> str:
@@ -50,14 +64,7 @@ async def create_queued_ingestion_job(
     owned_source_ids = await _validate_owned_sources(user, source_ids, db)
     batch_key = build_batch_key(owned_source_ids)
 
-    active_result = await db.execute(
-        select(IngestionJob).where(
-            IngestionJob.user_id == user.id,
-            IngestionJob.batch_key == batch_key,
-            IngestionJob.status.in_(ACTIVE_INGESTION_JOB_STATUSES),
-        )
-    )
-    active_job = active_result.scalar_one_or_none()
+    active_job = await _find_active_job_for_batch(user.id, batch_key, db)
     if active_job:
         raise IngestionJobConflictError(str(active_job.id))
 
@@ -69,6 +76,11 @@ async def create_queued_ingestion_job(
         source_count=len(owned_source_ids),
     )
     db.add(job)
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise IngestionJobConflictError("concurrent") from None
     await db.commit()
     await db.refresh(job)
     return job

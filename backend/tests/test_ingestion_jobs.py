@@ -229,6 +229,43 @@ async def test_ingestion_job_lifecycle_transitions(ingestion_job_session):
 
 
 @pytest.mark.asyncio
+async def test_create_ingestion_job_concurrent_insert_returns_conflict(
+    ingestion_job_client,
+    monkeypatch,
+):
+    client, session, user, _ = ingestion_job_client
+    source = await _create_source(session, user, "Race Notes")
+
+    # Seed an active job via a separate session to mimic another request that
+    # committed first. The fixture's shared session is not used here so that
+    # the test simulates cross-request visibility.
+    from app.db.database import async_session_factory
+
+    async with async_session_factory() as other_session:
+        await create_queued_ingestion_job(user, [source.id], other_session)
+
+    from app.services import ingestion_jobs as service_module
+
+    async def find_active_miss(
+        user_id: uuid.UUID, batch_key: str, db: AsyncSession
+    ) -> IngestionJob | None:
+        # Force the service to miss the in-flight conflict detection SELECT so
+        # the duplicate-active-batch path is exercised at INSERT time. The
+        # partial unique index is what actually catches the conflict.
+        return None
+
+    monkeypatch.setattr(service_module, "_find_active_job_for_batch", find_active_miss)
+
+    response = await client.post(
+        "/api/ingestion/jobs",
+        json={"source_ids": [str(source.id)]},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"] == "ingestion_job_conflict"
+
+
+@pytest.mark.asyncio
 async def test_ingestion_jobs_schema_has_required_indexes(ingestion_job_session):
     session, _, _ = ingestion_job_session
 
