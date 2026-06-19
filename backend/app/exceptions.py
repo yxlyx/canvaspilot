@@ -29,6 +29,21 @@ class SyncInProgressError(CanvasPilotError):
         super().__init__(409, "sync_in_progress", detail)
 
 
+class IngestionJobConflictError(CanvasPilotError):
+    def __init__(self, job_id: str):
+        super().__init__(
+            409,
+            "ingestion_job_conflict",
+            f"An active ingestion job already exists for this source batch: {job_id}",
+        )
+        self.job_id = job_id
+
+
+class IngestionJobStateError(CanvasPilotError):
+    def __init__(self, detail: str = "Ingestion job status cannot be changed"):
+        super().__init__(409, "ingestion_job_state_conflict", detail)
+
+
 class RateLimitedError(CanvasPilotError):
     def __init__(self, detail: str = "Too many requests"):
         super().__init__(429, "rate_limited", detail)
