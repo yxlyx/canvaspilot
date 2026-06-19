@@ -46,7 +46,7 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("'{}'::uuid[]"),
         ),
-        sa.Column("batch_key", sa.String(2048), nullable=False),
+        sa.Column("batch_key", sa.String(64), nullable=False),
         sa.Column("source_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("imported_source_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("chunk_count", sa.Integer(), nullable=False, server_default="0"),

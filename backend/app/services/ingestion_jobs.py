@@ -1,11 +1,12 @@
 import uuid
 from datetime import UTC, datetime
+from hashlib import sha256
 
 from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.exceptions import IngestionJobConflictError, NotFoundError
+from app.exceptions import IngestionJobConflictError, IngestionJobStateError, NotFoundError
 from app.models.ingestion_job import ACTIVE_INGESTION_JOB_STATUSES, IngestionJob, IngestionJobStatus
 from app.models.source import Source
 from app.models.user import User
@@ -25,7 +26,8 @@ async def _find_active_job_for_batch(
 
 
 def build_batch_key(source_ids: list[uuid.UUID]) -> str:
-    return "|".join(str(source_id) for source_id in sorted(source_ids))
+    payload = "|".join(str(source_id) for source_id in sorted(source_ids))
+    return sha256(payload.encode()).hexdigest()
 
 
 def build_ingestion_job_list_statement(
@@ -101,6 +103,12 @@ async def get_owned_ingestion_job(
 
 
 async def mark_ingestion_job_running(job: IngestionJob, db: AsyncSession) -> IngestionJob:
+    if job.status == IngestionJobStatus.RUNNING:
+        return job
+    if job.status != IngestionJobStatus.QUEUED:
+        raise IngestionJobStateError(
+            f"Cannot mark ingestion job {job.id} as running from {job.status}"
+        )
     job.status = IngestionJobStatus.RUNNING
     job.started_at = datetime.now(UTC)
     await db.commit()
@@ -114,6 +122,10 @@ async def mark_ingestion_job_completed(
     chunk_count: int,
     db: AsyncSession,
 ) -> IngestionJob:
+    if job.status not in (IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING):
+        raise IngestionJobStateError(
+            f"Cannot mark ingestion job {job.id} as completed from {job.status}"
+        )
     job.status = IngestionJobStatus.COMPLETED
     job.imported_source_count = imported_source_count
     job.chunk_count = chunk_count
@@ -129,6 +141,10 @@ async def mark_ingestion_job_failed(
     error_message: str,
     db: AsyncSession,
 ) -> IngestionJob:
+    if job.status not in (IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING):
+        raise IngestionJobStateError(
+            f"Cannot mark ingestion job {job.id} as failed from {job.status}"
+        )
     job.status = IngestionJobStatus.FAILED
     job.error_message = error_message.strip() or "Import failed"
     job.completed_at = datetime.now(UTC)

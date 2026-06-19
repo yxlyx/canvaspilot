@@ -39,6 +39,11 @@ class IngestionJobConflictError(CanvasPilotError):
         self.job_id = job_id
 
 
+class IngestionJobStateError(CanvasPilotError):
+    def __init__(self, detail: str = "Ingestion job status cannot be changed"):
+        super().__init__(409, "ingestion_job_state_conflict", detail)
+
+
 class RateLimitedError(CanvasPilotError):
     def __init__(self, detail: str = "Too many requests"):
         super().__init__(429, "rate_limited", detail)
