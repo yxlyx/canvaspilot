@@ -27,11 +27,12 @@ def settings():
 def mock_user():
     return User(
         id=uuid.uuid4(),
-        canvas_user_id=12345,
+        canvas_user_id=None,
         name="Test User",
         email="test@u.nus.edu",
-        encrypted_access_token="encrypted",
-        encrypted_refresh_token="encrypted",
+        password_hash=None,
+        encrypted_access_token=None,
+        encrypted_refresh_token=None,
         token_expires_at=datetime.now(UTC),
     )
 

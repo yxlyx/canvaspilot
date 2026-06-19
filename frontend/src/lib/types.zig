@@ -6,7 +6,12 @@ pub const User = struct {
     id: []const u8,
     name: []const u8,
     email: []const u8,
-    canvas_user_id: i64,
+    canvas_user_id: ?i64 = null,
+};
+
+pub const TokenResponse = struct {
+    token: []const u8,
+    user: User,
 };
 
 pub const Module = struct {

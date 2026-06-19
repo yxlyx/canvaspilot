@@ -9,9 +9,20 @@ class UserResponse(BaseModel):
     id: uuid.UUID
     name: str
     email: str
-    canvas_user_id: int
+    canvas_user_id: int | None = None
 
 
 class TokenResponse(BaseModel):
     token: str
     user: UserResponse
+
+
+class RegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str

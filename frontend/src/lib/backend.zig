@@ -70,7 +70,84 @@ fn requestJson(
     return .{ .status = status_int, .value = parsed(T, allocator, res.body) };
 }
 
+fn requestJsonNoAuth(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    method: std.http.Method,
+    path: []const u8,
+    body: []const u8,
+) Result(T) {
+    const url = buildUrl(allocator, path) catch {
+        return .{ .status = 0, .err = "could not build url" };
+    };
+
+    const headers = [_]std.http.Header{
+        .{ .name = "Accept", .value = "application/json" },
+        .{ .name = "Content-Type", .value = "application/json" },
+    };
+
+    const res = mer.fetch(allocator, .{
+        .url = url,
+        .method = method,
+        .body = body,
+        .headers = &headers,
+    }) catch |e| {
+        return .{ .status = 0, .err = @errorName(e) };
+    };
+
+    const status_int: u16 = @intFromEnum(res.status);
+    if (status_int >= 400) {
+        return .{ .status = status_int, .err = res.body };
+    }
+    return .{ .status = status_int, .value = parsed(T, allocator, res.body) };
+}
+
+const RegisterPayload = struct {
+    name: []const u8,
+    email: []const u8,
+    password: []const u8,
+};
+
+const LoginPayload = struct {
+    email: []const u8,
+    password: []const u8,
+};
+
+fn stringify(allocator: std.mem.Allocator, value: anytype) ![]const u8 {
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    var jw: std.json.Stringify = .{ .writer = &out.writer };
+    try jw.write(value);
+    return out.written();
+}
+
 // ── High-level endpoints ────────────────────────────────────────────────────
+
+pub fn register(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    email: []const u8,
+    password: []const u8,
+) Result(types.TokenResponse) {
+    const body = stringify(allocator, RegisterPayload{
+        .name = name,
+        .email = email,
+        .password = password,
+    }) catch {
+        return .{ .status = 0, .err = "could not encode request" };
+    };
+    return requestJsonNoAuth(types.TokenResponse, allocator, .POST, "/api/auth/register", body);
+}
+
+pub fn login(
+    allocator: std.mem.Allocator,
+    email: []const u8,
+    password: []const u8,
+) Result(types.TokenResponse) {
+    const body = stringify(allocator, LoginPayload{ .email = email, .password = password }) catch {
+        return .{ .status = 0, .err = "could not encode request" };
+    };
+    return requestJsonNoAuth(types.TokenResponse, allocator, .POST, "/api/auth/login", body);
+}
 
 pub fn me(allocator: std.mem.Allocator, token: []const u8) Result(types.User) {
     return requestJson(types.User, allocator, token, .GET, "/api/auth/me", null);
@@ -104,10 +181,4 @@ pub fn upcomingTasks(allocator: std.mem.Allocator, token: []const u8) Result([]t
 
 pub fn triggerSync(allocator: std.mem.Allocator, token: []const u8) Result(types.SyncStatus) {
     return requestJson(types.SyncStatus, allocator, token, .POST, "/api/modules/sync", "{}");
-}
-
-/// Build the backend URL the user is redirected to when starting Canvas
-/// OAuth. Returned slice is owned by the caller's allocator.
-pub fn oauthStartUrl(allocator: std.mem.Allocator) []const u8 {
-    return buildUrl(allocator, "/api/auth/canvas/start") catch "/api/auth/canvas/start";
 }

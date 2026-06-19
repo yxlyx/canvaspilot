@@ -25,6 +25,7 @@ pub fn render(req: mer.Request) mer.Response {
     const use_mock = req.queryParam("mock") != null or !session.isAuthenticated();
     const synced = req.queryParam("synced") != null;
     const sync_failed = req.queryParam("sync_failed") != null;
+    const auth = req.queryParam("auth");
 
     var modules_slice: []const lib.types.Module = lib.mock.modules;
     var announcements_slice: []const lib.types.Announcement = lib.mock.announcements;
@@ -84,6 +85,12 @@ pub fn render(req: mer.Request) mer.Response {
         w.writeAll("<div class=\"cp-status-banner cp-status-info\">Sync started. Refresh in a moment to see the latest.</div>\n") catch return mer.internalError("dashboard render failed");
     } else if (sync_failed) {
         w.writeAll("<div class=\"cp-status-banner cp-status-error\">Sync failed. Check the backend logs and try again.</div>\n") catch return mer.internalError("dashboard render failed");
+    } else if (auth) |auth_state| {
+        if (std.mem.eql(u8, auth_state, "registered")) {
+            w.writeAll("<div class=\"cp-status-banner cp-status-info\">Account created. Showing demo module data.</div>\n") catch return mer.internalError("dashboard render failed");
+        } else if (std.mem.eql(u8, auth_state, "signed_in")) {
+            w.writeAll("<div class=\"cp-status-banner cp-status-info\">Signed in. Showing demo module data.</div>\n") catch return mer.internalError("dashboard render failed");
+        }
     }
 
     // ── Two-column grid ──────────────────────────────────────────────────
@@ -216,8 +223,8 @@ fn renderEmpty(req: mer.Request, use_mock: bool, backend_ok: bool) mer.Response 
         \\</header>
         \\<section class="cp-card">
         \\  <div class="cp-empty">
-        \\    Connect Canvas, then hit <em>Sync now</em> to pull in announcements and upcoming
-        \\    assignments. Or open the demo with <a href="/dashboard?mock=1">mock data</a>.
+        \\    Sign in, then hit <em>Sync now</em> once module import is configured. Or open
+        \\    the demo with <a href="/dashboard?mock=1">mock data</a>.
         \\  </div>
         \\</section>
         \\
