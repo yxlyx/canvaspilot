@@ -41,6 +41,14 @@ async def test_tasks_unauthenticated():
 
 
 @pytest.mark.asyncio
+async def test_sources_unauthenticated():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/sources")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_chat_unauthenticated():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
