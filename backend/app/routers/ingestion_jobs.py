@@ -8,11 +8,13 @@ from app.dependencies import get_current_user
 from app.models.ingestion_job import IngestionJobStatus
 from app.models.user import User
 from app.schemas.ingestion_jobs import IngestionJobCreate, IngestionJobResponse
+from app.schemas.source_imports import SourceImportRun
 from app.services.ingestion_jobs import (
     build_ingestion_job_list_statement,
     create_queued_ingestion_job,
     get_owned_ingestion_job,
 )
+from app.services.source_imports import import_ingestion_job_sources
 
 router = APIRouter(prefix="/ingestion/jobs", tags=["ingestion"])
 
@@ -48,3 +50,13 @@ async def get_ingestion_job(
     db: AsyncSession = Depends(get_db),
 ):
     return await get_owned_ingestion_job(user, job_id, db)
+
+
+@router.post("/{job_id}/run", response_model=IngestionJobResponse)
+async def run_ingestion_job(
+    job_id: uuid.UUID,
+    payload: SourceImportRun,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await import_ingestion_job_sources(user, job_id, payload.sources, db)

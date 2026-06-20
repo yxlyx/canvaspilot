@@ -68,3 +68,8 @@ class Source(TimestampMixin, Base):
     import_error: Mapped[str | None] = mapped_column(Text)
 
     user: Mapped["User"] = relationship(back_populates="sources")  # noqa: F821
+    chunks: Mapped[list["SourceChunk"]] = relationship(  # noqa: F821
+        back_populates="source",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
