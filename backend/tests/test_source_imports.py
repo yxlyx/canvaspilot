@@ -110,6 +110,27 @@ async def _create_source(session: AsyncSession, user: User, title: str) -> Sourc
     )
 
 
+async def _create_typed_source(
+    session: AsyncSession,
+    user: User,
+    title: str,
+    source_type: str,
+    source_url: str = "",
+) -> Source:
+    return await create_or_update_source(
+        user,
+        SourceCreate(
+            source_type=source_type,
+            origin="test",
+            external_id=f"{source_type}-{title.lower().replace(' ', '-')}-{uuid.uuid4()}",
+            title=title,
+            source_url=source_url,
+            citation_label=f"{title} Citation",
+        ),
+        session,
+    )
+
+
 async def _fake_embed_chunks(chunks: list[SourceChunk], db: AsyncSession) -> None:
     for chunk in chunks:
         chunk.embedding = [0.1] * 1536
@@ -159,6 +180,146 @@ async def test_run_ingestion_job_imports_source_chunks(source_import_client, mon
     assert chunks[0].chunk_index == 0
     assert chunks[0].citation_ref == "Week 1 Notes Citation#1"
     assert list(chunks[0].embedding) == [0.1] * 1536
+
+
+@pytest.mark.asyncio
+async def test_parse_run_imports_markdown_sections_with_locations(
+    source_import_client,
+    monkeypatch,
+):
+    client, session, user, _ = source_import_client
+    monkeypatch.setattr("app.services.source_imports.embed_chunks", _fake_embed_chunks)
+
+    source = await _create_typed_source(session, user, "Markdown Notes", "markdown")
+    job = await create_queued_ingestion_job(user, [source.id], session)
+
+    response = await client.post(
+        f"/api/ingestion/jobs/{job.id}/parse-run",
+        json={
+            "sources": [
+                {
+                    "source_id": str(source.id),
+                    "filename": "notes.md",
+                    "content": (
+                        "# Limits\nLimits describe behavior.\n\n## Continuity\nMatches values."
+                    ),
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    chunks = (
+        (
+            await session.execute(
+                select(SourceChunk)
+                .where(SourceChunk.source_id == source.id)
+                .order_by(SourceChunk.chunk_index)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [chunk.location_label for chunk in chunks] == ["Limits", "Limits > Continuity"]
+    assert chunks[0].citation_ref == "Markdown Notes Citation: Limits"
+    assert chunks[1].citation_ref == "Markdown Notes Citation: Limits > Continuity"
+
+
+@pytest.mark.asyncio
+async def test_parse_run_imports_plain_text(source_import_client, monkeypatch):
+    client, session, user, _ = source_import_client
+    monkeypatch.setattr("app.services.source_imports.embed_chunks", _fake_embed_chunks)
+
+    source = await _create_typed_source(session, user, "Text Notes", "plain_text")
+    job = await create_queued_ingestion_job(user, [source.id], session)
+
+    response = await client.post(
+        f"/api/ingestion/jobs/{job.id}/parse-run",
+        json={
+            "sources": [
+                {
+                    "source_id": str(source.id),
+                    "filename": "notes.txt",
+                    "content": "First line\r\n second line\n\nThird line",
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["chunk_count"] == 1
+    chunk = (
+        await session.execute(select(SourceChunk).where(SourceChunk.source_id == source.id))
+    ).scalar_one()
+    assert chunk.content == "First line second line\n\nThird line"
+
+
+@pytest.mark.asyncio
+async def test_parse_run_link_and_repository_metadata_only(source_import_client):
+    client, session, user, _ = source_import_client
+    link = await _create_typed_source(
+        session,
+        user,
+        "Reference Link",
+        "link",
+        source_url="https://example.com/reading",
+    )
+    repository = await _create_typed_source(
+        session,
+        user,
+        "Reference Repository",
+        "repository",
+        source_url="https://github.com/example/repo",
+    )
+    job = await create_queued_ingestion_job(user, [link.id, repository.id], session)
+
+    response = await client.post(
+        f"/api/ingestion/jobs/{job.id}/parse-run",
+        json={
+            "sources": [
+                {"source_id": str(link.id), "source_url": link.source_url},
+                {"source_id": str(repository.id), "source_url": repository.source_url},
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "completed"
+    assert data["imported_source_count"] == 2
+    assert data["chunk_count"] == 0
+
+    await session.refresh(link)
+    await session.refresh(repository)
+    assert link.status == SourceStatus.READY
+    assert repository.status == SourceStatus.READY
+    assert (
+        await session.execute(
+            select(SourceChunk).where(SourceChunk.source_id.in_([link.id, repository.id]))
+        )
+    ).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_parse_run_marks_parser_errors_failed(source_import_client):
+    client, session, user, _ = source_import_client
+    source = await _create_typed_source(session, user, "Broken Markdown", "markdown")
+    job = await create_queued_ingestion_job(user, [source.id], session)
+
+    response = await client.post(
+        f"/api/ingestion/jobs/{job.id}/parse-run",
+        json={"sources": [{"source_id": str(source.id), "filename": "broken.md"}]},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "failed"
+    assert "Markdown content is required" in data["error_message"]
+
+    await session.refresh(source)
+    assert source.status == SourceStatus.FAILED
+    assert source.import_error == "Markdown content is required"
 
 
 @pytest.mark.asyncio
@@ -290,6 +451,7 @@ async def test_source_chunks_schema_has_required_indexes(source_import_session):
         "source_id",
         "chunk_index",
         "citation_ref",
+        "location_label",
         "content",
         "token_count",
         "embedding",
