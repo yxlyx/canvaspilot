@@ -96,8 +96,6 @@ def parse_plain_text(content: str) -> list[SourceImportSection]:
 
 
 def parse_pdf(content_base64: str | None) -> list[SourceImportSection]:
-    from pypdf import PdfReader
-
     if not content_base64:
         raise SourceParseError("PDF content is required")
     try:
@@ -105,10 +103,9 @@ def parse_pdf(content_base64: str | None) -> list[SourceImportSection]:
     except ValueError as exc:
         raise SourceParseError("PDF content must be base64 encoded") from exc
 
-    reader = PdfReader(BytesIO(pdf_bytes))
     sections: list[SourceImportSection] = []
-    for page_index, page in enumerate(reader.pages, 1):
-        text = _normalize_text(page.extract_text() or "")
+    for page_index, page_text in enumerate(_extract_pdf_page_texts(pdf_bytes), 1):
+        text = _normalize_text(page_text)
         if text:
             sections.append(
                 SourceImportSection(
@@ -120,6 +117,13 @@ def parse_pdf(content_base64: str | None) -> list[SourceImportSection]:
     if not sections:
         raise SourceParseError("No importable PDF text found")
     return sections
+
+
+def _extract_pdf_page_texts(pdf_bytes: bytes) -> list[str]:
+    from pypdf import PdfReader
+
+    reader = PdfReader(BytesIO(pdf_bytes))
+    return [page.extract_text() or "" for page in reader.pages]
 
 
 def parse_source_payload(source: Source, payload: SourceParseItem) -> SourceImportItem:
