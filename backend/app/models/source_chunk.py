@@ -19,6 +19,7 @@ class SourceChunk(Base):
     source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sources.id", ondelete="CASCADE"))
     chunk_index: Mapped[int] = mapped_column(Integer)
     citation_ref: Mapped[str] = mapped_column(String(1000))
+    location_label: Mapped[str] = mapped_column(String(255), default="")
     content: Mapped[str] = mapped_column(Text)
     token_count: Mapped[int] = mapped_column(Integer)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536))
