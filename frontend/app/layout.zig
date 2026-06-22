@@ -1,7 +1,7 @@
 // app/layout.zig — CanvasPilot shell. Every page response is wrapped by
-// `wrap()`. We render a compact header with brand + tab nav (Dashboard,
-// Chat) and a session-aware "Sign in / Sign out" action. Milestone 1
-// scope: Dashboard + Chat only; the full Tasks page lives in Milestone 2.
+// `wrap()`. We render a compact header with brand + tab nav (Workspace,
+// Sources, Wiki, Flashcards, Chat) and a session-aware "Sign in / Sign out"
+// action.
 
 const std = @import("std");
 const mer = @import("mer");
@@ -17,7 +17,10 @@ const NavItem = struct {
 };
 
 const NAV_ITEMS = [_]NavItem{
-    .{ .href = "/dashboard", .label = "Dashboard", .match = "/dashboard" },
+    .{ .href = "/dashboard", .label = "Workspace", .match = "/dashboard" },
+    .{ .href = "/sources", .label = "Sources", .match = "/sources" },
+    .{ .href = "/wiki", .label = "Wiki", .match = "/wiki" },
+    .{ .href = "/flashcards", .label = "Flashcards", .match = "/flashcards" },
     .{ .href = "/chat", .label = "Chat", .match = "/chat" },
 };
 
@@ -46,6 +49,13 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     ) catch return body;
     w.print("<title>{s} — CanvasPilot</title>\n", .{title}) catch return body;
     w.print("<meta name=\"description\" content=\"{s}\">\n", .{desc}) catch return body;
+
+    w.writeAll(
+        \\<link rel="preconnect" href="https://fonts.googleapis.com">
+        \\<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        \\<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+        \\
+    ) catch return body;
 
     w.writeAll("<style>") catch return body;
     w.writeAll(CSS) catch return body;

@@ -8,6 +8,10 @@ const mer = @import("mer");
 const lib = @import("lib");
 
 pub fn render(req: mer.Request) mer.Response {
+    if (req.method != .POST) {
+        return .{ .status = .method_not_allowed, .content_type = .text, .body = "POST only" };
+    }
+
     const session = lib.session.fromRequest(req);
     if (!session.isAuthenticated()) {
         return mer.redirect("/login", .see_other);

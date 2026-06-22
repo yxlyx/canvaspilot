@@ -1,6 +1,6 @@
-// src/lib/types.zig — Zig structs mirroring the FastAPI Pydantic schemas in
-// backend/app/schemas/*. Field names and types match exactly so std.json
-// parseFromSlice can deserialize backend responses straight into these.
+// src/lib/types.zig — Zig structs shared across frontend routes. The top
+// section mirrors FastAPI Pydantic schemas; M2 prototype structs below model
+// workspace sources, wiki pages, and flashcards while backend endpoints land.
 
 pub const User = struct {
     id: []const u8,
@@ -69,4 +69,48 @@ pub const ChatRequest = struct {
 
 pub const SyncStatus = struct {
     status: []const u8,
+};
+
+pub const WorkspaceSource = struct {
+    id: []const u8,
+    module_id: []const u8,
+    title: []const u8,
+    source_type: []const u8,
+    status: []const u8,
+    topics: []const []const u8,
+    updated_at: []const u8,
+    summary: []const u8,
+    chunk_count: usize,
+    url: []const u8 = "",
+};
+
+pub const WikiPage = struct {
+    id: []const u8,
+    slug: []const u8,
+    title: []const u8,
+    summary: []const u8,
+    markdown: []const u8,
+    topics: []const []const u8,
+    updated_at: []const u8,
+    citations: []const Citation,
+};
+
+pub const FlashcardDeck = struct {
+    id: []const u8,
+    title: []const u8,
+    description: []const u8,
+    source_id: []const u8,
+    topics: []const []const u8,
+    card_count: usize,
+    due_count: usize,
+    updated_at: []const u8,
+};
+
+pub const Flashcard = struct {
+    id: []const u8,
+    deck_id: []const u8,
+    question: []const u8,
+    answer: []const u8,
+    topic: []const u8,
+    citation: Citation,
 };
