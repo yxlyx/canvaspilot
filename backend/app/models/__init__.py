@@ -6,6 +6,7 @@ from app.models.source import Source
 from app.models.source_chunk import SourceChunk
 from app.models.task import Task
 from app.models.user import User
+from app.models.wiki import WikiCitation, WikiPage
 
 __all__ = [
     "Base",
@@ -18,4 +19,6 @@ __all__ = [
     "Source",
     "SourceChunk",
     "IngestionJob",
+    "WikiPage",
+    "WikiCitation",
 ]

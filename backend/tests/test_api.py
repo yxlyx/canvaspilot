@@ -70,3 +70,11 @@ async def test_sync_unauthenticated():
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post("/api/modules/sync")
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_wiki_unauthenticated():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/wiki/pages")
+    assert resp.status_code == 401
