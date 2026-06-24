@@ -17,14 +17,14 @@ pub fn render(req: mer.Request) mer.Response {
 
     const body =
         \\<section class="cp-landing">
-        \\  <h1 class="cp-landing-title">All your modules, ready to ask.</h1>
+        \\  <h1 class="cp-landing-title">Your course workspace, ready to study.</h1>
         \\  <p class="cp-landing-sub">
-        \\    Create a demo account, view module updates, and try the chat flow with cited
-        \\    course material.
+        \\    Create a demo account, review imported sources, open generated wiki notes,
+        \\    practice flashcards, and ask cited questions across your modules.
         \\  </p>
         \\  <div class="cp-landing-actions">
         \\    <a class="cp-btn cp-btn-primary" href="/login">Sign in</a>
-        \\    <a class="cp-btn cp-btn-ghost" href="/dashboard?mock=1">View demo data</a>
+        \\    <a class="cp-btn cp-btn-ghost" href="/dashboard?mock=1">View demo workspace</a>
         \\  </div>
         \\</section>
     ;

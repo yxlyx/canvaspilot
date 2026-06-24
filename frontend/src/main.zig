@@ -1,6 +1,6 @@
 // main.zig -- app entry point.
 // Usage:
-//   zig build serve               (dev server on :3000, hot reload)
+//   zig build serve               (dev server on :3001, hot reload)
 //   zig build serve -- --port 8080
 //   zig build serve -- --no-dev   (disable hot reload)
 
@@ -27,7 +27,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     var config = mer.Config{
         .host = "127.0.0.1",
-        .port = 3000,
+        .port = 3001,
         .dev = true,
     };
 
