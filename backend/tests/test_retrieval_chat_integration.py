@@ -179,7 +179,8 @@ def _install_fake_chat_completion(monkeypatch, parts: list[str], captured: dict)
 
 def _parse_sse_events(response_text: str) -> list[tuple[str, dict]]:
     events: list[tuple[str, dict]] = []
-    for block in response_text.strip().split("\n\n"):
+    normalized_text = response_text.replace("\r\n", "\n")
+    for block in normalized_text.strip().split("\n\n"):
         event_name = "message"
         data_lines: list[str] = []
         for line in block.splitlines():
