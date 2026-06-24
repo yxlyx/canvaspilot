@@ -7,7 +7,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.config import get_settings
 from app.db.database import init_db
 from app.exceptions import CanvasPilotError, canvaspilot_error_handler
-from app.routers import auth, chat, ingestion_jobs, modules, sources, sync, tasks
+from app.routers import auth, chat, ingestion_jobs, modules, sources, sync, tasks, wiki
 
 settings = get_settings()
 
@@ -38,6 +38,7 @@ app.include_router(ingestion_jobs.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")
 app.include_router(sync.router, prefix="/api")
+app.include_router(wiki.router, prefix="/api")
 
 
 @app.get("/api/health")
