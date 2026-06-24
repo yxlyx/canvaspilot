@@ -25,12 +25,22 @@ pub fn render(req: mer.Request) mer.Response {
     var announcements_slice: []const lib.types.Announcement = lib.mock.announcements;
     var tasks_slice: []const lib.types.Task = lib.mock.tasks;
     var backend_ok = true;
+    var using_live_modules = false;
 
     if (!use_mock) {
         const mods = lib.backend.listModules(req.allocator, session.token);
-        if (mods.value) |v| modules_slice = v.value else backend_ok = false;
+        if (mods.value) |v| {
+            if (v.value.len > 0) {
+                modules_slice = v.value;
+                using_live_modules = true;
+            } else {
+                backend_ok = false;
+            }
+        } else {
+            backend_ok = false;
+        }
 
-        if (modules_slice.len > 0) {
+        if (using_live_modules) {
             const first = modules_slice[0];
             const anns = lib.backend.moduleAnnouncements(req.allocator, session.token, first.id);
             if (anns.value) |v| announcements_slice = v.value else backend_ok = false;
