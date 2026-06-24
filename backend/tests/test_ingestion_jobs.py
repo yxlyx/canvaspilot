@@ -28,7 +28,7 @@ from app.services.sources import create_or_update_source
 async def _require_database(session: AsyncSession) -> None:
     try:
         await session.execute(text("SELECT 1"))
-    except SQLAlchemyError as exc:
+    except (OSError, SQLAlchemyError) as exc:
         pytest.skip(f"database is unavailable: {exc}")
 
 

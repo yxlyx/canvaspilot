@@ -9,13 +9,12 @@ from app.schemas.chat import ChatMessage
 from app.services.retrieval import RetrievedChunk
 
 SYSTEM_PROMPT = (
-    "You are CanvasPilot, an academic assistant for NUS students. "
-    "Answer questions using ONLY the provided context from Canvas "
-    "module content.\n\n"
+    "You are CanvasPilot, an academic study helper for NUS students. "
+    "Answer questions using ONLY the provided workspace source context.\n\n"
     "Rules:\n"
     "- Cite sources using [1], [2] etc. matching the context numbers\n"
     "- If the context doesn't contain enough information, say "
-    "\"I don't have enough information from your Canvas modules "
+    "\"I don't have enough information from your workspace sources "
     'to answer this"\n'
     "- Be concise and accurate\n"
     "- Never fabricate information not in the context\n\n"
@@ -28,7 +27,7 @@ async def stream_rag_response(
     context: str,
     chunks: list[RetrievedChunk],
     history: list[ChatMessage],
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[dict[str, str], None]:
     settings = get_settings()
     client = AsyncOpenAI(api_key=settings.openai_api_key)
 
@@ -52,7 +51,7 @@ async def stream_rag_response(
         if delta.content:
             full_response += delta.content
             token_data = json.dumps({"text": delta.content})
-            yield f"event: token\ndata: {token_data}\n\n"
+            yield {"event": "token", "data": token_data}
 
     citation_refs = set(int(m) for m in re.findall(r"\[(\d+)\]", full_response))
     citations = []
@@ -65,12 +64,14 @@ async def stream_rag_response(
                     "title": c.source_title,
                     "url": c.source_url,
                     "snippet": c.content[:200],
+                    "source_id": c.source_id,
+                    "citation_ref": c.citation_ref,
                 }
             )
 
     if citations:
         cite_data = json.dumps({"citations": citations})
-        yield f"event: citations\ndata: {cite_data}\n\n"
+        yield {"event": "citations", "data": cite_data}
 
     avg_score = sum(c.score for c in chunks) / len(chunks) if chunks else 0
     done_data = json.dumps(
@@ -79,4 +80,4 @@ async def stream_rag_response(
             "confidence": round(avg_score, 2),
         }
     )
-    yield f"event: done\ndata: {done_data}\n\n"
+    yield {"event": "done", "data": done_data}

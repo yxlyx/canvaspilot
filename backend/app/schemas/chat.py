@@ -7,6 +7,8 @@ class Citation(BaseModel):
     title: str
     url: str
     snippet: str
+    source_id: str | None = None
+    citation_ref: str | None = None
 
 
 class ChatMessage(BaseModel):

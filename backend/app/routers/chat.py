@@ -31,18 +31,17 @@ async def chat(
 
     if not chunks:
 
-        async def no_results() -> AsyncGenerator[str, None]:
-            yield (
-                "event: done\ndata: "
-                + json.dumps(
+        async def no_results() -> AsyncGenerator[dict[str, str], None]:
+            yield {
+                "event": "done",
+                "data": json.dumps(
                     {
                         "grounded": False,
                         "confidence": 0,
-                        "message": "No relevant content found in your Canvas modules.",
+                        "message": "No relevant content found in your workspace sources.",
                     }
-                )
-                + "\n\n"
-            )
+                ),
+            }
 
         return EventSourceResponse(no_results(), media_type="text/event-stream")
 
