@@ -289,7 +289,7 @@ async def test_generate_flashcards_from_selected_source_chunks_only(flashcard_cl
     ]
     assert [card["order_index"] for card in deck["cards"]] == [1, 2]
     assert deck["cards"][0]["citation_ref"] == chunks[1].citation_ref
-    assert "One-sided limits" in deck["cards"][0]["answer"]
+    assert "One sided limits" in deck["cards"][0]["answer"]
 
 
 @pytest.mark.asyncio
