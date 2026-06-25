@@ -1,16 +1,16 @@
 import asyncio
+from typing import Any
 
 from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.models.content import ContentChunk
 
 BATCH_SIZE = 100
 MODEL = "text-embedding-3-small"
 
 
-async def embed_chunks(chunks: list[ContentChunk], db: AsyncSession) -> None:
+async def embed_chunks(chunks: list[Any], db: AsyncSession) -> None:
     settings = get_settings()
     client = AsyncOpenAI(api_key=settings.openai_api_key)
 

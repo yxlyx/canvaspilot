@@ -41,6 +41,30 @@ async def test_tasks_unauthenticated():
 
 
 @pytest.mark.asyncio
+async def test_sources_unauthenticated():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/sources")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_ingestion_jobs_unauthenticated():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/ingestion/jobs")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_search_unauthenticated():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/search", params={"query": "limits"})
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_chat_unauthenticated():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -49,8 +73,24 @@ async def test_chat_unauthenticated():
 
 
 @pytest.mark.asyncio
+async def test_flashcards_unauthenticated():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/flashcards/decks")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_sync_unauthenticated():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post("/api/modules/sync")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_wiki_unauthenticated():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/wiki/pages")
     assert resp.status_code == 401

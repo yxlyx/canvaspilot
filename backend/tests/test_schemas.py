@@ -3,7 +3,9 @@ from datetime import UTC, datetime
 
 from app.schemas.auth import UserResponse
 from app.schemas.chat import ChatMessage, ChatRequest, Citation
+from app.schemas.ingestion_jobs import IngestionJobResponse
 from app.schemas.modules import AnnouncementResponse, ModuleResponse
+from app.schemas.sources import SourceResponse
 from app.schemas.tasks import TaskResponse
 
 
@@ -76,3 +78,50 @@ class TestSnakeCaseSerialization:
         c = Citation(title="Notes", url="http://x.com", snippet="Some text")
         data = c.model_dump()
         assert data["title"] == "Notes"
+
+    def test_source_response(self):
+        resp = SourceResponse(
+            id=uuid.uuid4(),
+            user_id=uuid.uuid4(),
+            source_type="markdown",
+            origin="upload",
+            external_id="notes-1",
+            title="Notes",
+            source_url="",
+            citation_label="Notes",
+            topic_tags=["math"],
+            status="ready",
+            course_context=None,
+            project_context=None,
+            last_imported_at=datetime(2026, 6, 19, tzinfo=UTC),
+            import_error=None,
+            created_at=datetime(2026, 6, 19, tzinfo=UTC),
+            updated_at=datetime(2026, 6, 19, tzinfo=UTC),
+        )
+        data = resp.model_dump()
+        assert "user_id" in data
+        assert "source_type" in data
+        assert "topic_tags" in data
+        assert "last_imported_at" in data
+
+    def test_ingestion_job_response(self):
+        resp = IngestionJobResponse(
+            id=uuid.uuid4(),
+            user_id=uuid.uuid4(),
+            status="queued",
+            source_ids=[uuid.uuid4()],
+            batch_key="batch",
+            source_count=1,
+            imported_source_count=0,
+            chunk_count=0,
+            error_message=None,
+            started_at=None,
+            completed_at=None,
+            created_at=datetime(2026, 6, 19, tzinfo=UTC),
+            updated_at=datetime(2026, 6, 19, tzinfo=UTC),
+        )
+        data = resp.model_dump()
+        assert "user_id" in data
+        assert "source_ids" in data
+        assert "batch_key" in data
+        assert "imported_source_count" in data

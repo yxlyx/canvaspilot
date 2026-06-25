@@ -21,3 +21,7 @@ class User(TimestampMixin, Base):
 
     modules: Mapped[list["Module"]] = relationship(back_populates="user", lazy="selectin")  # noqa: F821
     tasks: Mapped[list["Task"]] = relationship(back_populates="user", lazy="selectin")  # noqa: F821
+    sources: Mapped[list["Source"]] = relationship(back_populates="user", lazy="selectin")  # noqa: F821
+    ingestion_jobs: Mapped[list["IngestionJob"]] = relationship(  # noqa: F821
+        back_populates="user", lazy="selectin"
+    )

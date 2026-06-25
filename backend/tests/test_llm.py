@@ -28,7 +28,7 @@ async def fake_stream(parts: list[str]):
 
 
 @pytest.mark.asyncio
-async def test_stream_rag_response_formats_sse_and_citations(settings, monkeypatch):
+async def test_stream_rag_response_formats_events_and_citations(settings, monkeypatch):
     captured_messages = None
 
     class FakeCompletions:
@@ -67,12 +67,12 @@ async def test_stream_rag_response_formats_sse_and_citations(settings, monkeypat
         )
     ]
 
-    assert events[0].startswith("event: token\ndata: ")
-    assert json.loads(events[0].split("data: ", 1)[1]) == {"text": "Read "}
-    assert events[1].startswith("event: token\ndata: ")
-    assert events[2].startswith("event: citations\ndata: ")
-    assert json.loads(events[2].split("data: ", 1)[1])["citations"][0]["title"] == "Assignment 1"
-    assert json.loads(events[3].split("data: ", 1)[1]) == {"grounded": True, "confidence": 0.8}
+    assert events[0]["event"] == "token"
+    assert json.loads(events[0]["data"]) == {"text": "Read "}
+    assert events[1]["event"] == "token"
+    assert events[2]["event"] == "citations"
+    assert json.loads(events[2]["data"])["citations"][0]["title"] == "Assignment 1"
+    assert json.loads(events[3]["data"]) == {"grounded": True, "confidence": 0.8}
     assert captured_messages[-2]["content"] == "Previous answer"
 
 
@@ -102,5 +102,5 @@ async def test_stream_rag_response_done_without_citations(settings, monkeypatch)
         )
     ]
 
-    assert not any(event.startswith("event: citations") for event in events)
-    assert json.loads(events[-1].split("data: ", 1)[1]) == {"grounded": False, "confidence": 0}
+    assert not any(event["event"] == "citations" for event in events)
+    assert json.loads(events[-1]["data"]) == {"grounded": False, "confidence": 0}
