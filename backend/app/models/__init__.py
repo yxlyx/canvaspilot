@@ -1,5 +1,6 @@
 from app.models.base import Base
 from app.models.content import ContentChunk
+from app.models.flashcard import Flashcard, FlashcardAttempt, FlashcardDeck, LearningEvidence
 from app.models.ingestion_job import IngestionJob
 from app.models.module import Announcement, Assignment, Module
 from app.models.source import Source
@@ -15,6 +16,10 @@ __all__ = [
     "Announcement",
     "Assignment",
     "ContentChunk",
+    "FlashcardDeck",
+    "Flashcard",
+    "FlashcardAttempt",
+    "LearningEvidence",
     "Task",
     "Source",
     "SourceChunk",

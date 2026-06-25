@@ -73,6 +73,14 @@ async def test_chat_unauthenticated():
 
 
 @pytest.mark.asyncio
+async def test_flashcards_unauthenticated():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/flashcards/decks")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_sync_unauthenticated():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
