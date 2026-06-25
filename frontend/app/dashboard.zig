@@ -67,6 +67,46 @@ pub fn render(req: mer.Request) mer.Response {
     var due_cards: usize = 0;
     for (lib.mock.decks) |deck| due_cards += deck.due_count;
 
+    var source_total = lib.mock.sources.len;
+    var wiki_total = lib.mock.wiki_pages.len;
+    var card_total = lib.mock.flashcards.len;
+    if (!use_mock) {
+        const sources = lib.backend.listSources(req.allocator, session.token);
+        if (sources.value) |parsed_sources| {
+            source_total = parsed_sources.value.len;
+            indexed_sources = 0;
+            processing_sources = 0;
+            for (parsed_sources.value) |source| {
+                if (std.mem.eql(u8, source.status, "ready")) indexed_sources += 1;
+                if (std.mem.eql(u8, source.status, "pending") or std.mem.eql(u8, source.status, "indexing")) processing_sources += 1;
+            }
+        } else {
+            backend_ok = false;
+        }
+
+        const wiki_pages = lib.backend.listWikiPages(req.allocator, session.token);
+        if (wiki_pages.value) |parsed_pages| {
+            wiki_total = 0;
+            for (parsed_pages.value) |page| {
+                if (!std.mem.eql(u8, page.page_type, "index")) wiki_total += 1;
+            }
+        } else {
+            backend_ok = false;
+        }
+
+        const decks = lib.backend.listFlashcardDecks(req.allocator, session.token);
+        if (decks.value) |parsed_decks| {
+            due_cards = 0;
+            card_total = 0;
+            for (parsed_decks.value) |deck| {
+                due_cards += deck.cards.len;
+                card_total += deck.card_count;
+            }
+        } else {
+            backend_ok = false;
+        }
+    }
+
     var open_tasks: usize = 0;
     for (tasks_slice) |task| {
         if (!task.completed) open_tasks += 1;
@@ -115,9 +155,9 @@ pub fn render(req: mer.Request) mer.Response {
     }
 
     w.writeAll("<section class=\"cp-metric-grid\">\n") catch return mer.internalError("workspace render failed");
-    metricCard(w, "Sources indexed", indexed_sources, lib.mock.sources.len, "Source library", "/sources") catch return mer.internalError("workspace render failed");
-    metricCard(w, "Wiki pages", lib.mock.wiki_pages.len, total_chunks, "Generated wiki", "/wiki") catch return mer.internalError("workspace render failed");
-    metricCard(w, "Due cards", due_cards, lib.mock.flashcards.len, "Flashcards", "/flashcards") catch return mer.internalError("workspace render failed");
+    metricCard(w, "Sources ready", indexed_sources, source_total, "Source library", "/sources") catch return mer.internalError("workspace render failed");
+    metricCard(w, "Wiki pages", wiki_total, total_chunks, "Generated wiki", "/wiki") catch return mer.internalError("workspace render failed");
+    metricCard(w, "Due cards", due_cards, card_total, "Flashcards", "/flashcards") catch return mer.internalError("workspace render failed");
     metricCard(w, "Open tasks", open_tasks, tasks_slice.len, "Q&A context", "/chat") catch return mer.internalError("workspace render failed");
     w.writeAll("</section>\n") catch return mer.internalError("workspace render failed");
 
@@ -138,7 +178,7 @@ pub fn render(req: mer.Request) mer.Response {
         \\      <div class="cp-module-meta">{s} · {d} source records · {d} chunks</div>
         \\    </div>
         \\  </section>
-    , .{ safe_code, safe_name, safe_term, lib.mock.sources.len, total_chunks }) catch return mer.internalError("workspace render failed");
+    , .{ safe_code, safe_name, safe_term, source_total, total_chunks }) catch return mer.internalError("workspace render failed");
 
     w.writeAll(
         \\  <section class="cp-card">
