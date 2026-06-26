@@ -75,8 +75,13 @@ def _topic_from_title(title: str) -> str:
     return "general"
 
 
-def _candidate_from_chunk(source: Source, chunk: SourceChunk) -> FlashcardCandidate:
-    topic_tag = source.topic_tags[0] if source.topic_tags else _topic_from_title(source.title)
+def _candidate_from_chunk(
+    source: Source, chunk: SourceChunk, topic: str | None = None
+) -> FlashcardCandidate:
+    if topic is not None:
+        topic_tag = topic
+    else:
+        topic_tag = source.topic_tags[0] if source.topic_tags else _topic_from_title(source.title)
     return FlashcardCandidate(
         content=chunk.content,
         citation_ref=chunk.citation_ref,
@@ -215,7 +220,7 @@ async def _source_candidates(
         source_id_list.append(source.id)
         chunks = sorted(source.chunks, key=lambda chunk: chunk.chunk_index)
         for chunk in chunks:
-            candidates.append(_candidate_from_chunk(source, chunk))
+            candidates.append(_candidate_from_chunk(source, chunk, topic))
     return candidates, source_id_list
 
 

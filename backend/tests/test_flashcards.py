@@ -338,6 +338,27 @@ async def test_generate_flashcards_by_topic_filters_ready_sources(flashcard_clie
 
 
 @pytest.mark.asyncio
+async def test_generate_flashcards_by_topic_labels_cards_with_requested_topic(flashcard_client):
+    client, session, user, _ = flashcard_client
+    source, _ = await _create_ready_source(
+        session, user, title="Limits Notes", topic_tags=["calculus", "limits"]
+    )
+
+    response = await client.post(
+        "/api/flashcards/decks/generate",
+        json={"topic": "limits", "limit": 10},
+    )
+
+    assert response.status_code == 200
+    deck = response.json()["deck"]
+    assert deck["source_ids"] == [str(source.id)]
+    assert deck["topic_tags"] == ["limits"]
+    assert all(card["topic_tag"] == "limits" for card in deck["cards"]), [
+        card["topic_tag"] for card in deck["cards"]
+    ]
+
+
+@pytest.mark.asyncio
 async def test_low_context_generation_returns_clear_fallback(flashcard_client):
     client, session, user, _ = flashcard_client
     source, _ = await _create_ready_source(
