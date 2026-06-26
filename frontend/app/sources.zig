@@ -63,7 +63,7 @@ pub fn render(req: mer.Request) mer.Response {
     w.writeAll(
         \\<header class="cp-page-header">
         \\  <div>
-        \\    <div class="cp-page-title">Source library</div>
+        \\    <h1 class="cp-page-title">Source library</h1>
         \\    <div class="cp-page-sub">Track what has been imported, chunked, and made available for cited answers.</div>
         \\  </div>
         \\  <div class="cp-page-actions">
@@ -90,7 +90,7 @@ pub fn render(req: mer.Request) mer.Response {
     w.writeAll(
         \\<section class="cp-card">
         \\  <div class="cp-card-title"><span>Import queue</span><span>metadata</span></div>
-        \\  <div class="cp-filter-row" aria-label="Source filters">
+        \\  <fieldset class="cp-filter-row" aria-label="Source filters">
     ) catch return mer.internalError("sources render failed");
 
     filterChip(w, "All", "/sources", filter_type.len == 0 and filter_status.len == 0) catch return mer.internalError("sources render failed");
@@ -103,7 +103,7 @@ pub fn render(req: mer.Request) mer.Response {
     filterChip(w, "Announcement", "/sources?type=announcement", std.mem.eql(u8, filter_type, "announcement")) catch return mer.internalError("sources render failed");
 
     w.writeAll(
-        \\  </div>
+        \\  </fieldset>
         \\  <div class="cp-source-list cp-source-library">
     ) catch return mer.internalError("sources render failed");
 
@@ -170,6 +170,7 @@ fn matchesStatus(actual: []const u8, selected: []const u8) bool {
     if (std.mem.eql(u8, actual, selected)) return true;
     if (std.mem.eql(u8, selected, "ready")) return std.mem.eql(u8, actual, "indexed");
     if (std.mem.eql(u8, selected, "indexing")) return std.mem.eql(u8, actual, "processing");
+    if (std.mem.eql(u8, selected, "pending")) return std.mem.eql(u8, actual, "processing");
     if (std.mem.eql(u8, selected, "failed")) return std.mem.eql(u8, actual, "needs review");
     return false;
 }

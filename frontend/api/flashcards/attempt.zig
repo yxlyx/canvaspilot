@@ -35,7 +35,10 @@ pub fn render(req: mer.Request) mer.Response {
     const correct_raw = lib.form.value(req.allocator, req.body, "correct") catch null;
     const confidence_raw = lib.form.value(req.allocator, req.body, "confidence") catch null;
 
-    if (!session.isAuthenticated() or card_id == null or correct_raw == null) {
+    if (!session.isAuthenticated()) {
+        return redirect(req.allocator, deck_id, "saved");
+    }
+    if (card_id == null or correct_raw == null) {
         return redirect(req.allocator, deck_id, "failed");
     }
     // Validate card_id before it is interpolated into the backend request path.

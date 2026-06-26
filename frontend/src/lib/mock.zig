@@ -98,7 +98,7 @@ pub const sources: []const types.WorkspaceSource = &.{
         .updated_at = "2026-05-10T16:42:00Z",
         .summary = "Announcement linking the slides and recording used by the generated wiki page.",
         .chunk_count = 2,
-        .url = "/dashboard",
+        .url = "/wiki/immutable-lists",
     },
     .{
         .id = "src-lab-7",
@@ -147,7 +147,7 @@ pub const wiki_pages: []const types.WikiPage = &.{
         .citations = &.{
             .{
                 .title = "Lab 6 deadline extended to Friday 23:59",
-                .url = "/dashboard",
+                .url = "/sources?type=announcement",
                 .snippet = "Lab 6 due Fri 23:59. New testcases on Coursemology.",
             },
         },
@@ -222,7 +222,7 @@ pub const flashcards: []const types.Flashcard = &.{
         .topic = "deadlines",
         .citation = .{
             .title = "Lab 6 deadline extended to Friday 23:59",
-            .url = "/dashboard",
+            .url = "/sources?type=announcement",
             .snippet = "Lab 6 due Fri 23:59.",
         },
     },

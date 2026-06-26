@@ -19,11 +19,12 @@ pub fn render(req: mer.Request) mer.Response {
         \\<section class="cp-landing">
         \\  <h1 class="cp-landing-title">Your course workspace, ready to study.</h1>
         \\  <p class="cp-landing-sub">
-        \\    Create a demo account, review imported sources, open generated wiki notes,
-        \\    practice flashcards, and ask cited questions across your modules.
+        \\    CanvasPilot turns your Canvas LMS modules into a study workspace: import sources,
+        \\    generate cited wiki notes, ask grounded questions, and practise flashcards — all in one place.
         \\  </p>
         \\  <div class="cp-landing-actions">
-        \\    <a class="cp-btn cp-btn-primary" href="/login">Sign in</a>
+        \\    <a class="cp-btn cp-btn-primary" href="/login?mode=signup">Create account</a>
+        \\    <a class="cp-btn cp-btn-ghost" href="/login">Sign in</a>
         \\    <a class="cp-btn cp-btn-ghost" href="/dashboard?mock=1">View demo workspace</a>
         \\  </div>
         \\</section>
