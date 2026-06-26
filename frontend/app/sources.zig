@@ -99,7 +99,8 @@ pub fn render(req: mer.Request) mer.Response {
     filterChip(w, "Pending", "/sources?status=pending", std.mem.eql(u8, filter_status, "pending")) catch return mer.internalError("sources render failed");
     filterChip(w, "Review", "/sources?status=failed", std.mem.eql(u8, filter_status, "failed")) catch return mer.internalError("sources render failed");
     filterChip(w, "Markdown", "/sources?type=markdown", std.mem.eql(u8, filter_type, "markdown")) catch return mer.internalError("sources render failed");
-    filterChip(w, "PDF", "/sources?type=pdf", std.mem.eql(u8, filter_type, "pdf")) catch return mer.internalError("sources render failed");
+    filterChip(w, "Assignment", "/sources?type=assignment", std.mem.eql(u8, filter_type, "assignment")) catch return mer.internalError("sources render failed");
+    filterChip(w, "Announcement", "/sources?type=announcement", std.mem.eql(u8, filter_type, "announcement")) catch return mer.internalError("sources render failed");
 
     w.writeAll(
         \\  </div>
