@@ -48,7 +48,7 @@ fn renderLivePage(
         w.print("<div class=\"cp-status-banner cp-status-info\">{s}</div>\n", .{safe_message}) catch return mer.internalError("wiki render failed");
     }
     renderArticleStart(w) catch return mer.internalError("wiki render failed");
-    renderMarkdown(req, w, page.markdown) catch return mer.internalError("wiki render failed");
+    lib.markdown.renderMarkdown(req.allocator, w, page.markdown) catch return mer.internalError("wiki render failed");
     renderAsideStart(w, when) catch return mer.internalError("wiki render failed");
 
     w.print("        <span class=\"cp-topic-pill\">{d} source records</span>\n", .{page.source_ids.len}) catch return mer.internalError("wiki render failed");
@@ -92,7 +92,7 @@ fn renderMockPage(
         w.print("<div class=\"cp-status-banner cp-status-info\">{s}</div>\n", .{safe_message}) catch return mer.internalError("wiki render failed");
     }
     renderArticleStart(w) catch return mer.internalError("wiki render failed");
-    renderMarkdown(req, w, page.markdown) catch return mer.internalError("wiki render failed");
+    lib.markdown.renderMarkdown(req.allocator, w, page.markdown) catch return mer.internalError("wiki render failed");
     renderAsideStart(w, when) catch return mer.internalError("wiki render failed");
 
     for (page.topics) |topic| {
@@ -196,25 +196,4 @@ fn renderMissing(req: mer.Request, slug: []const u8) mer.Response {
     , .{safe_slug}) catch return mer.internalError("wiki render failed");
 
     return .{ .status = .not_found, .content_type = .html, .body = buf.written() };
-}
-
-fn renderMarkdown(req: mer.Request, w: *std.Io.Writer, markdown: []const u8) !void {
-    var paragraphs = std.mem.splitSequence(u8, markdown, "\n\n");
-    while (paragraphs.next()) |raw_block| {
-        const block = std.mem.trim(u8, raw_block, " \n\r\t");
-        if (block.len == 0) continue;
-
-        if (std.mem.startsWith(u8, block, "# ")) {
-            const text = std.mem.trim(u8, block[2..], " ");
-            const safe = lib.ui.escape(req.allocator, text) catch text;
-            try w.print("    <h1>{s}</h1>\n", .{safe});
-        } else if (std.mem.startsWith(u8, block, "## ")) {
-            const text = std.mem.trim(u8, block[3..], " ");
-            const safe = lib.ui.escape(req.allocator, text) catch text;
-            try w.print("    <h2>{s}</h2>\n", .{safe});
-        } else {
-            const safe = lib.ui.escape(req.allocator, block) catch block;
-            try w.print("    <p>{s}</p>\n", .{safe});
-        }
-    }
 }

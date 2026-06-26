@@ -2,7 +2,7 @@ const std = @import("std");
 const mer = @import("mer");
 const lib = @import("lib");
 
-fn safeDeckId(raw: []const u8) ?[]const u8 {
+fn safeId(raw: []const u8) ?[]const u8 {
     if (raw.len == 0 or raw.len > 128) return null;
     for (raw) |c| {
         switch (c) {
@@ -14,7 +14,7 @@ fn safeDeckId(raw: []const u8) ?[]const u8 {
 }
 
 fn redirect(allocator: std.mem.Allocator, deck_id: ?[]const u8, status: []const u8) mer.Response {
-    const deck = if (deck_id) |raw| safeDeckId(raw) else null;
+    const deck = if (deck_id) |raw| safeId(raw) else null;
     if (deck == null) return mer.redirect("/flashcards?attempt=failed", .see_other);
     const target = std.fmt.allocPrint(
         allocator,
@@ -36,6 +36,10 @@ pub fn render(req: mer.Request) mer.Response {
     const confidence_raw = lib.form.value(req.allocator, req.body, "confidence") catch null;
 
     if (!session.isAuthenticated() or card_id == null or correct_raw == null) {
+        return redirect(req.allocator, deck_id, "failed");
+    }
+    // Validate card_id before it is interpolated into the backend request path.
+    if (safeId(card_id.?) == null) {
         return redirect(req.allocator, deck_id, "failed");
     }
 
