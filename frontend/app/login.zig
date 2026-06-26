@@ -49,10 +49,10 @@ pub fn render(req: mer.Request) mer.Response {
     const signin_cls: []const u8 = if (signup_active) "cp-auth-tab" else "cp-auth-tab cp-auth-tab-active";
     const signup_cls: []const u8 = if (signup_active) "cp-auth-tab cp-auth-tab-active" else "cp-auth-tab";
     w.print(
-        \\  <div class="cp-auth-tabs" role="tablist">
+        \\  <nav class="cp-auth-tabs" aria-label="Account">
         \\    <a class="{s}" href="/login?mode=signin">Sign in</a>
         \\    <a class="{s}" href="/login?mode=signup">Create account</a>
-        \\  </div>
+        \\  </nav>
         \\
     , .{ signin_cls, signup_cls }) catch return mer.internalError("login render failed");
 

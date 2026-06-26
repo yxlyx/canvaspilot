@@ -12,7 +12,7 @@
     --cp-border-strong: #cfd5e4;
     --cp-text: #111827;
     --cp-muted: #5f667a;
-    --cp-muted-2: #9299aa;
+    --cp-muted-2: #6b7285;
     --cp-accent: #4f46e5;
     --cp-accent-2: #7c3aed;
     --cp-accent-soft: #eef2ff;
@@ -35,7 +35,7 @@ body {
         radial-gradient(900px 520px at 12% -10%, rgba(79, 70, 229, 0.12), transparent 58%),
         radial-gradient(800px 460px at 110% 4%, rgba(124, 58, 237, 0.10), transparent 54%),
         linear-gradient(180deg, #f9faff 0%, var(--cp-bg) 42%, #f3f5fb 100%);
-    background-attachment: fixed;
+    background-attachment: scroll;
     color: var(--cp-text);
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
@@ -108,7 +108,7 @@ button { font: inherit; cursor: pointer; }
 .cp-tab-active {
     background: #fff;
     color: var(--cp-accent);
-    font-weight: 650;
+    font-weight: 600;
     box-shadow: inset 0 0 0 1px rgba(79, 70, 229, 0.14), var(--cp-shadow-sm);
 }
 .cp-header-actions { display: flex; align-items: center; gap: 8px; }
@@ -132,6 +132,22 @@ button { font: inherit; cursor: pointer; }
     transition: background 0.15s, border-color 0.15s, transform 0.12s, box-shadow 0.15s, filter 0.15s;
 }
 .cp-btn:active { transform: translateY(1px); }
+.cp-btn:disabled { opacity: .5; cursor: not-allowed; filter: none; transform: none; box-shadow: none; }
+
+/* Global keyboard focus ring (accessibility). */
+:focus-visible { outline: none; }
+a:focus-visible, .cp-btn:focus-visible, .cp-chip:focus-visible, .cp-tab:focus-visible,
+.cp-bottom-item:focus-visible, .cp-wiki-row:focus-visible, .cp-deck-row:focus-visible,
+.cp-citation-card:focus-visible, .cp-source-card:focus-visible, .cp-metric-card:focus-visible,
+.cp-chat-module:focus-visible, .cp-auth-tab:focus-visible, .cp-flashcard summary:focus-visible {
+    outline: 2px solid var(--cp-accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+/* Skip-to-content link for keyboard users. */
+.cp-skip { position: absolute; left: -9999px; top: 0; z-index: 50; background: var(--cp-accent); color: #fff; padding: 10px 16px; border-radius: 0 0 var(--cp-radius) 0; font-size: 13px; font-weight: 600; }
+.cp-skip:focus { left: 0; }
 .cp-btn-primary {
     background: var(--cp-accent-grad);
     color: #fff;
@@ -292,7 +308,7 @@ button { font: inherit; cursor: pointer; }
 .cp-chat-shell {
     display: grid;
     grid-template-rows: 1fr auto;
-    height: calc(100vh - 220px);
+    height: calc(100dvh - 220px);
     min-height: 480px;
     background: var(--cp-surface);
     border: 1px solid var(--cp-border);
@@ -351,6 +367,7 @@ button { font: inherit; cursor: pointer; }
 }
 .cp-chat-form {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     padding: 12px;
     border-top: 1px solid var(--cp-border);
@@ -502,7 +519,7 @@ button { font: inherit; cursor: pointer; }
     flex-wrap: wrap;
     gap: 8px;
 }
-.cp-filter-row { margin-bottom: 14px; }
+.cp-filter-row { margin-bottom: 14px; border: 0; padding: 0; margin-inline: 0; min-width: 0; }
 .cp-chip, .cp-topic-pill {
     display: inline-flex;
     align-items: center;
@@ -651,7 +668,7 @@ button { font: inherit; cursor: pointer; }
 .cp-bottom-active { color: var(--cp-accent); font-weight: 600; }
 @media (max-width: 720px) {
     .cp-bottomnav { display: flex; }
-    body { padding-bottom: 70px; }
+    body { padding-bottom: 88px; }
 }
 
 /* ── Auth / landing ────────────────────────────────────────────────────── */
@@ -753,9 +770,25 @@ button { font: inherit; cursor: pointer; }
 .cp-footer {
     max-width: 1200px;
     margin: 24px auto 0;
-    padding: 16px 24px;
+    padding: 20px 24px 28px;
+    border-top: 1px solid var(--cp-border);
     text-align: center;
     font-size: 12px;
     color: var(--cp-muted-2);
 }
 .cp-footer a { text-decoration: underline; text-underline-offset: 2px; }
+
+/* ── Chat suggestion chips ─────────────────────────────────────────────── */
+.cp-chat-suggestions { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 12px 8px; }
+
+/* ── Polish: interactive hover states ──────────────────────────────────── */
+.cp-source-card { transition: box-shadow .15s ease, border-color .15s ease; }
+.cp-source-card:hover { box-shadow: var(--cp-shadow); border-color: var(--cp-border-strong); }
+.cp-wiki-row { transition: background .15s ease, border-color .15s ease; }
+.cp-wiki-row:hover { background: var(--cp-accent-soft); border-color: rgba(91, 83, 240, 0.2); }
+.cp-deck-row { transition: background .15s ease, border-color .15s ease; }
+.cp-deck-row:hover { background: var(--cp-accent-soft); border-color: rgba(91, 83, 240, 0.2); }
+.cp-chip { transition: border-color .15s ease, color .15s ease; }
+.cp-chip:hover { border-color: var(--cp-accent); color: var(--cp-accent); }
+.cp-flashcard { transition: box-shadow .15s ease; }
+.cp-flashcard:hover { box-shadow: var(--cp-shadow); }

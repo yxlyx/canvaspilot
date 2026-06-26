@@ -15,6 +15,22 @@
   const moduleSel = document.getElementById("cp-chat-module");
   if (!form || !log || !input) return;
 
+  // Disable Send when the input is empty.
+  function updateSendState() {
+    if (sendBtn) sendBtn.disabled = input.value.trim().length === 0;
+  }
+  updateSendState();
+  input.addEventListener("input", updateSendState);
+
+  // Wire suggestion chips to fill + send.
+  document.querySelectorAll(".cp-chat-suggestions .cp-chip").forEach(function (chip) {
+    chip.addEventListener("click", function () {
+      input.value = chip.dataset.prompt || chip.textContent || "";
+      updateSendState();
+      form.requestSubmit();
+    });
+  });
+
   const history = [];
   let lastFailedMessage = null;
 
@@ -36,6 +52,18 @@
     return div;
   }
 
+  function safeCitationUrl(raw) {
+    if (!raw) return "#";
+    try {
+      if (raw.startsWith("/")) return raw;
+      const url = new URL(raw, window.location.origin);
+      if (url.protocol === "http:" || url.protocol === "https:") {
+        return url.href;
+      }
+    } catch (_) {}
+    return "#";
+  }
+
   function renderCitations(parent, citations) {
     if (!Array.isArray(citations) || citations.length === 0) return;
     const cites = document.createElement("div");
@@ -44,7 +72,7 @@
     citations.forEach((c) => {
       const a = document.createElement("a");
       a.className = "cp-chat-citation";
-      a.href = c.url || "#";
+      a.href = safeCitationUrl(c.url || "");
       a.target = "_blank";
       a.rel = "noopener";
       a.textContent =
@@ -115,7 +143,7 @@
       input.value = message;
     } finally {
       input.disabled = false;
-      sendBtn.disabled = false;
+      updateSendState();
       input.focus();
     }
   }

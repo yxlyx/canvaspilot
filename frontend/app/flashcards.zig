@@ -40,7 +40,7 @@ pub fn render(req: mer.Request) mer.Response {
     w.writeAll(
         \\<header class="cp-page-header">
         \\  <div>
-        \\    <div class="cp-page-title">Flashcards</div>
+        \\    <h1 class="cp-page-title">Flashcards</h1>
         \\    <div class="cp-page-sub">Practice generated cards with source-backed answers and citations.</div>
         \\  </div>
         \\  <div class="cp-page-actions">
@@ -113,31 +113,46 @@ fn renderMockDecks(
     can_submit_attempts: bool,
 ) mer.Response {
     const selected_id = if (selected_deck_id.len > 0) selected_deck_id else firstMockDeckId();
-    const selected_deck = findMockDeck(selected_id) orelse lib.mock.decks[0];
-
     var due_total: usize = 0;
-    for (lib.mock.decks) |deck| due_total += deck.due_count;
+    for (lib.mock.decks) |d| due_total += d.due_count;
+    const selected_deck = if (selected_deck_id.len > 0)
+        (findMockDeck(selected_id) orelse null)
+    else
+        (findMockDeck(selected_id) orelse lib.mock.decks[0]);
+
+    if (selected_deck == null) {
+        renderMetrics(w, due_total, lib.mock.decks.len, lib.mock.flashcards.len, 0) catch return mer.internalError("flashcards render failed");
+        renderLayoutStart(w) catch return mer.internalError("flashcards render failed");
+        for (lib.mock.decks) |d| {
+            renderMockDeckLink(req, w, d, "", now_secs) catch return mer.internalError("flashcards render failed");
+        }
+        renderQueueHeader(w, 0, "Deck not found", "No deck matches that id.", 0, 0) catch return mer.internalError("flashcards render failed");
+        w.writeAll("      <div class=\"cp-empty\">No deck matches the requested id. Pick one from the list.</div>\n") catch return mer.internalError("flashcards render failed");
+        renderLayoutEnd(w) catch return mer.internalError("flashcards render failed");
+        return lib.ui.htmlResponse(buf);
+    }
+    const deck = selected_deck.?;
 
     var selected_cards: usize = 0;
     for (lib.mock.flashcards) |card| {
-        if (std.mem.eql(u8, card.deck_id, selected_deck.id)) selected_cards += 1;
+        if (std.mem.eql(u8, card.deck_id, deck.id)) selected_cards += 1;
     }
 
     renderMetrics(w, due_total, lib.mock.decks.len, lib.mock.flashcards.len, selected_cards) catch return mer.internalError("flashcards render failed");
     renderLayoutStart(w) catch return mer.internalError("flashcards render failed");
-    for (lib.mock.decks) |deck| {
-        renderMockDeckLink(req, w, deck, selected_deck.id, now_secs) catch return mer.internalError("flashcards render failed");
+    for (lib.mock.decks) |d| {
+        renderMockDeckLink(req, w, d, deck.id, now_secs) catch return mer.internalError("flashcards render failed");
     }
 
-    const safe_title = lib.ui.escape(req.allocator, selected_deck.title) catch selected_deck.title;
-    const safe_desc = lib.ui.escape(req.allocator, selected_deck.description) catch selected_deck.description;
-    renderQueueHeader(w, selected_cards, safe_title, safe_desc, selected_deck.due_count, selected_deck.card_count) catch return mer.internalError("flashcards render failed");
+    const safe_title = lib.ui.escape(req.allocator, deck.title) catch deck.title;
+    const safe_desc = lib.ui.escape(req.allocator, deck.description) catch deck.description;
+    renderQueueHeader(w, selected_cards, safe_title, safe_desc, deck.due_count, deck.card_count) catch return mer.internalError("flashcards render failed");
 
     var rendered_cards: usize = 0;
     for (lib.mock.flashcards) |card| {
-        if (!std.mem.eql(u8, card.deck_id, selected_deck.id)) continue;
+        if (!std.mem.eql(u8, card.deck_id, deck.id)) continue;
         rendered_cards += 1;
-        renderMockFlashcard(req, w, selected_deck.id, card, rendered_cards, can_submit_attempts) catch return mer.internalError("flashcards render failed");
+        renderMockFlashcard(req, w, deck.id, card, rendered_cards, can_submit_attempts) catch return mer.internalError("flashcards render failed");
     }
 
     if (rendered_cards == 0) {

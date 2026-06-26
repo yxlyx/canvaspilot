@@ -119,7 +119,7 @@ fn renderHeader(w: *std.Io.Writer, title: []const u8, summary: []const u8) !void
     try w.print(
         \\<header class="cp-page-header">
         \\  <div>
-        \\    <div class="cp-page-title">{s}</div>
+        \\    <h1 class="cp-page-title">{s}</h1>
         \\    <div class="cp-page-sub">{s}</div>
         \\  </div>
         \\  <div class="cp-page-actions">

@@ -118,7 +118,7 @@ pub fn render(req: mer.Request) mer.Response {
     w.writeAll(
         \\<header class="cp-page-header">
         \\  <div>
-        \\    <div class="cp-page-title">Workspace</div>
+        \\    <h1 class="cp-page-title">Workspace</h1>
     ) catch return mer.internalError("workspace render failed");
 
     if (use_mock) {
@@ -156,9 +156,9 @@ pub fn render(req: mer.Request) mer.Response {
 
     w.writeAll("<section class=\"cp-metric-grid\">\n") catch return mer.internalError("workspace render failed");
     metricCard(w, "Sources ready", indexed_sources, source_total, "Source library", "/sources") catch return mer.internalError("workspace render failed");
-    metricCard(w, "Wiki pages", wiki_total, total_chunks, "Generated wiki", "/wiki") catch return mer.internalError("workspace render failed");
+    metricCard(w, "Wiki pages", wiki_total, wiki_total, "Generated wiki", "/wiki") catch return mer.internalError("workspace render failed");
     metricCard(w, "Due cards", due_cards, card_total, "Flashcards", "/flashcards") catch return mer.internalError("workspace render failed");
-    metricCard(w, "Open tasks", open_tasks, tasks_slice.len, "Q&A context", "/chat") catch return mer.internalError("workspace render failed");
+    metricCard(w, "Open tasks", open_tasks, tasks_slice.len, "Ask in chat", "/chat") catch return mer.internalError("workspace render failed");
     w.writeAll("</section>\n") catch return mer.internalError("workspace render failed");
 
     w.writeAll(
@@ -334,7 +334,7 @@ fn renderEmpty(req: mer.Request) mer.Response {
     w.writeAll(
         \\<header class="cp-page-header">
         \\  <div>
-        \\    <div class="cp-page-title">Workspace</div>
+        \\    <h1 class="cp-page-title">Workspace</h1>
         \\    <div class="cp-page-sub">No workspace modules synced yet.</div>
         \\  </div>
         \\  <form action="/api/sync" method="post" class="cp-logout">

@@ -14,5 +14,18 @@ codedb.snapshot
 # Local tool installs (mer CLI etc.) shouldn't be committed.
 .tools/
 
+# Local harness/browser artifacts
+.graff/
+.harness/
+.playwright-mcp/
+.shots/
+harness.trace.jsonl
+harness.trajectory.jsonl
+frontend/harness.trace.jsonl
+frontend/harness.trajectory.jsonl
+session-*.session.json
+frontend/session-*.session.json
+kuri_shot.sh
+
 # Filesystem cruft
 .DS_Store

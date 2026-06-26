@@ -34,10 +34,11 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     else
         "Canvas-grounded chat for your modules and deadlines.";
 
-    // Authentication state is approximated by checking if a `cp_session`
-    // cookie is present *anywhere* in the request — pages re-check this
-    // properly via `lib.session.requireAuth(req)` before rendering data.
-    const signed_in = std.mem.indexOf(u8, path, "/login") == null;
+    // This layout wrapper only receives the path, so header auth is a
+    // conservative route-based hint; pages still gate data with
+    // `lib.session.requireAuth(req)` before rendering private content.
+    const is_landing = std.mem.eql(u8, path, "/");
+    const signed_in = !is_landing and std.mem.indexOf(u8, path, "/login") == null;
 
     w.writeAll(
         \\<!DOCTYPE html>
@@ -69,10 +70,11 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     w.writeAll(
         \\</head>
         \\<body>
+        \\<a class="cp-skip" href="#main">Skip to content</a>
         \\<header class="cp-header">
         \\  <div class="cp-header-inner">
         \\    <a class="cp-brand" href="/">
-        \\      <span class="cp-brand-mark">◢</span>
+        \\      <span class="cp-brand-mark" aria-hidden="true">◢</span>
         \\      <span class="cp-brand-name">CanvasPilot</span>
         \\    </a>
         \\    <nav class="cp-tabs" aria-label="Primary">
@@ -82,9 +84,10 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     for (NAV_ITEMS) |item| {
         const active = std.mem.startsWith(u8, path, item.match);
         const cls: []const u8 = if (active) "cp-tab cp-tab-active" else "cp-tab";
+        const current: []const u8 = if (active) " aria-current=\"page\"" else "";
         w.print(
-            "      <a class=\"{s}\" href=\"{s}\">{s}</a>\n",
-            .{ cls, item.href, item.label },
+            "      <a class=\"{s}\" href=\"{s}\"{s}>{s}</a>\n",
+            .{ cls, item.href, current, item.label },
         ) catch return body;
     }
 
@@ -103,7 +106,7 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         \\    </div>
         \\  </div>
         \\</header>
-        \\<main class="cp-main">
+        \\<main class="cp-main" id="main">
         \\
     ) catch return body;
 
@@ -119,9 +122,10 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     for (NAV_ITEMS) |item| {
         const active = std.mem.startsWith(u8, path, item.match);
         const cls: []const u8 = if (active) "cp-bottom-item cp-bottom-active" else "cp-bottom-item";
+        const current: []const u8 = if (active) " aria-current=\"page\"" else "";
         w.print(
-            "  <a class=\"{s}\" href=\"{s}\">{s}</a>\n",
-            .{ cls, item.href, item.label },
+            "  <a class=\"{s}\" href=\"{s}\"{s}>{s}</a>\n",
+            .{ cls, item.href, current, item.label },
         ) catch return body;
     }
 

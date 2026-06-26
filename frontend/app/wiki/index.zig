@@ -51,7 +51,7 @@ pub fn render(req: mer.Request) mer.Response {
     w.writeAll(
         \\<header class="cp-page-header">
         \\  <div>
-        \\    <div class="cp-page-title">Generated wiki</div>
+        \\    <h1 class="cp-page-title">Generated wiki</h1>
         \\    <div class="cp-page-sub">Browse study pages compiled from indexed workspace sources.</div>
         \\  </div>
         \\  <div class="cp-page-actions">
@@ -128,24 +128,27 @@ fn renderLivePageRow(req: mer.Request, w: *std.Io.Writer, page: lib.types.WikiPa
     const safe_summary = lib.ui.escape(req.allocator, page.summary) catch page.summary;
     const href = std.fmt.allocPrint(req.allocator, "/wiki/{s}", .{safeSlug(page.slug)}) catch "/wiki";
     const safe_href = lib.ui.escape(req.allocator, href) catch "/wiki";
+    const plural: []const u8 = if (page.citation_count == 1) "citation" else "citations";
     try w.print(
         \\    <a class="cp-wiki-row" href="{s}">
         \\      <span>{s}</span>
         \\      <small>{s}</small>
-        \\      <em>{d} citations</em>
+        \\      <em>{d} {s}</em>
         \\    </a>
-    , .{ safe_href, safe_title, safe_summary, page.citation_count });
+    , .{ safe_href, safe_title, safe_summary, page.citation_count, plural });
 }
 
 fn renderMockPageRow(req: mer.Request, w: *std.Io.Writer, page: lib.types.WikiPage) !void {
     const safe_title = lib.ui.escape(req.allocator, page.title) catch page.title;
     const safe_summary = lib.ui.escape(req.allocator, page.summary) catch page.summary;
     const href = std.fmt.allocPrint(req.allocator, "/wiki/{s}", .{page.slug}) catch "/wiki/immutable-lists";
+    const count = page.citations.len;
+    const plural: []const u8 = if (count == 1) "citation" else "citations";
     try w.print(
         \\    <a class="cp-wiki-row" href="{s}">
         \\      <span>{s}</span>
         \\      <small>{s}</small>
-        \\      <em>{d} citations</em>
+        \\      <em>{d} {s}</em>
         \\    </a>
-    , .{ href, safe_title, safe_summary, page.citations.len });
+    , .{ href, safe_title, safe_summary, count, plural });
 }

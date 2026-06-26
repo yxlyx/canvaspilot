@@ -35,18 +35,32 @@ pub fn render(req: mer.Request) mer.Response {
     w.writeAll(
         \\<header class="cp-page-header">
         \\  <div>
-        \\    <div class="cp-page-title">Chat</div>
+        \\    <h1 class="cp-page-title">Chat</h1>
         \\    <div class="cp-page-sub">Grounded in your Canvas modules. Citations included.</div>
         \\  </div>
         \\</header>
+        \\
+    ) catch return mer.internalError("chat render failed");
+
+    if (use_mock) {
+        w.writeAll("<div class=\"cp-status-banner cp-status-info\">Showing prototype chat — sign in to connect live modules.</div>\n") catch return mer.internalError("chat render failed");
+    }
+
+    w.writeAll(
         \\<section class="cp-chat-shell" id="cp-chat">
+        \\  <noscript><div class="cp-status-banner cp-status-warn">Chat needs JavaScript. Browse the <a href="/wiki">wiki</a> or <a href="/flashcards">flashcards</a> in the meantime.</div></noscript>
         \\  <div class="cp-chat-log" id="cp-chat-log" role="log" aria-live="polite">
         \\    <div class="cp-chat-msg cp-chat-msg-system">
         \\      Try: "What's due this week in CS2030S?" or "Summarise today's announcements".
         \\    </div>
         \\  </div>
+        \\  <div class="cp-chat-suggestions">
+        \\    <button type="button" class="cp-chip" data-prompt="What's due this week in CS2030S?">Due this week</button>
+        \\    <button type="button" class="cp-chip" data-prompt="Summarise today's announcements">Announcements</button>
+        \\    <button type="button" class="cp-chip" data-prompt="Explain immutable lists">Immutable lists</button>
+        \\  </div>
         \\  <form class="cp-chat-form" id="cp-chat-form" autocomplete="off">
-        \\    <select class="cp-chat-module" id="cp-chat-module" name="module">
+        \\    <select class="cp-chat-module" id="cp-chat-module" name="module" aria-label="Module filter">
         \\      <option value="">All modules</option>
         \\
     ) catch return mer.internalError("chat render failed");
@@ -64,7 +78,7 @@ pub fn render(req: mer.Request) mer.Response {
     w.writeAll(
         \\    </select>
         \\    <input type="text" class="cp-chat-input" id="cp-chat-input" name="message"
-        \\           placeholder="Ask about your modules…" required>
+        \\           aria-label="Ask CanvasPilot" placeholder="Ask about your modules…" required>
         \\    <button type="submit" class="cp-btn cp-btn-primary" id="cp-chat-send">Send</button>
         \\  </form>
         \\</section>
