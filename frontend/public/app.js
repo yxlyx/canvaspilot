@@ -59,6 +59,8 @@
     input.disabled = true;
     sendBtn.disabled = true;
 
+    const priorHistory = history.slice();
+
     const userBubble = bubble("user");
     userBubble.textContent = message;
     history.push({ role: "user", content: message });
@@ -73,14 +75,16 @@
         body: JSON.stringify({
           message,
           module_id: moduleSel && moduleSel.value ? moduleSel.value : null,
-          history,
+          history: priorHistory,
         }),
       });
       if (!resp.ok) {
         throw new Error("HTTP " + resp.status);
       }
       const data = await resp.json();
-      pending.textContent = data.message || "(no reply)";
+      const replyMessage = data.message || "(no reply)";
+      pending.textContent = replyMessage;
+      history.push({ role: "assistant", content: replyMessage });
       renderCitations(pending, data.citations);
       if (data.source === "mock") {
         const tag = document.createElement("div");
@@ -91,6 +95,8 @@
       }
       input.value = "";
     } catch (err) {
+      history.length = 0;
+      history.push.apply(history, priorHistory);
       pending.classList.remove("cp-chat-msg-reply");
       pending.classList.add("cp-chat-msg-system");
       pending.textContent =

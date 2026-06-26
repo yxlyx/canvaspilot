@@ -179,6 +179,51 @@ pub fn upcomingTasks(allocator: std.mem.Allocator, token: []const u8) Result([]t
     return requestJson([]types.Task, allocator, token, .GET, "/api/tasks/upcoming", null);
 }
 
+pub fn listSources(allocator: std.mem.Allocator, token: []const u8) Result([]types.SourceResponse) {
+    return requestJson([]types.SourceResponse, allocator, token, .GET, "/api/sources", null);
+}
+
+pub fn listWikiPages(allocator: std.mem.Allocator, token: []const u8) Result([]types.WikiPageResponse) {
+    return requestJson([]types.WikiPageResponse, allocator, token, .GET, "/api/wiki/pages", null);
+}
+
+pub fn getWikiPage(
+    allocator: std.mem.Allocator,
+    token: []const u8,
+    slug: []const u8,
+) Result(types.WikiPageResponse) {
+    const path = std.fmt.allocPrint(allocator, "/api/wiki/pages/{s}", .{slug}) catch {
+        return .{ .status = 0, .err = "alloc" };
+    };
+    return requestJson(types.WikiPageResponse, allocator, token, .GET, path, null);
+}
+
+pub fn listFlashcardDecks(
+    allocator: std.mem.Allocator,
+    token: []const u8,
+) Result([]types.FlashcardDeckResponse) {
+    return requestJson([]types.FlashcardDeckResponse, allocator, token, .GET, "/api/flashcards/decks", null);
+}
+
+pub fn submitFlashcardAttempt(
+    allocator: std.mem.Allocator,
+    token: []const u8,
+    card_id: []const u8,
+    is_correct: bool,
+    confidence: ?u8,
+) Result(types.FlashcardAttemptResponse) {
+    const path = std.fmt.allocPrint(allocator, "/api/flashcards/cards/{s}/attempts", .{card_id}) catch {
+        return .{ .status = 0, .err = "alloc" };
+    };
+    const body = stringify(allocator, .{
+        .is_correct = is_correct,
+        .confidence = confidence,
+    }) catch {
+        return .{ .status = 0, .err = "could not encode request" };
+    };
+    return requestJson(types.FlashcardAttemptResponse, allocator, token, .POST, path, body);
+}
+
 pub fn triggerSync(allocator: std.mem.Allocator, token: []const u8) Result(types.SyncStatus) {
     return requestJson(types.SyncStatus, allocator, token, .POST, "/api/modules/sync", "{}");
 }
