@@ -16,12 +16,18 @@ class SourceType(enum.StrEnum):
     PAGE = "page"
 
 
+def enum_values(enum_class: type[enum.StrEnum]) -> list[str]:
+    return [member.value for member in enum_class]
+
+
 class ContentChunk(Base):
     __tablename__ = "content_chunks"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=gen_uuid)
     module_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("modules.id", ondelete="CASCADE"))
-    source_type: Mapped[SourceType] = mapped_column(Enum(SourceType))
+    source_type: Mapped[SourceType] = mapped_column(
+        Enum(SourceType, name="sourcetype", values_callable=enum_values)
+    )
     source_id: Mapped[str] = mapped_column(String(255))
     source_title: Mapped[str] = mapped_column(String(1000))
     source_url: Mapped[str] = mapped_column(String(2048), default="")
