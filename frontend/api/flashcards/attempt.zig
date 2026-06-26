@@ -36,7 +36,7 @@ pub fn render(req: mer.Request) mer.Response {
     const confidence_raw = lib.form.value(req.allocator, req.body, "confidence") catch null;
 
     if (!session.isAuthenticated()) {
-        return redirect(req.allocator, deck_id, "saved");
+        return redirect(req.allocator, deck_id, "failed");
     }
     if (card_id == null or correct_raw == null) {
         return redirect(req.allocator, deck_id, "failed");

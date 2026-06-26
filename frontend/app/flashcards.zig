@@ -65,7 +65,7 @@ pub fn render(req: mer.Request) mer.Response {
     if (live_decks) |decks| {
         return renderLiveDecks(req, w, &buf, decks, selected_deck_id, now_secs);
     }
-    return renderMockDecks(req, w, &buf, selected_deck_id, now_secs, true);
+    return renderMockDecks(req, w, &buf, selected_deck_id, now_secs, false);
 }
 
 fn renderLiveDecks(
