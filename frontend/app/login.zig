@@ -27,9 +27,18 @@ pub fn render(req: mer.Request) mer.Response {
     w.writeAll(
         \\<section class="cp-auth-shell">
         \\  <div class="cp-auth-copy">
-        \\    <h1 class="cp-landing-title">Welcome to CanvasPilot</h1>
-        \\    <p class="cp-landing-sub">Use a local demo account to access the dashboard and chat flow.</p>
+        \\    <div>
+        \\      <div class="cp-kicker">Course workspace</div>
+        \\      <h1 class="cp-landing-title">Keep revision moving.</h1>
+        \\      <p class="cp-landing-sub">Use a local account for the full workspace, or jump into the demo data to inspect the prototype flow.</p>
+        \\    </div>
+        \\    <div class="cp-flow-list">
+        \\      <div class="cp-flow-row"><span class="cp-flow-dot"></span><span class="cp-flow-label">Source-backed notes</span><span class="cp-flow-meta">wiki</span></div>
+        \\      <div class="cp-flow-row"><span class="cp-flow-dot"></span><span class="cp-flow-label">Cited answers</span><span class="cp-flow-meta">Q&amp;A</span></div>
+        \\      <div class="cp-flow-row"><span class="cp-flow-dot"></span><span class="cp-flow-label">Study practice</span><span class="cp-flow-meta">cards</span></div>
+        \\    </div>
         \\  </div>
+        \\  <div class="cp-auth-card">
         \\
     ) catch return mer.internalError("login render failed");
 
@@ -91,8 +100,10 @@ pub fn render(req: mer.Request) mer.Response {
     }
 
     w.writeAll(
-        \\  <div class="cp-landing-actions">
-        \\    <a class="cp-btn cp-btn-ghost" href="/dashboard?mock=1">View demo data without signing in</a>
+        \\    <p class="cp-auth-note">Need a quick look first?</p>
+        \\    <div class="cp-landing-actions" style="margin-top:0;justify-content:center">
+        \\      <a class="cp-btn cp-btn-ghost" href="/dashboard?mock=1">View demo data without signing in</a>
+        \\    </div>
         \\  </div>
         \\</section>
         \\

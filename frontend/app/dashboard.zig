@@ -1,23 +1,13 @@
-// app/dashboard.zig — Milestone 1 dashboard.
-//
-// Proposal M1 1b: "simple dashboard displays imported module items
-// (announcements and upcoming assignments) for ONE module." So we pick
-// the first synced module and show:
-//   - module summary card (code, name, term, last synced)
-//   - recent announcements for that module
-//   - upcoming assignments for that module
-//   - sync button + quick link to chat
-//
-// Falls back to mock data when the backend is unreachable, when the user
-// hasn't signed in, or when `?mock=1` is set.
-
 const std = @import("std");
 const mer = @import("mer");
 const lib = @import("lib");
 
+const SECS_PER_DAY: i64 = 24 * 60 * 60;
+const UPCOMING_WINDOW_SECS: i64 = 14 * SECS_PER_DAY;
+
 pub const meta: mer.Meta = .{
     .title = "Dashboard",
-    .description = "Module summary, announcements and upcoming deadlines.",
+    .description = "Workspace summary, source-backed study flow, and upcoming work.",
 };
 
 pub fn render(req: mer.Request) mer.Response {
@@ -51,35 +41,61 @@ pub fn render(req: mer.Request) mer.Response {
 
     const focus = modules_slice[0];
     const now_secs = lib.time.nowSecs();
+    var ann_count: usize = 0;
+    for (announcements_slice) |a| {
+        if (std.mem.eql(u8, a.module_id, focus.id)) ann_count += 1;
+    }
+    var task_count: usize = 0;
+    for (tasks_slice) |t| {
+        if (!std.mem.eql(u8, t.module_id, focus.id)) continue;
+        if (t.completed) continue;
+        const due_iso = t.due_at orelse continue;
+        if (!isUpcoming(due_iso, now_secs)) continue;
+        task_count += 1;
+    }
+
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
 
-    // ── Page header ──────────────────────────────────────────────────────
+    if (!session.isAuthenticated()) {
+        w.writeAll("<span hidden data-cp-auth=\"anonymous\"></span>\n") catch return mer.internalError("dashboard render failed");
+    }
+
+    const safe_code = lib.ui.escape(req.allocator, focus.code) catch focus.code;
+    const safe_name = lib.ui.escape(req.allocator, focus.name) catch focus.name;
+    const safe_term = lib.ui.escape(req.allocator, focus.term) catch focus.term;
+
     w.writeAll(
         \\<header class="cp-page-header">
         \\  <div>
+        \\    <div class="cp-page-kicker">Workspace overview</div>
         \\    <div class="cp-page-title">Dashboard</div>
         \\
     ) catch return mer.internalError("dashboard render failed");
 
     if (use_mock) {
-        w.writeAll("    <div class=\"cp-page-sub\">Showing demo data — sign in to see your real Canvas modules.</div>\n") catch return mer.internalError("dashboard render failed");
+        w.writeAll("    <div class=\"cp-page-sub\">Showing demo data — sign in to see your real workspace.</div>\n") catch return mer.internalError("dashboard render failed");
     } else if (!backend_ok) {
-        w.writeAll("    <div class=\"cp-page-sub\">Backend unreachable — showing mock data.</div>\n") catch return mer.internalError("dashboard render failed");
+        w.writeAll("    <div class=\"cp-page-sub\">Backend unreachable — showing fallback workspace data.</div>\n") catch return mer.internalError("dashboard render failed");
     } else {
         const last_synced = focus.last_synced_at orelse "—";
         const when = lib.time.formatRelative(req.allocator, last_synced, now_secs) catch last_synced;
         w.print("    <div class=\"cp-page-sub\">Last synced {s}.</div>\n", .{when}) catch return mer.internalError("dashboard render failed");
     }
 
-    w.writeAll(
-        \\  </div>
-        \\  <form action="/api/sync" method="post" class="cp-logout">
-        \\    <button type="submit" class="cp-btn cp-btn-ghost">Sync now</button>
-        \\  </form>
-        \\</header>
-        \\
-    ) catch return mer.internalError("dashboard render failed");
+    w.writeAll("  </div>\n") catch return mer.internalError("dashboard render failed");
+    if (session.isAuthenticated()) {
+        w.writeAll(
+            \\  <form action="/api/sync" method="post" class="cp-logout">
+            \\    <input type="hidden" name="action" value="sync">
+            \\    <button type="submit" class="cp-btn cp-btn-primary">Sync now</button>
+            \\  </form>
+            \\
+        ) catch return mer.internalError("dashboard render failed");
+    } else {
+        w.writeAll("  <a class=\"cp-btn cp-btn-primary\" href=\"/login\">Sign in to sync</a>\n") catch return mer.internalError("dashboard render failed");
+    }
+    w.writeAll("</header>\n") catch return mer.internalError("dashboard render failed");
 
     if (synced) {
         w.writeAll("<div class=\"cp-status-banner cp-status-info\">Sync started. Refresh in a moment to see the latest.</div>\n") catch return mer.internalError("dashboard render failed");
@@ -93,20 +109,49 @@ pub fn render(req: mer.Request) mer.Response {
         }
     }
 
-    // ── Two-column grid ──────────────────────────────────────────────────
+    w.print(
+        \\<section class="cp-dashboard-hero">
+        \\  <div class="cp-course-code">{s}</div>
+        \\  <h1 class="cp-dashboard-title">{s}</h1>
+        \\  <p class="cp-dashboard-sub">A course workspace for source review, generated notes, cited Q&amp;A, and practice.</p>
+        \\  <div class="cp-dashboard-meta">
+        \\    <span class="cp-chip">{s}</span>
+        \\    <span class="cp-chip">{d} synced module{s}</span>
+        \\    <span class="cp-chip">{d} announcement{s}</span>
+        \\    <span class="cp-chip">{d} upcoming task{s}</span>
+        \\  </div>
+        \\</section>
+        \\
+    , .{
+        safe_code,
+        safe_name,
+        safe_term,
+        modules_slice.len,
+        if (modules_slice.len == 1) "" else "s",
+        ann_count,
+        if (ann_count == 1) "" else "s",
+        task_count,
+        if (task_count == 1) "" else "s",
+    }) catch return mer.internalError("dashboard render failed");
+
+    w.print(
+        \\<section class="cp-stat-grid" aria-label="Workspace status">
+        \\  <div class="cp-stat-card"><div class="cp-stat-value">{d}</div><div class="cp-stat-label">Synced modules</div></div>
+        \\  <div class="cp-stat-card"><div class="cp-stat-value">{d}</div><div class="cp-stat-label">Recent updates</div></div>
+        \\  <div class="cp-stat-card"><div class="cp-stat-value">{d}</div><div class="cp-stat-label">Due soon</div></div>
+        \\</section>
+        \\
+    , .{ modules_slice.len, ann_count, task_count }) catch return mer.internalError("dashboard render failed");
+
     w.writeAll(
         \\<div class="cp-grid">
         \\<div>
         \\
     ) catch return mer.internalError("dashboard render failed");
 
-    // Module summary card
-    const safe_code = lib.ui.escape(req.allocator, focus.code) catch focus.code;
-    const safe_name = lib.ui.escape(req.allocator, focus.name) catch focus.name;
-    const safe_term = lib.ui.escape(req.allocator, focus.term) catch focus.term;
     w.print(
         \\  <section class="cp-card">
-        \\    <div class="cp-card-title"><span>Module</span><span>{d} synced</span></div>
+        \\    <div class="cp-card-title"><span>Course focus</span><span>{d} synced</span></div>
         \\    <div class="cp-module-summary">
         \\      <div class="cp-module-code">{s}</div>
         \\      <div class="cp-module-name">{s}</div>
@@ -116,10 +161,9 @@ pub fn render(req: mer.Request) mer.Response {
         \\
     , .{ modules_slice.len, safe_code, safe_name, safe_term }) catch return mer.internalError("dashboard render failed");
 
-    // Recent announcements (scoped to this module)
     w.writeAll(
         \\  <section class="cp-card">
-        \\    <div class="cp-card-title"><span>Recent announcements</span></div>
+        \\    <div class="cp-card-title"><span>Recent announcements</span><span>source feed</span></div>
         \\    <ul class="cp-feed">
         \\
     ) catch return mer.internalError("dashboard render failed");
@@ -153,7 +197,6 @@ pub fn render(req: mer.Request) mer.Response {
         \\
     ) catch return mer.internalError("dashboard render failed");
 
-    // Upcoming assignments (scoped to this module)
     w.writeAll(
         \\  <section class="cp-card">
         \\    <div class="cp-card-title"><span>Upcoming assignments</span><span>next 14 days</span></div>
@@ -165,9 +208,10 @@ pub fn render(req: mer.Request) mer.Response {
     for (tasks_slice) |t| {
         if (!std.mem.eql(u8, t.module_id, focus.id)) continue;
         if (t.completed) continue;
+        const due_iso = t.due_at orelse continue;
+        if (!isUpcoming(due_iso, now_secs)) continue;
         if (task_shown >= 6) break;
         task_shown += 1;
-        const due_iso = t.due_at orelse continue;
         const safe_title = lib.ui.escape(req.allocator, t.title) catch t.title;
         const when = lib.time.formatRelative(req.allocator, due_iso, now_secs) catch "—";
         const urgent = lib.time.isUrgent(due_iso, now_secs);
@@ -191,10 +235,9 @@ pub fn render(req: mer.Request) mer.Response {
         \\    </ul>
         \\  </section>
         \\  <section class="cp-card">
-        \\    <div class="cp-card-title"><span>Ask CanvasPilot</span></div>
-        \\    <p style="font-size:13.5px;color:var(--cp-muted);margin-bottom:12px">
-        \\      Ask anything about this module. Answers are grounded in lecture notes,
-        \\      announcements and files — with citations.
+        \\    <div class="cp-card-title"><span>Ask CanvasPilot</span><span>cited Q&amp;A</span></div>
+        \\    <p style="font-size:13.5px;color:var(--cp-muted);margin-bottom:14px">
+        \\      Ask anything about this module. Answers stay grounded in course material and show sources inline.
         \\    </p>
         \\    <a class="cp-btn cp-btn-primary" href="/chat">Open chat</a>
         \\  </section>
@@ -206,20 +249,42 @@ pub fn render(req: mer.Request) mer.Response {
     return lib.ui.htmlResponse(&buf);
 }
 
+fn isUpcoming(iso: []const u8, now_secs: i64) bool {
+    const due_secs = lib.time.parseIsoSecs(iso) orelse return true;
+    const delta = due_secs - now_secs;
+    return delta >= 0 and delta <= UPCOMING_WINDOW_SECS;
+}
+
 fn renderEmpty(req: mer.Request, use_mock: bool, backend_ok: bool) mer.Response {
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
     _ = use_mock;
     _ = backend_ok;
+    const session = lib.session.fromRequest(req);
+    if (!session.isAuthenticated()) {
+        w.writeAll("<span hidden data-cp-auth=\"anonymous\"></span>\n") catch return mer.internalError("dashboard render failed");
+    }
     w.writeAll(
         \\<header class="cp-page-header">
         \\  <div>
+        \\    <div class="cp-page-kicker">Workspace overview</div>
         \\    <div class="cp-page-title">Dashboard</div>
         \\    <div class="cp-page-sub">No modules synced yet.</div>
         \\  </div>
-        \\  <form action="/api/sync" method="post" class="cp-logout">
-        \\    <button type="submit" class="cp-btn cp-btn-primary">Sync now</button>
-        \\  </form>
+        \\
+    ) catch return mer.internalError("dashboard render failed");
+    if (session.isAuthenticated()) {
+        w.writeAll(
+            \\  <form action="/api/sync" method="post" class="cp-logout">
+            \\    <input type="hidden" name="action" value="sync">
+            \\    <button type="submit" class="cp-btn cp-btn-primary">Sync now</button>
+            \\  </form>
+            \\
+        ) catch return mer.internalError("dashboard render failed");
+    } else {
+        w.writeAll("  <a class=\"cp-btn cp-btn-primary\" href=\"/login\">Sign in to sync</a>\n") catch return mer.internalError("dashboard render failed");
+    }
+    w.writeAll(
         \\</header>
         \\<section class="cp-card">
         \\  <div class="cp-empty">

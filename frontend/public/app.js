@@ -54,14 +54,17 @@
     parent.appendChild(cites);
   }
 
-  async function sendMessage(message) {
+  async function sendMessage(message, options) {
+    const opts = options || {};
     lastFailedMessage = null;
     input.disabled = true;
     sendBtn.disabled = true;
 
-    const userBubble = bubble("user");
-    userBubble.textContent = message;
-    history.push({ role: "user", content: message });
+    if (!opts.retry) {
+      const userBubble = bubble("user");
+      userBubble.textContent = message;
+      history.push({ role: "user", content: message });
+    }
 
     const pending = bubble("reply");
     pending.textContent = "…thinking";
@@ -102,7 +105,7 @@
       retry.textContent = "Retry";
       retry.addEventListener("click", () => {
         pending.remove();
-        sendMessage(message);
+        sendMessage(message, { retry: true });
       });
       pending.appendChild(retry);
       lastFailedMessage = message;

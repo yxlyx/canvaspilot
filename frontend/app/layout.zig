@@ -1,8 +1,3 @@
-// app/layout.zig — CanvasPilot shell. Every page response is wrapped by
-// `wrap()`. We render a compact header with brand + tab nav (Dashboard,
-// Chat) and a session-aware "Sign in / Sign out" action. Milestone 1
-// scope: Dashboard + Chat only; the full Tasks page lives in Milestone 2.
-
 const std = @import("std");
 const mer = @import("mer");
 
@@ -29,12 +24,9 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     const desc = if (meta.description.len > 0)
         meta.description
     else
-        "Canvas-grounded chat for your modules and deadlines.";
-
-    // Authentication state is approximated by checking if a `cp_session`
-    // cookie is present *anywhere* in the request — pages re-check this
-    // properly via `lib.session.requireAuth(req)` before rendering data.
-    const signed_in = std.mem.indexOf(u8, path, "/login") == null;
+        "A student workspace for sources, wiki notes, cited Q&A, and flashcards.";
+    const anonymous_page = std.mem.indexOf(u8, body, "data-cp-auth=\"anonymous\"") != null;
+    const signed_in = std.mem.indexOf(u8, path, "/login") == null and !std.mem.eql(u8, path, "/") and !anonymous_page;
 
     w.writeAll(
         \\<!DOCTYPE html>
@@ -59,11 +51,14 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     w.writeAll(
         \\</head>
         \\<body>
-        \\<header class="cp-header">
-        \\  <div class="cp-header-inner">
+        \\<div class="cp-app-shell">
+        \\  <aside class="cp-sidebar">
         \\    <a class="cp-brand" href="/">
-        \\      <span class="cp-brand-mark">◢</span>
-        \\      <span class="cp-brand-name">CanvasPilot</span>
+        \\      <span class="cp-brand-mark">CP</span>
+        \\      <span>
+        \\        <span class="cp-brand-name">CanvasPilot</span>
+        \\        <span class="cp-brand-sub">Course workspace</span>
+        \\      </span>
         \\    </a>
         \\    <nav class="cp-tabs" aria-label="Primary">
         \\
@@ -78,10 +73,19 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         ) catch return body;
     }
 
-    w.writeAll("    </nav>\n    <div class=\"cp-header-actions\">\n") catch return body;
+    w.writeAll(
+        \\    </nav>
+        \\    <div class="cp-sidebar-card">
+        \\      <div class="cp-sidebar-label">Prototype flow</div>
+        \\      <strong>Sources → Wiki → Q&amp;A → Cards</strong>
+        \\    </div>
+        \\    <div class="cp-header-actions">
+        \\
+    ) catch return body;
     if (signed_in) {
         w.writeAll(
             \\      <form action="/logout" method="post" class="cp-logout">
+            \\        <input type="hidden" name="action" value="logout">
             \\        <button type="submit" class="cp-btn cp-btn-ghost">Sign out</button>
             \\      </form>
             \\
@@ -91,9 +95,15 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     }
     w.writeAll(
         \\    </div>
-        \\  </div>
-        \\</header>
-        \\<main class="cp-main">
+        \\  </aside>
+        \\  <div class="cp-content-shell">
+        \\    <header class="cp-mobile-header">
+        \\      <a class="cp-brand" href="/">
+        \\        <span class="cp-brand-mark">CP</span>
+        \\        <span class="cp-brand-name">CanvasPilot</span>
+        \\      </a>
+        \\    </header>
+        \\    <main class="cp-main">
         \\
     ) catch return body;
 
@@ -101,7 +111,12 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
 
     w.writeAll(
         \\
-        \\</main>
+        \\    </main>
+        \\    <footer class="cp-footer">
+        \\      Built with <a href="https://github.com/justrach/merjs">merjs</a> · Zig 0.16
+        \\    </footer>
+        \\  </div>
+        \\</div>
         \\<nav class="cp-bottomnav" aria-label="Primary mobile">
         \\
     ) catch return body;
@@ -117,9 +132,6 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
 
     w.writeAll(
         \\</nav>
-        \\<footer class="cp-footer">
-        \\  Built with <a href="https://github.com/justrach/merjs">merjs</a> · Zig 0.16
-        \\</footer>
         \\</body>
         \\</html>
     ) catch return body;
