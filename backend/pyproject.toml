@@ -1,7 +1,7 @@
 [project]
-name = "canvaspilot-backend"
+name = "wikibase-backend"
 version = "0.1.0"
-description = "CanvasPilot backend — Canvas LMS academic copilot API"
+description = "WikiBase backend — source-grounded study workspace API"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",

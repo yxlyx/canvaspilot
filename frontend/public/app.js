@@ -97,7 +97,7 @@
       pending.classList.remove("cp-chat-msg-reply");
       pending.classList.add("cp-chat-msg-system");
       pending.textContent =
-        "Couldn't reach CanvasPilot: " + err.message + ". ";
+        "Couldn't reach WikiBase: " + err.message + ". ";
       const retry = document.createElement("button");
       retry.type = "button";
       retry.className = "cp-btn cp-btn-ghost";

@@ -4,7 +4,7 @@ const lib = @import("lib");
 
 pub const meta: mer.Meta = .{
     .title = "Sign in",
-    .description = "Sign in or create a CanvasPilot account.",
+    .description = "Sign in or create a WikiBase account.",
 };
 
 fn errorText(code: []const u8) []const u8 {

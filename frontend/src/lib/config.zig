@@ -16,8 +16,8 @@ pub const Config = struct {
 
 pub fn load() Config {
     return .{
-        .backend_url = mer.env("CANVASPILOT_BACKEND_URL") orelse "http://localhost:8000",
-        .session_cookie = mer.env("CANVASPILOT_SESSION_COOKIE") orelse "cp_session",
+        .backend_url = mer.env("WIKIBASE_BACKEND_URL") orelse "http://localhost:8000",
+        .session_cookie = mer.env("WIKIBASE_SESSION_COOKIE") orelse "cp_session",
         .mock_enabled = true,
     };
 }

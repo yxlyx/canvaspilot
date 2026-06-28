@@ -12,7 +12,7 @@ from app.models.user import User
 @pytest.fixture
 def settings():
     return Settings(
-        database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/canvaspilot_test",
+        database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/wikibase_test",
         session_secret="test-session-secret-with-at-least-32-bytes",
         canvas_token_secret="dGVzdC1mZXJuZXQta2V5LW5vdC1mb3ItcHJvZHVjdGlvbg==",
         canvas_base_url="https://canvas.test.example.com",

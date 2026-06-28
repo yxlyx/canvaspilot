@@ -4,8 +4,8 @@ const lib = @import("lib");
 
 pub const meta: mer.Meta = .{
     .title = "Chat",
-    .description = "Ask CanvasPilot about your modules.",
-    .extra_head = "<script defer src=\"/app.js?v=course-os-2\"></script>",
+    .description = "Ask WikiBase about your modules.",
+    .extra_head = "<script defer src=\"/app.js?v=wikibase-1\"></script>",
 };
 
 pub fn render(req: mer.Request) mer.Response {

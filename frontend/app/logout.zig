@@ -8,7 +8,7 @@ const lib = @import("lib");
 
 pub const meta: mer.Meta = .{
     .title = "Signed out",
-    .description = "You've been signed out of CanvasPilot.",
+    .description = "You've been signed out of WikiBase.",
 };
 
 pub fn render(req: mer.Request) mer.Response {

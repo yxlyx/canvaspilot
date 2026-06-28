@@ -15,9 +15,7 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-db_url = os.getenv(
-    "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/canvaspilot"
-)
+db_url = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/wikibase")
 config.set_main_option("sqlalchemy.url", db_url)
 
 

@@ -16,7 +16,7 @@ const BODY =
     \\  </p>
     \\  <div class="cp-landing-actions">
     \\    <a class="cp-btn cp-btn-primary" href="/dashboard">Open dashboard</a>
-    \\    <a class="cp-btn cp-btn-ghost" href="/chat">Ask CanvasPilot</a>
+    \\    <a class="cp-btn cp-btn-ghost" href="/chat">Ask WikiBase</a>
     \\  </div>
     \\</section>
 ;

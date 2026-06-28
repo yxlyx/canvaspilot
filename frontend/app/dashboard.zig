@@ -235,7 +235,7 @@ pub fn render(req: mer.Request) mer.Response {
         \\    </ul>
         \\  </section>
         \\  <section class="cp-card">
-        \\    <div class="cp-card-title"><span>Ask CanvasPilot</span><span>cited Q&amp;A</span></div>
+        \\    <div class="cp-card-title"><span>Ask WikiBase</span><span>cited Q&amp;A</span></div>
         \\    <p style="font-size:13.5px;color:var(--cp-muted);margin-bottom:14px">
         \\      Ask anything about this module. Answers stay grounded in course material and show sources inline.
         \\    </p>

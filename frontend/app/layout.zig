@@ -20,7 +20,7 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     var buf: std.Io.Writer.Allocating = .init(allocator);
     const w = &buf.writer;
 
-    const title = if (meta.title.len > 0) meta.title else "CanvasPilot";
+    const title = if (meta.title.len > 0) meta.title else "WikiBase";
     const desc = if (meta.description.len > 0)
         meta.description
     else
@@ -36,8 +36,14 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         \\<meta name="viewport" content="width=device-width, initial-scale=1.0">
         \\
     ) catch return body;
-    w.print("<title>{s} — CanvasPilot</title>\n", .{title}) catch return body;
+    w.print("<title>{s} — WikiBase</title>\n", .{title}) catch return body;
     w.print("<meta name=\"description\" content=\"{s}\">\n", .{desc}) catch return body;
+    w.writeAll(
+        \\<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=wikibase-2">
+        \\<link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png?v=wikibase-2">
+        \\<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=wikibase-2">
+        \\
+    ) catch return body;
 
     w.writeAll("<style>") catch return body;
     w.writeAll(CSS) catch return body;
@@ -54,9 +60,9 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         \\<div class="cp-app-shell">
         \\  <aside class="cp-sidebar">
         \\    <a class="cp-brand" href="/">
-        \\      <span class="cp-brand-mark">CP</span>
+        \\      <span class="cp-brand-mark"><img src="/icon-512.png?v=wikibase-2" alt="WikiBase" width="36" height="36"></span>
         \\      <span>
-        \\        <span class="cp-brand-name">CanvasPilot</span>
+        \\        <span class="cp-brand-name">WikiBase</span>
         \\        <span class="cp-brand-sub">Course workspace</span>
         \\      </span>
         \\    </a>
@@ -99,8 +105,8 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         \\  <div class="cp-content-shell">
         \\    <header class="cp-mobile-header">
         \\      <a class="cp-brand" href="/">
-        \\        <span class="cp-brand-mark">CP</span>
-        \\        <span class="cp-brand-name">CanvasPilot</span>
+        \\        <span class="cp-brand-mark"><img src="/icon-512.png?v=wikibase-2" alt="WikiBase" width="36" height="36"></span>
+        \\        <span class="cp-brand-name">WikiBase</span>
         \\      </a>
         \\    </header>
         \\    <main class="cp-main">
