@@ -12,7 +12,10 @@ const NavItem = struct {
 };
 
 const NAV_ITEMS = [_]NavItem{
-    .{ .href = "/dashboard", .label = "Dashboard", .match = "/dashboard" },
+    .{ .href = "/dashboard", .label = "Workspace", .match = "/dashboard" },
+    .{ .href = "/sources", .label = "Sources", .match = "/sources" },
+    .{ .href = "/wiki", .label = "Wiki", .match = "/wiki" },
+    .{ .href = "/flashcards", .label = "Flashcards", .match = "/flashcards" },
     .{ .href = "/chat", .label = "Chat", .match = "/chat" },
 };
 

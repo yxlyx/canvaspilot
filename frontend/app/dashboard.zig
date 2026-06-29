@@ -246,6 +246,27 @@ pub fn render(req: mer.Request) mer.Response {
         \\
     ) catch return mer.internalError("dashboard render failed");
 
+    w.print(
+        \\<section class="cp-stat-grid" aria-label="Workspace sections" style="margin-top:18px">
+        \\  <div class="cp-card">
+        \\    <div class="cp-card-title"><span>Source library</span><span>{d} sources</span></div>
+        \\    <p class="cp-muted-copy">Imported documents, links, and notes chunked for cited answers.</p>
+        \\    <a class="cp-btn cp-btn-ghost" href="/sources">Review sources</a>
+        \\  </div>
+        \\  <div class="cp-card">
+        \\    <div class="cp-card-title"><span>Generated wiki</span><span>{d} pages</span></div>
+        \\    <p class="cp-muted-copy">Study pages compiled from your sources, with citations and backlinks.</p>
+        \\    <a class="cp-btn cp-btn-ghost" href="/wiki">Open wiki</a>
+        \\  </div>
+        \\  <div class="cp-card">
+        \\    <div class="cp-card-title"><span>Flashcards</span><span>{d} decks</span></div>
+        \\    <p class="cp-muted-copy">Practice decks generated from wiki pages to track weak topics.</p>
+        \\    <a class="cp-btn cp-btn-ghost" href="/flashcards">Practice now</a>
+        \\  </div>
+        \\</section>
+        \\
+    , .{ lib.mock.sources.len, lib.mock.wiki_pages.len, lib.mock.decks.len }) catch return mer.internalError("dashboard render failed");
+
     return lib.ui.htmlResponse(&buf);
 }
 
