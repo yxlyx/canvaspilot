@@ -33,6 +33,8 @@
     --cp-red-soft: rgba(224, 82, 75, 0.12);
     --cp-yellow: #9a7b2e;
     --cp-yellow-soft: rgba(193, 145, 47, 0.14);
+    --cp-warning: var(--cp-yellow);
+    --cp-warning-soft: var(--cp-yellow-soft);
     --cp-ok: #1f9d63;
     --cp-ok-soft: rgba(31, 157, 99, 0.13);
     /* Geometry */
@@ -66,6 +68,31 @@ body {
 a { color: inherit; text-decoration: none; }
 button, input, select { font: inherit; }
 button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: 0.55; }
+
+:focus-visible { outline: none; }
+a:focus-visible, .cp-btn:focus-visible, .cp-chip:focus-visible, .cp-tab:focus-visible,
+.cp-bottom-item:focus-visible, .cp-wiki-row:focus-visible, .cp-deck-row:focus-visible,
+.cp-citation-card:focus-visible, .cp-source-card:focus-visible, .cp-metric-card:focus-visible,
+.cp-chat-module:focus-visible, .cp-auth-tab:focus-visible, .cp-flashcard summary:focus-visible {
+    outline: 2px solid var(--cp-accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+.cp-skip {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 50;
+    padding: 10px 16px;
+    border-radius: 0 0 var(--cp-radius) 0;
+    color: #fff;
+    background: var(--cp-accent);
+    font-size: 13px;
+    font-weight: 650;
+}
+.cp-skip:focus { left: 0; }
 
 .cp-app-shell {
     min-height: 100vh;
@@ -206,6 +233,7 @@ button { cursor: pointer; }
     transition: transform 0.12s ease, box-shadow 0.18s ease, background 0.18s ease, border-color 0.18s ease;
 }
 .cp-btn:active { transform: translateY(0.5px); }
+.cp-btn:disabled { transform: none; box-shadow: none; filter: none; }
 .cp-btn-primary {
     color: #fff;
     background: linear-gradient(140deg, #ef8430, var(--cp-accent-2));
@@ -580,6 +608,12 @@ button { cursor: pointer; }
     display: flex;
     flex-direction: column;
     gap: 14px;
+}
+.cp-chat-suggestions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 0 12px 8px;
 }
 .cp-chat-msg {
     max-width: min(80%, 700px);

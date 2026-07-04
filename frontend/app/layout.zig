@@ -1,3 +1,7 @@
+// app/layout.zig — WikiBase shell. Every page response is wrapped by
+// `wrap()`. We render the sidebar navigation, mobile bottom nav, and a
+// session-aware "Sign in / Sign out" action.
+
 const std = @import("std");
 const mer = @import("mer");
 
@@ -60,6 +64,7 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     w.writeAll(
         \\</head>
         \\<body>
+        \\<a class="cp-skip" href="#main">Skip to content</a>
         \\<div class="cp-app-shell">
         \\  <aside class="cp-sidebar">
         \\    <a class="cp-brand" href="/">
@@ -76,9 +81,10 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     for (NAV_ITEMS) |item| {
         const active = std.mem.startsWith(u8, path, item.match);
         const cls: []const u8 = if (active) "cp-tab cp-tab-active" else "cp-tab";
+        const current: []const u8 = if (active) " aria-current=\"page\"" else "";
         w.print(
-            "      <a class=\"{s}\" href=\"{s}\">{s}</a>\n",
-            .{ cls, item.href, item.label },
+            "      <a class=\"{s}\" href=\"{s}\"{s}>{s}</a>\n",
+            .{ cls, item.href, current, item.label },
         ) catch return body;
     }
 
@@ -112,7 +118,7 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         \\        <span class="cp-brand-name">WikiBase</span>
         \\      </a>
         \\    </header>
-        \\    <main class="cp-main">
+        \\    <main class="cp-main" id="main">
         \\
     ) catch return body;
 
@@ -133,9 +139,10 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     for (NAV_ITEMS) |item| {
         const active = std.mem.startsWith(u8, path, item.match);
         const cls: []const u8 = if (active) "cp-bottom-item cp-bottom-active" else "cp-bottom-item";
+        const current: []const u8 = if (active) " aria-current=\"page\"" else "";
         w.print(
-            "  <a class=\"{s}\" href=\"{s}\">{s}</a>\n",
-            .{ cls, item.href, item.label },
+            "  <a class=\"{s}\" href=\"{s}\"{s}>{s}</a>\n",
+            .{ cls, item.href, current, item.label },
         ) catch return body;
     }
 

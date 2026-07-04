@@ -18,6 +18,12 @@ fn errorText(code: []const u8) []const u8 {
     return "Something went wrong. Try again.";
 }
 
+fn signupValue(req: mer.Request, name: []const u8) []const u8 {
+    const raw = req.queryParam(name) orelse return "";
+    const decoded = lib.form.decode(req.allocator, raw) catch return "";
+    return lib.ui.escape(req.allocator, decoded) catch "";
+}
+
 pub fn render(req: mer.Request) mer.Response {
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
@@ -52,23 +58,25 @@ pub fn render(req: mer.Request) mer.Response {
     const signin_cls: []const u8 = if (signup_active) "cp-auth-tab" else "cp-auth-tab cp-auth-tab-active";
     const signup_cls: []const u8 = if (signup_active) "cp-auth-tab cp-auth-tab-active" else "cp-auth-tab";
     w.print(
-        \\  <div class="cp-auth-tabs" role="tablist">
+        \\  <nav class="cp-auth-tabs" aria-label="Account">
         \\    <a class="{s}" href="/login?mode=signin">Sign in</a>
         \\    <a class="{s}" href="/login?mode=signup">Create account</a>
-        \\  </div>
+        \\  </nav>
         \\
     , .{ signin_cls, signup_cls }) catch return mer.internalError("login render failed");
 
     if (signup_active) {
-        w.writeAll(
+        const name_value = signupValue(req, "name");
+        const email_value = signupValue(req, "email");
+        w.print(
             \\  <form class="cp-auth-form" method="post" action="/api/auth/register">
             \\    <label class="cp-field">
             \\      <span>Name</span>
-            \\      <input name="name" autocomplete="name" required>
+            \\      <input name="name" autocomplete="name" value="{s}" required>
             \\    </label>
             \\    <label class="cp-field">
             \\      <span>Email</span>
-            \\      <input name="email" type="email" autocomplete="email" required>
+            \\      <input name="email" type="email" autocomplete="email" value="{s}" required>
             \\    </label>
             \\    <label class="cp-field">
             \\      <span>Password</span>
@@ -81,7 +89,7 @@ pub fn render(req: mer.Request) mer.Response {
             \\    <button class="cp-btn cp-btn-primary cp-auth-submit" type="submit">Create account</button>
             \\  </form>
             \\
-        ) catch return mer.internalError("login render failed");
+        , .{ name_value, email_value }) catch return mer.internalError("login render failed");
     } else {
         w.writeAll(
             \\  <form class="cp-auth-form" method="post" action="/api/auth/signin">

@@ -15,6 +15,22 @@
   const moduleSel = document.getElementById("cp-chat-module");
   if (!form || !log || !input) return;
 
+  // Disable Send when the input is empty.
+  function updateSendState() {
+    if (sendBtn) sendBtn.disabled = input.value.trim().length === 0;
+  }
+  updateSendState();
+  input.addEventListener("input", updateSendState);
+
+  // Wire suggestion chips to fill + send.
+  document.querySelectorAll(".cp-chat-suggestions .cp-chip").forEach(function (chip) {
+    chip.addEventListener("click", function () {
+      input.value = chip.dataset.prompt || chip.textContent || "";
+      updateSendState();
+      form.requestSubmit();
+    });
+  });
+
   const history = [];
   let lastFailedMessage = null;
 
@@ -36,6 +52,18 @@
     return div;
   }
 
+  function safeCitationUrl(raw) {
+    if (!raw) return "#";
+    try {
+      if (raw.startsWith("/")) return raw;
+      const url = new URL(raw, window.location.origin);
+      if (url.protocol === "http:" || url.protocol === "https:") {
+        return url.href;
+      }
+    } catch (_) {}
+    return "#";
+  }
+
   function renderCitations(parent, citations) {
     if (!Array.isArray(citations) || citations.length === 0) return;
     const cites = document.createElement("div");
@@ -44,7 +72,7 @@
     citations.forEach((c) => {
       const a = document.createElement("a");
       a.className = "cp-chat-citation";
-      a.href = c.url || "#";
+      a.href = safeCitationUrl(c.url || "");
       a.target = "_blank";
       a.rel = "noopener";
       a.textContent =
@@ -54,17 +82,16 @@
     parent.appendChild(cites);
   }
 
-  async function sendMessage(message, options) {
-    const opts = options || {};
+  async function sendMessage(message) {
     lastFailedMessage = null;
     input.disabled = true;
     sendBtn.disabled = true;
 
-    if (!opts.retry) {
-      const userBubble = bubble("user");
-      userBubble.textContent = message;
-      history.push({ role: "user", content: message });
-    }
+    const priorHistory = history.slice();
+
+    const userBubble = bubble("user");
+    userBubble.textContent = message;
+    history.push({ role: "user", content: message });
 
     const pending = bubble("reply");
     pending.textContent = "…thinking";
@@ -76,14 +103,16 @@
         body: JSON.stringify({
           message,
           module_id: moduleSel && moduleSel.value ? moduleSel.value : null,
-          history,
+          history: priorHistory,
         }),
       });
       if (!resp.ok) {
         throw new Error("HTTP " + resp.status);
       }
       const data = await resp.json();
-      pending.textContent = data.message || "(no reply)";
+      const replyMessage = data.message || "(no reply)";
+      pending.textContent = replyMessage;
+      history.push({ role: "assistant", content: replyMessage });
       renderCitations(pending, data.citations);
       if (data.source === "mock") {
         const tag = document.createElement("div");
@@ -94,6 +123,8 @@
       }
       input.value = "";
     } catch (err) {
+      history.length = 0;
+      history.push.apply(history, priorHistory);
       pending.classList.remove("cp-chat-msg-reply");
       pending.classList.add("cp-chat-msg-system");
       pending.textContent =
@@ -105,14 +136,14 @@
       retry.textContent = "Retry";
       retry.addEventListener("click", () => {
         pending.remove();
-        sendMessage(message, { retry: true });
+        sendMessage(message);
       });
       pending.appendChild(retry);
       lastFailedMessage = message;
       input.value = message;
     } finally {
       input.disabled = false;
-      sendBtn.disabled = false;
+      updateSendState();
       input.focus();
     }
   }

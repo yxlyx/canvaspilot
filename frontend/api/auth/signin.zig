@@ -23,7 +23,7 @@ pub fn render(req: mer.Request) mer.Response {
             return mer.internalError("could not allocate session cookie");
         };
         cookies[0] = lib.session.setCookie(v.value.token);
-        return mer.withCookies(mer.redirect("/dashboard?mock=1&auth=signed_in", .see_other), cookies);
+        return mer.withCookies(mer.redirect("/dashboard?auth=signed_in", .see_other), cookies);
     }
 
     if (result.status == 401) return redirectError(req, "invalid_credentials");

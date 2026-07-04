@@ -221,7 +221,7 @@ fn mockReply(allocator: std.mem.Allocator, question: []const u8) mer.Response {
     const citations = [_]lib.types.Citation{
         .{
             .title = "CS2030S — Announcement: Lab 6 deadline extended",
-            .url = "/dashboard",
+            .url = "/sources?type=announcement",
             .snippet = "Lab 6 due Fri 23:59. New testcases on Coursemology.",
         },
     };

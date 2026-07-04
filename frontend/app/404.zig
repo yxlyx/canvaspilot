@@ -12,10 +12,10 @@ const BODY =
     \\  <h1 class="cp-landing-title">Page not found</h1>
     \\  <p class="cp-landing-sub">
     \\    The page you're looking for hasn't been built yet (or you mistyped the URL).
-    \\    Head back to the dashboard to find your modules, deadlines and chat.
+    \\    Head back to the workspace to find your sources, wiki notes, cards and chat.
     \\  </p>
     \\  <div class="cp-landing-actions">
-    \\    <a class="cp-btn cp-btn-primary" href="/dashboard">Open dashboard</a>
+    \\    <a class="cp-btn cp-btn-primary" href="/dashboard">Open workspace</a>
     \\    <a class="cp-btn cp-btn-ghost" href="/chat">Ask WikiBase</a>
     \\  </div>
     \\</section>
