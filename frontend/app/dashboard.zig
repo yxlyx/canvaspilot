@@ -11,7 +11,7 @@ const lib = @import("lib");
 
 pub const meta: mer.Meta = .{
     .title = "Workspace",
-    .description = "CanvasPilot workspace overview for sources, wiki pages, Q&A, and flashcards.",
+    .description = "WikiBase workspace overview for sources, wiki pages, Q&A, and flashcards.",
 };
 
 pub fn render(req: mer.Request) mer.Response {
@@ -115,6 +115,10 @@ pub fn render(req: mer.Request) mer.Response {
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
 
+    if (!session.isAuthenticated()) {
+        w.writeAll("<span hidden data-cp-auth=\"anonymous\"></span>\n") catch return mer.internalError("workspace render failed");
+    }
+
     w.writeAll(
         \\<header class="cp-page-header">
         \\  <div>
@@ -135,9 +139,18 @@ pub fn render(req: mer.Request) mer.Response {
         \\  </div>
         \\  <div class="cp-page-actions">
         \\    <a class="cp-btn cp-btn-ghost" href="/sources">Review sources</a>
-        \\    <form action="/api/sync" method="post" class="cp-logout">
-        \\      <button type="submit" class="cp-btn cp-btn-primary">Sync now</button>
-        \\    </form>
+    ) catch return mer.internalError("workspace render failed");
+    if (session.isAuthenticated()) {
+        w.writeAll(
+            \\    <form action="/api/sync" method="post" class="cp-logout">
+            \\      <input type="hidden" name="action" value="sync">
+            \\      <button type="submit" class="cp-btn cp-btn-primary">Sync now</button>
+            \\    </form>
+        ) catch return mer.internalError("workspace render failed");
+    } else {
+        w.writeAll("    <a class=\"cp-btn cp-btn-primary\" href=\"/login\">Sign in to sync</a>\n") catch return mer.internalError("workspace render failed");
+    }
+    w.writeAll(
         \\  </div>
         \\</header>
     ) catch return mer.internalError("workspace render failed");
@@ -266,7 +279,7 @@ pub fn render(req: mer.Request) mer.Response {
     w.writeAll(
         \\  </section>
         \\  <section class="cp-card">
-        \\    <div class="cp-card-title"><span>Ask CanvasPilot</span></div>
+        \\    <div class="cp-card-title"><span>Ask WikiBase</span></div>
         \\    <p class="cp-muted-copy">Use cited Q&A across the indexed source set, then jump back to the exact source or wiki page.</p>
         \\    <a class="cp-btn cp-btn-ghost" href="/chat">Open Q&A</a>
         \\  </section>
@@ -331,15 +344,28 @@ fn sourceStatusClass(status: []const u8) []const u8 {
 fn renderEmpty(req: mer.Request) mer.Response {
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
+    const session = lib.session.fromRequest(req);
+    if (!session.isAuthenticated()) {
+        w.writeAll("<span hidden data-cp-auth=\"anonymous\"></span>\n") catch return mer.internalError("workspace render failed");
+    }
     w.writeAll(
         \\<header class="cp-page-header">
         \\  <div>
         \\    <h1 class="cp-page-title">Workspace</h1>
         \\    <div class="cp-page-sub">No workspace modules synced yet.</div>
         \\  </div>
-        \\  <form action="/api/sync" method="post" class="cp-logout">
-        \\    <button type="submit" class="cp-btn cp-btn-primary">Sync now</button>
-        \\  </form>
+    ) catch return mer.internalError("workspace render failed");
+    if (session.isAuthenticated()) {
+        w.writeAll(
+            \\  <form action="/api/sync" method="post" class="cp-logout">
+            \\    <input type="hidden" name="action" value="sync">
+            \\    <button type="submit" class="cp-btn cp-btn-primary">Sync now</button>
+            \\  </form>
+        ) catch return mer.internalError("workspace render failed");
+    } else {
+        w.writeAll("  <a class=\"cp-btn cp-btn-primary\" href=\"/login\">Sign in to sync</a>\n") catch return mer.internalError("workspace render failed");
+    }
+    w.writeAll(
         \\</header>
         \\<section class="cp-card">
         \\  <div class="cp-empty">

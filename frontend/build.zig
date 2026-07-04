@@ -70,7 +70,7 @@ pub fn build(b: *std.Build) void {
     addRoutesModule(b, test_mod, mer_mod, lib_mod);
     const run_tests = b.addRunArtifact(b.addTest(.{ .root_module = test_mod }));
     run_tests.step.dependOn(&run_codegen.step);
-    b.step("test", "Compile the canvaspilot frontend").dependOn(&run_tests.step);
+    b.step("test", "Compile the WikiBase frontend").dependOn(&run_tests.step);
 }
 
 fn addRoutesModule(

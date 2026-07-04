@@ -6,7 +6,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import get_settings
 from app.db.database import init_db
-from app.exceptions import CanvasPilotError, canvaspilot_error_handler
+from app.exceptions import WikiBaseError, wikibase_error_handler
 from app.routers import (
     auth,
     chat,
@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="CanvasPilot API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="WikiBase API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(SessionMiddleware, secret_key=settings.session_secret)
 app.add_middleware(
@@ -40,7 +40,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.add_exception_handler(CanvasPilotError, canvaspilot_error_handler)
+app.add_exception_handler(WikiBaseError, wikibase_error_handler)
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(modules.router, prefix="/api")

@@ -9,7 +9,7 @@ const lib = @import("lib");
 
 pub const meta: mer.Meta = .{
     .title = "Wiki",
-    .description = "Browse generated CanvasPilot wiki pages with citations.",
+    .description = "Browse generated WikiBase wiki pages with citations.",
 };
 
 pub fn render(req: mer.Request) mer.Response {

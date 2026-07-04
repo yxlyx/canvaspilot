@@ -1,4 +1,4 @@
-# Deploying the CanvasPilot frontend
+# Deploying the WikiBase frontend
 
 Milestone 1 of the proposal calls for an end-to-end proof of concept deployed
 for one complete query flow. The original proposal listed Vercel + Railway as
@@ -16,8 +16,8 @@ that one image.
 | Variable                  | Purpose                                                                                | Required?       |
 | ------------------------- | -------------------------------------------------------------------------------------- | --------------- |
 | `PORT`                    | Port the HTTP server binds to. Railway / Fly inject this automatically.                 | Yes (defaults to `3001`) |
-| `CANVASPILOT_BACKEND_URL` | Base URL of the FastAPI backend, e.g. `https://canvaspilot-backend.up.railway.app`.    | Yes for real backend; otherwise falls back to mock data |
-| `CANVASPILOT_SESSION_COOKIE` | Name of the HttpOnly cookie storing the app JWT. Defaults to `cp_session`.         | No              |
+| `WIKIBASE_BACKEND_URL` | Base URL of the FastAPI backend, e.g. `https://wikibase-backend.up.railway.app`.    | Yes for real backend; otherwise falls back to mock data |
+| `WIKIBASE_SESSION_COOKIE` | Name of the HttpOnly cookie storing the app JWT. Defaults to `cp_session`.         | No              |
 
 ## 1. Railway (matches the proposal)
 
@@ -44,10 +44,10 @@ port `8080` → container `$PORT`.
 
 ```bash
 cd frontend
-docker build -t canvaspilot-frontend .
+docker build -t wikibase-frontend .
 docker run --rm -p 3001:3001 \
-  -e CANVASPILOT_BACKEND_URL=http://host.docker.internal:8000 \
-  canvaspilot-frontend
+  -e WIKIBASE_BACKEND_URL=http://host.docker.internal:8000 \
+  wikibase-frontend
 # open http://localhost:3001/dashboard?mock=1
 ```
 

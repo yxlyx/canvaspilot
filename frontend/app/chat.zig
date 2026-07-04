@@ -14,8 +14,8 @@ const lib = @import("lib");
 
 pub const meta: mer.Meta = .{
     .title = "Chat",
-    .description = "Ask CanvasPilot about your modules.",
-    .extra_head = "<script defer src=\"/app.js\"></script>",
+    .description = "Ask WikiBase about your modules.",
+    .extra_head = "<script defer src=\"/app.js?v=wikibase-2\"></script>",
 };
 
 pub fn render(req: mer.Request) mer.Response {
@@ -32,11 +32,15 @@ pub fn render(req: mer.Request) mer.Response {
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
 
+    if (!session.isAuthenticated()) {
+        w.writeAll("<span hidden data-cp-auth=\"anonymous\"></span>\n") catch return mer.internalError("chat render failed");
+    }
+
     w.writeAll(
         \\<header class="cp-page-header">
         \\  <div>
         \\    <h1 class="cp-page-title">Chat</h1>
-        \\    <div class="cp-page-sub">Grounded in your Canvas modules. Citations included.</div>
+        \\    <div class="cp-page-sub">Grounded in your synced modules and source library. Citations included.</div>
         \\  </div>
         \\</header>
         \\
@@ -78,12 +82,12 @@ pub fn render(req: mer.Request) mer.Response {
     w.writeAll(
         \\    </select>
         \\    <input type="text" class="cp-chat-input" id="cp-chat-input" name="message"
-        \\           aria-label="Ask CanvasPilot" placeholder="Ask about your modules…" required>
+        \\           aria-label="Ask WikiBase" placeholder="Ask about your modules…" required>
         \\    <button type="submit" class="cp-btn cp-btn-primary" id="cp-chat-send">Send</button>
         \\  </form>
         \\</section>
         \\<p class="cp-page-sub" style="margin-top:12px">
-        \\  Answers are grounded in your synced Canvas modules. Sources appear inline below each reply.
+        \\  Answers are grounded in your synced workspace. Sources appear inline below each reply.
         \\</p>
         \\
     ) catch return mer.internalError("chat render failed");

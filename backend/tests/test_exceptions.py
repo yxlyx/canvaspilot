@@ -1,10 +1,10 @@
 from app.exceptions import (
-    CanvasPilotError,
     CanvasTokenExpiredError,
     NotFoundError,
     RateLimitedError,
     SyncInProgressError,
     UnauthorizedError,
+    WikiBaseError,
 )
 
 
@@ -38,7 +38,7 @@ class TestExceptions:
         assert err.status_code == 429
 
     def test_base_error(self):
-        err = CanvasPilotError(500, "internal", "Something broke")
+        err = WikiBaseError(500, "internal", "Something broke")
         assert err.status_code == 500
         assert err.error == "internal"
         assert err.detail == "Something broke"

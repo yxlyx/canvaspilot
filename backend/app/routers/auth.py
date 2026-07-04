@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
 from app.dependencies import create_app_token, get_current_user
-from app.exceptions import CanvasPilotError
+from app.exceptions import WikiBaseError
 from app.models.user import User
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
 
@@ -19,7 +19,7 @@ PASSWORD_SCHEME = "pbkdf2_sha256"
 PASSWORD_ITERATIONS = 210_000
 
 
-class BadAuthRequestError(CanvasPilotError):
+class BadAuthRequestError(WikiBaseError):
     def __init__(self, error: str, detail: str, status_code: int = status.HTTP_400_BAD_REQUEST):
         super().__init__(status_code, error, detail)
 

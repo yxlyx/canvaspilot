@@ -1,7 +1,6 @@
-// app/layout.zig — CanvasPilot shell. Every page response is wrapped by
-// `wrap()`. We render a compact header with brand + tab nav (Workspace,
-// Sources, Wiki, Flashcards, Chat) and a session-aware "Sign in / Sign out"
-// action.
+// app/layout.zig — WikiBase shell. Every page response is wrapped by
+// `wrap()`. We render the sidebar navigation, mobile bottom nav, and a
+// session-aware "Sign in / Sign out" action.
 
 const std = @import("std");
 const mer = @import("mer");
@@ -28,17 +27,13 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     var buf: std.Io.Writer.Allocating = .init(allocator);
     const w = &buf.writer;
 
-    const title = if (meta.title.len > 0) meta.title else "CanvasPilot";
+    const title = if (meta.title.len > 0) meta.title else "WikiBase";
     const desc = if (meta.description.len > 0)
         meta.description
     else
-        "Canvas-grounded chat for your modules and deadlines.";
-
-    // This layout wrapper only receives the path, so header auth is a
-    // conservative route-based hint; pages still gate data with
-    // `lib.session.requireAuth(req)` before rendering private content.
-    const is_landing = std.mem.eql(u8, path, "/");
-    const signed_in = !is_landing and std.mem.indexOf(u8, path, "/login") == null;
+        "A student workspace for sources, wiki notes, cited Q&A, and flashcards.";
+    const anonymous_page = std.mem.indexOf(u8, body, "data-cp-auth=\"anonymous\"") != null;
+    const signed_in = std.mem.indexOf(u8, path, "/login") == null and !std.mem.eql(u8, path, "/") and !anonymous_page;
 
     w.writeAll(
         \\<!DOCTYPE html>
@@ -48,13 +43,12 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         \\<meta name="viewport" content="width=device-width, initial-scale=1.0">
         \\
     ) catch return body;
-    w.print("<title>{s} — CanvasPilot</title>\n", .{title}) catch return body;
+    w.print("<title>{s} — WikiBase</title>\n", .{title}) catch return body;
     w.print("<meta name=\"description\" content=\"{s}\">\n", .{desc}) catch return body;
-
     w.writeAll(
-        \\<link rel="preconnect" href="https://fonts.googleapis.com">
-        \\<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        \\<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+        \\<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=wikibase-2">
+        \\<link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png?v=wikibase-2">
+        \\<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=wikibase-2">
         \\
     ) catch return body;
 
@@ -71,11 +65,14 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         \\</head>
         \\<body>
         \\<a class="cp-skip" href="#main">Skip to content</a>
-        \\<header class="cp-header">
-        \\  <div class="cp-header-inner">
+        \\<div class="cp-app-shell">
+        \\  <aside class="cp-sidebar">
         \\    <a class="cp-brand" href="/">
-        \\      <span class="cp-brand-mark" aria-hidden="true">◢</span>
-        \\      <span class="cp-brand-name">CanvasPilot</span>
+        \\      <span class="cp-brand-mark"><img src="/icon-512.png?v=wikibase-2" alt="WikiBase" width="36" height="36"></span>
+        \\      <span>
+        \\        <span class="cp-brand-name">WikiBase</span>
+        \\        <span class="cp-brand-sub">Course workspace</span>
+        \\      </span>
         \\    </a>
         \\    <nav class="cp-tabs" aria-label="Primary">
         \\
@@ -91,10 +88,19 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         ) catch return body;
     }
 
-    w.writeAll("    </nav>\n    <div class=\"cp-header-actions\">\n") catch return body;
+    w.writeAll(
+        \\    </nav>
+        \\    <div class="cp-sidebar-card">
+        \\      <div class="cp-sidebar-label">Prototype flow</div>
+        \\      <strong>Sources → Wiki → Q&amp;A → Cards</strong>
+        \\    </div>
+        \\    <div class="cp-header-actions">
+        \\
+    ) catch return body;
     if (signed_in) {
         w.writeAll(
             \\      <form action="/logout" method="post" class="cp-logout">
+            \\        <input type="hidden" name="action" value="logout">
             \\        <button type="submit" class="cp-btn cp-btn-ghost">Sign out</button>
             \\      </form>
             \\
@@ -104,9 +110,15 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     }
     w.writeAll(
         \\    </div>
-        \\  </div>
-        \\</header>
-        \\<main class="cp-main" id="main">
+        \\  </aside>
+        \\  <div class="cp-content-shell">
+        \\    <header class="cp-mobile-header">
+        \\      <a class="cp-brand" href="/">
+        \\        <span class="cp-brand-mark"><img src="/icon-512.png?v=wikibase-2" alt="WikiBase" width="36" height="36"></span>
+        \\        <span class="cp-brand-name">WikiBase</span>
+        \\      </a>
+        \\    </header>
+        \\    <main class="cp-main" id="main">
         \\
     ) catch return body;
 
@@ -114,7 +126,12 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
 
     w.writeAll(
         \\
-        \\</main>
+        \\    </main>
+        \\    <footer class="cp-footer">
+        \\      Built with <a href="https://github.com/justrach/merjs">merjs</a> · Zig 0.16
+        \\    </footer>
+        \\  </div>
+        \\</div>
         \\<nav class="cp-bottomnav" aria-label="Primary mobile">
         \\
     ) catch return body;
@@ -131,9 +148,6 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
 
     w.writeAll(
         \\</nav>
-        \\<footer class="cp-footer">
-        \\  Built with <a href="https://github.com/justrach/merjs">merjs</a> · Zig 0.16
-        \\</footer>
         \\</body>
         \\</html>
     ) catch return body;

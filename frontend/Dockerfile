@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 #
-# CanvasPilot frontend (merjs / Zig 0.16) — Milestone 1 deploy image.
+# WikiBase frontend (merjs / Zig 0.16) — Milestone 1 deploy image.
 #
 # Multi-stage build:
 #   1. `build` installs Zig 0.16, vendors merjs from zig-pkg/, runs codegen and
@@ -45,13 +45,13 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --create-home --uid 10001 canvaspilot
+    && useradd --system --create-home --uid 10001 wikibase
 
 WORKDIR /app
 COPY --from=build /src/zig-out/bin/app /app/app
 COPY --from=build /src/public /app/public
 
-USER canvaspilot
+USER wikibase
 
 # Railway injects $PORT; locally falls back to 3001.
 ENV PORT=3001
