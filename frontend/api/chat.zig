@@ -14,8 +14,8 @@
 // The proposal only requires "returns a grounded response with source links",
 // not token-by-token streaming — that's Milestone 2 polish.
 //
-// If the backend is unreachable or returns an error, we fall back to a
-// canned mock reply so the demo flow still works end-to-end offline.
+// Explicit demo and signed-out prototype requests use a canned reply. An
+// authenticated live request never falls back to plausible fixture content.
 
 const std = @import("std");
 const mer = @import("mer");
@@ -29,13 +29,7 @@ const ChatBody = struct {
     history: []const lib.types.ChatMessage = &.{},
 };
 
-const ChatReply = struct {
-    message: []const u8,
-    citations: []const lib.types.Citation,
-    grounded: bool = true,
-    confidence: f64 = 0.0,
-    source: []const u8 = "backend", // "backend" or "mock"
-};
+const ChatReply = lib.chat.Reply;
 
 pub fn render(req: mer.Request) mer.Response {
     if (req.method != .POST) {
@@ -43,6 +37,9 @@ pub fn render(req: mer.Request) mer.Response {
     }
     if (req.body.len == 0) {
         return mer.badRequest("expected JSON body");
+    }
+    if (req.body.len > 128 * 1024) {
+        return mer.badRequest("chat request is too large");
     }
 
     const parsed = std.json.parseFromSlice(ChatBody, req.allocator, req.body, .{
@@ -56,19 +53,33 @@ pub fn render(req: mer.Request) mer.Response {
     if (body.message.len == 0) {
         return mer.badRequest("empty message");
     }
+    if (body.message.len > 8000 or body.history.len > 40) {
+        return mer.badRequest("chat request is too large");
+    }
+    for (body.history) |entry| {
+        if (entry.content.len > 8000) return mer.badRequest("chat history entry is too large");
+    }
+
+    if (lib.m3.isExplicitDemo(req)) {
+        return mockReply(req.allocator, body.message, true);
+    }
 
     const session = lib.session.fromRequest(req);
     if (!session.isAuthenticated()) {
-        // For demo / sign-out users we still return a usable reply.
-        return mockReply(req.allocator, body.message);
+        // Signed-out M2 prototype chat remains usable without a live workspace.
+        return mockReply(req.allocator, body.message, false);
     }
 
     // Forward to FastAPI; aggregate SSE frames into a single reply.
     if (callBackend(req.allocator, session.token, body)) |reply| {
         return mer.typedJson(req.allocator, reply);
     } else |e| {
-        log.warn("chat: backend error: {s} — falling back to mock", .{@errorName(e)});
-        return mockReply(req.allocator, body.message);
+        log.warn("chat: authenticated backend error: {s}", .{@errorName(e)});
+        return .{
+            .status = .bad_gateway,
+            .content_type = .json,
+            .body = "{\"error\":\"live chat is unavailable; no demo answer was substituted\"}",
+        };
     }
 }
 
@@ -85,7 +96,7 @@ fn callBackend(
     allocator: std.mem.Allocator,
     token: []const u8,
     body: ChatBody,
-) (BackendError || std.mem.Allocator.Error)!ChatReply {
+) !ChatReply {
     const cfg = lib.config.load();
     const url = std.fmt.allocPrint(allocator, "{s}/api/chat", .{cfg.backend_url}) catch
         return error.SerializeFailed;
@@ -109,16 +120,17 @@ fn callBackend(
         .method = .POST,
         .body = send_body,
         .headers = &headers,
+        .max_response_bytes = 512 * 1024,
     }) catch return error.BackendUnreachable;
 
     const status_int: u16 = @intFromEnum(res.status);
     if (status_int == 401 or status_int == 403) return error.AuthFailed;
     if (status_int >= 400) {
-        log.warn("chat: backend returned {d}: {s}", .{ status_int, res.body });
+        log.warn("chat: backend returned HTTP {d}", .{status_int});
         return error.BackendBadStatus;
     }
 
-    return try aggregateSse(allocator, res.body);
+    return try lib.chat.aggregateSse(allocator, res.body);
 }
 
 // ── SSE aggregator ──────────────────────────────────────────────────────────
@@ -136,82 +148,13 @@ fn callBackend(
 //
 // We concatenate `token.text` into the reply message, collect the
 // citations frame (if any), and read `grounded`/`confidence` from `done`.
-// `done` may also carry a `message` field for the no-results path.
-
-const TokenEvent = struct { text: []const u8 = "" };
-const CitationsEvent = struct { citations: []const lib.types.Citation = &.{} };
-const DoneEvent = struct {
-    grounded: bool = false,
-    confidence: f64 = 0.0,
-    message: ?[]const u8 = null,
-};
-
-fn aggregateSse(
-    allocator: std.mem.Allocator,
-    sse: []const u8,
-) (BackendError || std.mem.Allocator.Error)!ChatReply {
-    var message_buf: std.ArrayListUnmanaged(u8) = .empty;
-    var citations: []const lib.types.Citation = &.{};
-    var grounded = false;
-    var confidence: f64 = 0.0;
-    var override_message: ?[]const u8 = null;
-
-    var frame_it = std.mem.splitSequence(u8, sse, "\n\n");
-    while (frame_it.next()) |frame| {
-        const trimmed = std.mem.trim(u8, frame, "\r\n \t");
-        if (trimmed.len == 0) continue;
-
-        var event: []const u8 = "message";
-        var data: []const u8 = "";
-        var line_it = std.mem.splitScalar(u8, trimmed, '\n');
-        while (line_it.next()) |raw_line| {
-            const line = std.mem.trimEnd(u8, raw_line, "\r");
-            if (std.mem.startsWith(u8, line, "event:")) {
-                event = std.mem.trim(u8, line[6..], " ");
-            } else if (std.mem.startsWith(u8, line, "data:")) {
-                data = std.mem.trim(u8, line[5..], " ");
-            }
-        }
-        if (data.len == 0) continue;
-
-        if (std.mem.eql(u8, event, "token")) {
-            const evt = std.json.parseFromSlice(TokenEvent, allocator, data, .{
-                .ignore_unknown_fields = true,
-            }) catch continue;
-            try message_buf.appendSlice(allocator, evt.value.text);
-        } else if (std.mem.eql(u8, event, "citations")) {
-            const evt = std.json.parseFromSlice(CitationsEvent, allocator, data, .{
-                .ignore_unknown_fields = true,
-            }) catch continue;
-            citations = evt.value.citations;
-        } else if (std.mem.eql(u8, event, "done")) {
-            const evt = std.json.parseFromSlice(DoneEvent, allocator, data, .{
-                .ignore_unknown_fields = true,
-            }) catch continue;
-            grounded = evt.value.grounded;
-            confidence = evt.value.confidence;
-            override_message = evt.value.message;
-        }
-    }
-
-    const final_message = if (override_message) |m| m else try message_buf.toOwnedSlice(allocator);
-
-    return .{
-        .message = if (final_message.len > 0)
-            final_message
-        else
-            "I don't have enough information from your Canvas modules to answer this.",
-        .citations = citations,
-        .grounded = grounded,
-        .confidence = confidence,
-        .source = "backend",
-    };
-}
+// `done` may also carry a `message` field for the no-results path. The shared
+// parser lives in lib.chat so the root test suite can cover real CRLF frames.
 
 // ── Mock fallback ───────────────────────────────────────────────────────────
 
-fn mockReply(allocator: std.mem.Allocator, question: []const u8) mer.Response {
-    const safe_q = lib.ui.escape(allocator, question) catch question;
+fn mockReply(allocator: std.mem.Allocator, question: []const u8, explicit_demo: bool) mer.Response {
+    const safe_q = lib.ui.escapeSafe(allocator, question);
     const message = std.fmt.allocPrint(
         allocator,
         "(demo) Based on the latest announcements in your synced modules, here's what I found about \"{s}\": Lab 6 has been extended to Friday 23:59. Sources are linked below.",
@@ -221,7 +164,7 @@ fn mockReply(allocator: std.mem.Allocator, question: []const u8) mer.Response {
     const citations = [_]lib.types.Citation{
         .{
             .title = "CS2030S — Announcement: Lab 6 deadline extended",
-            .url = "/sources?type=announcement",
+            .url = if (explicit_demo) "/sources?type=announcement&mock=1" else "/sources?type=announcement",
             .snippet = "Lab 6 due Fri 23:59. New testcases on Coursemology.",
         },
     };
