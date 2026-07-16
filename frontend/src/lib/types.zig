@@ -217,12 +217,23 @@ pub const ProviderCapability = struct {
     available: bool,
 };
 
+pub const ProviderFieldKind = enum { text, url, secret };
+
+pub const ProviderField = struct {
+    id: []const u8,
+    label: []const u8,
+    placeholder: []const u8,
+    kind: ProviderFieldKind,
+    required: bool,
+};
+
 pub const Provider = struct {
     id: []const u8,
     name: []const u8,
     status: ProviderStatus,
     status_detail: []const u8,
     capabilities: []const ProviderCapability,
+    fields: []const ProviderField,
 };
 
 pub const OutputBoundaryState = enum { grounded, insufficient_context, unavailable };
@@ -262,6 +273,8 @@ pub const HealthFinding = struct {
     detail: []const u8,
     subject: []const u8,
     recommendation: []const u8,
+    action_label: []const u8,
+    action_href: []const u8,
 };
 
 pub const DiffKind = enum { context, addition, deletion };
@@ -303,6 +316,20 @@ pub const KnowledgeMeter = struct {
     signals: []const KnowledgeSignal,
 };
 
+pub const KnowledgeOverview = struct {
+    estimate_percent: ?u8,
+    confidence: []const u8,
+    evidence_count: usize,
+    recency: []const u8,
+    known_topic_count: usize,
+    unknown_topic_count: usize,
+};
+
+pub const KnowledgeAction = struct {
+    label: []const u8,
+    href: []const u8,
+};
+
 pub const KnowledgeRecommendation = struct {
     id: []const u8,
     topic_id: []const u8,
@@ -310,6 +337,7 @@ pub const KnowledgeRecommendation = struct {
     why: []const u8,
     evidence: []const u8,
     next_action: []const u8,
+    actions: []const KnowledgeAction,
 };
 
 pub const EvidenceScore = struct {

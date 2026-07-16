@@ -241,10 +241,38 @@ pub const flashcards: []const types.Flashcard = &.{
 };
 
 pub const providers: []const types.Provider = &.{
-    .{ .id = "demo-provider-openai", .name = "OpenAI", .status = .configured, .status_detail = "Configured for the demo; no credential is stored in this fixture.", .capabilities = &.{ .{ .label = "Cited summaries", .available = true }, .{ .label = "Embeddings", .available = true } } },
-    .{ .id = "demo-provider-compatible", .name = "OpenAI-compatible", .status = .disconnected, .status_detail = "No endpoint connected.", .capabilities = &.{.{ .label = "Custom base URL", .available = true }} },
-    .{ .id = "demo-provider-azure", .name = "Azure OpenAI", .status = .invalid, .status_detail = "Demo validation failed; reconnect when backend support lands.", .capabilities = &.{.{ .label = "Deployment selection", .available = true }} },
-    .{ .id = "demo-provider-gemini", .name = "Gemini", .status = .pending, .status_detail = "Connection check is pending in this synthetic example.", .capabilities = &.{.{ .label = "Cited summaries", .available = true }} },
+    .{
+        .id = "demo-provider-openai",
+        .name = "OpenAI",
+        .status = .configured,
+        .status_detail = "Configured for the demo; no credential is stored in this fixture.",
+        .capabilities = &.{ .{ .label = "Cited summaries", .available = true }, .{ .label = "Embeddings", .available = true } },
+        .fields = &.{ .{ .id = "api-key", .label = "API key", .placeholder = "Write-only API key", .kind = .secret, .required = true }, .{ .id = "model", .label = "Model", .placeholder = "gpt-4o", .kind = .text, .required = true } },
+    },
+    .{
+        .id = "demo-provider-compatible",
+        .name = "OpenAI-compatible",
+        .status = .disconnected,
+        .status_detail = "No endpoint connected.",
+        .capabilities = &.{.{ .label = "Custom base URL", .available = true }},
+        .fields = &.{ .{ .id = "base-url", .label = "Base URL", .placeholder = "https://provider.example/v1", .kind = .url, .required = true }, .{ .id = "api-key", .label = "API key", .placeholder = "Write-only API key", .kind = .secret, .required = true }, .{ .id = "model", .label = "Model", .placeholder = "Provider model ID", .kind = .text, .required = true } },
+    },
+    .{
+        .id = "demo-provider-azure",
+        .name = "Azure OpenAI",
+        .status = .invalid,
+        .status_detail = "Demo validation failed; reconnect when backend support lands.",
+        .capabilities = &.{.{ .label = "Deployment selection", .available = true }},
+        .fields = &.{ .{ .id = "endpoint", .label = "Azure endpoint", .placeholder = "https://resource.openai.azure.com", .kind = .url, .required = true }, .{ .id = "deployment", .label = "Deployment", .placeholder = "Deployment name", .kind = .text, .required = true }, .{ .id = "api-key", .label = "API key", .placeholder = "Write-only API key", .kind = .secret, .required = true } },
+    },
+    .{
+        .id = "demo-provider-gemini",
+        .name = "Google Gemini",
+        .status = .pending,
+        .status_detail = "Connection check is pending in this synthetic example.",
+        .capabilities = &.{.{ .label = "Cited summaries", .available = true }},
+        .fields = &.{ .{ .id = "api-key", .label = "API key", .placeholder = "Write-only API key", .kind = .secret, .required = true }, .{ .id = "model", .label = "Model", .placeholder = "gemini-2.5-flash", .kind = .text, .required = true } },
+    },
 };
 
 pub const output: types.CitedOutput = .{
@@ -260,11 +288,11 @@ pub const output: types.CitedOutput = .{
 
 pub const health_summary: types.HealthSummary = .{ .healthy = 2, .warning = 1, .failed = 1, .stale = 1, .unknown = 1 };
 pub const health_findings: []const types.HealthFinding = &.{
-    .{ .id = "demo-health-healthy", .severity = .info, .state = .healthy, .title = "Citation coverage healthy", .detail = "Every claim in the selected page has a source reference.", .subject = "Immutable lists", .recommendation = "No action needed." },
-    .{ .id = "demo-health-warning", .severity = .warning, .state = .warning, .title = "Thin topic coverage", .detail = "Only one synthetic source supports recursion.", .subject = "Recursion", .recommendation = "Add a second source before generating a summary." },
-    .{ .id = "demo-health-failed", .severity = .critical, .state = .failed, .title = "Broken source reference", .detail = "A fixture link has no indexed target.", .subject = "Lab checklist", .recommendation = "Review or remove the reference." },
-    .{ .id = "demo-health-stale", .severity = .warning, .state = .stale, .title = "Page may be stale", .detail = "The source changed after the page version.", .subject = "Streams", .recommendation = "Regenerate after comparing history." },
-    .{ .id = "demo-health-unknown", .severity = .info, .state = .unknown, .title = "File status unknown", .detail = "No check result exists for this synthetic item.", .subject = "Practice appendix", .recommendation = "Run checks when backend support is available." },
+    .{ .id = "demo-health-healthy", .severity = .info, .state = .healthy, .title = "Citation coverage healthy", .detail = "Every claim in the selected page has a source reference.", .subject = "Immutable lists", .recommendation = "No action needed.", .action_label = "Review cited page", .action_href = "/wiki/immutable-lists" },
+    .{ .id = "demo-health-warning", .severity = .warning, .state = .warning, .title = "Thin topic coverage", .detail = "Only one synthetic source supports recursion.", .subject = "Recursion", .recommendation = "Add a second source before generating a summary.", .action_label = "Review sources", .action_href = "/sources?type=markdown" },
+    .{ .id = "demo-health-failed", .severity = .critical, .state = .failed, .title = "Broken source reference", .detail = "A fixture link has no indexed target.", .subject = "Lab checklist", .recommendation = "Review or remove the reference.", .action_label = "Inspect failed sources", .action_href = "/sources?status=failed" },
+    .{ .id = "demo-health-stale", .severity = .warning, .state = .stale, .title = "Page may be stale", .detail = "The source changed after the page version.", .subject = "Streams", .recommendation = "Regenerate after comparing history.", .action_label = "Compare history", .action_href = "/history?type=content" },
+    .{ .id = "demo-health-unknown", .severity = .info, .state = .unknown, .title = "File status unknown", .detail = "No check result exists for this synthetic item.", .subject = "Practice appendix", .recommendation = "Run checks when backend support is available.", .action_label = "Review source status", .action_href = "/sources" },
 };
 
 pub const history_changes: []const types.HistoryChange = &.{
@@ -294,11 +322,32 @@ pub const history_changes: []const types.HistoryChange = &.{
     },
 };
 
+pub const knowledge_overview: types.KnowledgeOverview = .{
+    .estimate_percent = 78,
+    .confidence = "medium",
+    .evidence_count = 7,
+    .recency = "2 days ago",
+    .known_topic_count = 1,
+    .unknown_topic_count = 1,
+};
+
 pub const knowledge_meters: []const types.KnowledgeMeter = &.{
     .{ .id = "demo-meter-immutability", .topic = "Immutability", .estimate_percent = 78, .confidence = "medium", .evidence_count = 6, .recency = "2 days ago", .trend = "improving", .signals = &.{.{ .id = "demo-signal-cards", .label = "Flashcard practice", .evidence = "4 of 5 recent prompts correct", .trend = "up", .observed_at = "2026-05-18" }} },
     .{ .id = "demo-meter-recursion", .topic = "Recursion", .estimate_percent = null, .confidence = "insufficient evidence", .evidence_count = 1, .recency = "12 days ago", .trend = "unknown", .signals = &.{.{ .id = "demo-signal-recursion", .label = "Single answer", .evidence = "One observation cannot support an estimate", .trend = "unknown", .observed_at = "2026-05-08" }} },
 };
-pub const recommendations: []const types.KnowledgeRecommendation = &.{.{ .id = "demo-recommendation-recursion", .topic_id = "demo-meter-recursion", .title = "Collect more recursion evidence", .why = "The topic has only one old observation.", .evidence = "1 answer, last observed 12 days ago", .next_action = "Review two cited cards and record confidence." }};
+pub const recommendations: []const types.KnowledgeRecommendation = &.{.{
+    .id = "demo-recommendation-recursion",
+    .topic_id = "demo-meter-recursion",
+    .title = "Collect more recursion evidence",
+    .why = "The topic has only one old observation.",
+    .evidence = "1 answer, last observed 12 days ago",
+    .next_action = "Review two cited cards and record confidence.",
+    .actions = &.{
+        .{ .label = "Review wiki notes", .href = "/wiki/immutable-lists" },
+        .{ .label = "Practice cited cards", .href = "/flashcards?deck=deck-streams" },
+        .{ .label = "Review paper evidence", .href = "/marked-papers/demo-paper-functional-midterm" },
+    },
+}};
 
 pub const marked_papers: []const types.MarkedPaper = &.{
     .{ .id = "demo-paper-functional-midterm", .title = "Synthetic functional programming practice paper", .imported_at = "2026-05-16", .privacy_note = "Synthetic demo only. Real marked papers may contain sensitive educational data and must remain account-scoped.", .score = .{ .earned = 17, .possible = 25 }, .extraction_confidence = "medium", .evidence = &.{

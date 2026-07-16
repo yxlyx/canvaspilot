@@ -636,9 +636,9 @@ Testing is split by layer so failures are easier to diagnose and explain during 
 - Zig format check
 - Zig build
 - Zig tests
-- Boot smoke test for the compiled app
+- Repository-owned M3 boot and route smoke test (`frontend/tests/m3-smoke.sh`)
 
-Planned M2 and M3 tests include parser fixtures, wiki compiler output, flashcard evidence logging, knowledge meter fixtures, and user testing.
+Additional planned M2 and M3 tests include parser fixtures, wiki compiler output, flashcard evidence logging, and user testing.
 
 ## Project Plan
 
