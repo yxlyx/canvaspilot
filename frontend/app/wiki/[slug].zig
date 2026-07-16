@@ -124,7 +124,10 @@ fn renderHeader(w: *std.Io.Writer, title: []const u8, summary: []const u8) !void
         \\  </div>
         \\  <div class="cp-page-actions">
         \\    <a class="cp-btn cp-btn-ghost" href="/sources">Sources</a>
-        \\    <a class="cp-btn cp-btn-primary" href="/flashcards">Practice cards</a>
+        \\    <a class="cp-btn cp-btn-ghost" href="/flashcards">Practice cards</a>
+        \\    <a class="cp-btn cp-btn-ghost" href="/outputs">Outputs</a>
+        \\    <a class="cp-btn cp-btn-ghost" href="/history">History</a>
+        \\    <button class="cp-btn cp-btn-ghost" type="button" disabled title="Backend export unavailable">Export unavailable</button>
         \\  </div>
         \\</header>
     , .{ title, summary });

@@ -85,7 +85,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
-const markdown = @import("lib").markdown;
+const lib = @import("lib");
+const markdown = lib.markdown;
 
 test "markdown slugify mirrors backend normalization" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -151,6 +152,41 @@ test "markdown renderInline escapes code and title contents" {
         "use <code>a &lt; b</code> and <a href=\"/wiki/a-b\">A &amp; B</a>",
         out.written(),
     );
+}
+
+test "M3 demo requires server and query opt-in" {
+    try testing.expectEqual(lib.m3.Access.demo, lib.m3.accessFor(true, "1", false));
+    try testing.expectEqual(lib.m3.Access.login, lib.m3.accessFor(false, "1", false));
+    try testing.expectEqual(lib.m3.Access.login, lib.m3.accessFor(true, null, false));
+    try testing.expectEqual(lib.m3.Access.unavailable, lib.m3.accessFor(true, "0", true));
+    try testing.expect(lib.config.parseEnabled("true"));
+    try testing.expect(lib.config.parseEnabled("1"));
+    try testing.expect(!lib.config.parseEnabled("yes"));
+}
+
+test "M3 safe IDs and export filenames" {
+    try testing.expectEqualStrings("demo-item_1", lib.m3.safeId("demo-item_1", "fallback"));
+    try testing.expectEqualStrings("fallback", lib.m3.safeId("../unsafe", "fallback"));
+    const filename = try lib.m3.safeExportFilename(testing.allocator, "Week 1: Lists / Streams");
+    defer testing.allocator.free(filename);
+    try testing.expectEqualStrings("week-1-lists-streams.md", filename);
+}
+
+test "unknown knowledge meter is not represented as zero" {
+    try testing.expectEqual(@as(?u8, null), lib.m3.meterValue(null));
+    try testing.expectEqual(@as(?u8, 0), lib.m3.meterValue(0));
+}
+
+test "M3 fixtures and statuses contain no secret sentinel" {
+    const sentinel = "sk-demo-secret-sentinel";
+    for (lib.mock.providers) |provider| {
+        try testing.expect(std.mem.indexOf(u8, provider.id, sentinel) == null);
+        try testing.expect(std.mem.indexOf(u8, provider.name, sentinel) == null);
+        try testing.expect(std.mem.indexOf(u8, provider.status_detail, sentinel) == null);
+        try testing.expect(std.mem.startsWith(u8, provider.id, "demo-"));
+    }
+    try testing.expect(std.mem.indexOf(u8, lib.mock.output.summary, sentinel) == null);
+    try testing.expect(std.mem.startsWith(u8, lib.mock.output.id, "demo-"));
 }
 
 test "markdown renderMarkdown handles blockquote list and references" {
