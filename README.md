@@ -636,9 +636,9 @@ Testing is split by layer so failures are easier to diagnose and explain during 
 - Zig format check
 - Zig build
 - Zig tests
-- Boot smoke test for the compiled app
+- Repository-owned M3 boot and route smoke test (`frontend/tests/m3-smoke.sh`)
 
-Planned M2 and M3 tests include parser fixtures, wiki compiler output, flashcard evidence logging, knowledge meter fixtures, and user testing.
+Additional planned M2 and M3 tests include parser fixtures, wiki compiler output, flashcard evidence logging, and user testing.
 
 ## Project Plan
 
@@ -653,6 +653,8 @@ Prototype. Implement richer source ingestion, wiki compiler, search, cited Q&A, 
 ### M3
 
 Extensions. Add health checks, output generation, knowledge completion meters, marked-paper evidence, export, and UI refinements.
+
+The frontend now includes honest M3 preview routes for provider settings, cited outputs, health, history, progress, and marked papers. These require explicit demo gating and do not imply that blocked backend contracts are complete. See [`docs/milestone-3-frontend.md`](docs/milestone-3-frontend.md) for routes and demo instructions.
 
 ### Splashdown
 

@@ -3,6 +3,7 @@
 //   zig build serve               (dev server on :3001, hot reload)
 //   zig build serve -- --port 8080
 //   zig build serve -- --no-dev   (disable hot reload)
+//   zig build serve -- --no-dotenv (ignore local .env values)
 
 const std = @import("std");
 const mer = @import("mer");
@@ -22,8 +23,13 @@ pub fn main(init: std.process.Init.Minimal) !void {
     defer arena_state.deinit();
     const args = try init.args.toSlice(arena_state.allocator());
 
-    // Load .env before threads start.
-    mer.loadDotenv(alloc);
+    // Load .env before threads start unless an isolated test/deployment asks
+    // to rely exclusively on inherited environment variables.
+    var load_dotenv = true;
+    for (args[1..]) |arg| {
+        if (std.mem.eql(u8, arg, "--no-dotenv")) load_dotenv = false;
+    }
+    if (load_dotenv) mer.loadDotenv(alloc);
 
     var config = mer.Config{
         .host = "127.0.0.1",
@@ -85,7 +91,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
-const markdown = @import("lib").markdown;
+const lib = @import("lib");
+const markdown = lib.markdown;
 
 test "markdown slugify mirrors backend normalization" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -151,6 +158,83 @@ test "markdown renderInline escapes code and title contents" {
         "use <code>a &lt; b</code> and <a href=\"/wiki/a-b\">A &amp; B</a>",
         out.written(),
     );
+}
+
+test "M3 demo requires server and query opt-in" {
+    try testing.expectEqual(lib.m3.Access.demo, lib.m3.accessFor(true, "1", false));
+    try testing.expectEqual(lib.m3.Access.login, lib.m3.accessFor(false, "1", false));
+    try testing.expectEqual(lib.m3.Access.login, lib.m3.accessFor(true, null, false));
+    try testing.expectEqual(lib.m3.Access.unavailable, lib.m3.accessFor(true, "0", true));
+    try testing.expect(lib.config.parseEnabled("true"));
+    try testing.expect(lib.config.parseEnabled("1"));
+    try testing.expect(!lib.config.parseEnabled("yes"));
+}
+
+test "M3 safe IDs and export filenames" {
+    try testing.expectEqualStrings("demo-item_1", lib.m3.safeId("demo-item_1", "fallback"));
+    try testing.expectEqualStrings("fallback", lib.m3.safeId("../unsafe", "fallback"));
+    const filename = try lib.m3.safeExportFilename(testing.allocator, "Week 1: Lists / Streams");
+    defer testing.allocator.free(filename);
+    try testing.expectEqualStrings("week-1-lists-streams.md", filename);
+}
+
+test "knowledge meter accepts its bounds and rejects out-of-range values" {
+    try testing.expectEqual(@as(?u8, null), lib.m3.meterValue(null));
+    try testing.expectEqual(@as(?u8, 0), lib.m3.meterValue(0));
+    try testing.expectEqual(@as(?u8, 100), lib.m3.meterValue(100));
+    try testing.expectEqual(@as(?u8, null), lib.m3.meterValue(101));
+}
+
+test "M3 internal links reject external and ambiguous paths" {
+    try testing.expectEqualStrings("/health?severity=warning", lib.m3.safeInternalHref("/health?severity=warning", "/dashboard"));
+    try testing.expectEqualStrings("/dashboard", lib.m3.safeInternalHref("https://example.com", "/dashboard"));
+    try testing.expectEqualStrings("/dashboard", lib.m3.safeInternalHref("//example.com", "/dashboard"));
+    try testing.expectEqualStrings("/dashboard", lib.m3.safeInternalHref("/\\example.com", "/dashboard"));
+    try testing.expectEqualStrings("/dashboard", lib.m3.safeInternalHref("/\t/example.com", "/dashboard"));
+    try testing.expectEqualStrings("/dashboard", lib.m3.safeInternalHref("/health search", "/dashboard"));
+    try testing.expectEqualStrings("/dashboard", lib.m3.safeInternalHref("/health\r\nX-Test: unsafe", "/dashboard"));
+}
+
+test "chat SSE aggregation accepts CRLF frames" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const sse =
+        "event: token\r\ndata: {\"text\":\"Hello \"}\r\n\r\n" ++
+        "event: token\r\ndata: {\"text\":\"world\"}\r\n\r\n" ++
+        "event: citations\r\ndata: {\"citations\":[{\"title\":\"Notes\",\"url\":\"/sources\",\"snippet\":\"Grounded text\"}]}\r\n\r\n" ++
+        "event: done\r\ndata: {\"grounded\":true,\"confidence\":0.75}\r\n\r\n";
+
+    const reply = try lib.chat.aggregateSse(arena.allocator(), sse);
+    try testing.expectEqualStrings("Hello world", reply.message);
+    try testing.expect(reply.grounded);
+    try testing.expectEqual(@as(usize, 1), reply.citations.len);
+    try testing.expectEqualStrings("Notes", reply.citations[0].title);
+    try testing.expectError(error.InvalidSse, lib.chat.aggregateSse(arena.allocator(), "event: token\ndata: {\"text\":\"truncated\"}\n\n"));
+    try testing.expectError(error.InvalidSse, lib.chat.aggregateSse(arena.allocator(), "event: done\ndata: not-json\n\n"));
+}
+
+test "M3 fixtures and statuses contain no secret sentinel" {
+    const sentinel = "sk-demo-secret-sentinel";
+    for (lib.mock.providers) |provider| {
+        try testing.expect(std.mem.indexOf(u8, provider.id, sentinel) == null);
+        try testing.expect(std.mem.indexOf(u8, provider.name, sentinel) == null);
+        try testing.expect(std.mem.indexOf(u8, provider.status_detail, sentinel) == null);
+        try testing.expect(std.mem.startsWith(u8, provider.id, "demo-"));
+        var secret_fields: usize = 0;
+        for (provider.fields) |field| {
+            try testing.expectEqualStrings(field.id, lib.m3.safeId(field.id, "unsafe-field"));
+            try testing.expect(std.mem.indexOf(u8, field.label, sentinel) == null);
+            try testing.expect(std.mem.indexOf(u8, field.placeholder, sentinel) == null);
+            if (field.kind == .secret) {
+                secret_fields += 1;
+                try testing.expect(std.mem.indexOf(u8, field.label, "key") != null or std.mem.indexOf(u8, field.label, "credential") != null);
+                try testing.expect(std.mem.indexOf(u8, field.placeholder, "Write-only") != null);
+            }
+        }
+        try testing.expect(secret_fields > 0);
+    }
+    try testing.expect(std.mem.indexOf(u8, lib.mock.output.summary, sentinel) == null);
+    try testing.expect(std.mem.startsWith(u8, lib.mock.output.id, "demo-"));
 }
 
 test "markdown renderMarkdown handles blockquote list and references" {
