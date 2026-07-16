@@ -239,3 +239,71 @@ pub const flashcards: []const types.Flashcard = &.{
         },
     },
 };
+
+pub const providers: []const types.Provider = &.{
+    .{ .id = "demo-provider-openai", .name = "OpenAI", .status = .configured, .status_detail = "Configured for the demo; no credential is stored in this fixture.", .capabilities = &.{ .{ .label = "Cited summaries", .available = true }, .{ .label = "Embeddings", .available = true } } },
+    .{ .id = "demo-provider-compatible", .name = "OpenAI-compatible", .status = .disconnected, .status_detail = "No endpoint connected.", .capabilities = &.{.{ .label = "Custom base URL", .available = true }} },
+    .{ .id = "demo-provider-azure", .name = "Azure OpenAI", .status = .invalid, .status_detail = "Demo validation failed; reconnect when backend support lands.", .capabilities = &.{.{ .label = "Deployment selection", .available = true }} },
+    .{ .id = "demo-provider-gemini", .name = "Gemini", .status = .pending, .status_detail = "Connection check is pending in this synthetic example.", .capabilities = &.{.{ .label = "Cited summaries", .available = true }} },
+};
+
+pub const output: types.CitedOutput = .{
+    .id = "demo-output-streams-summary",
+    .title = "Immutable lists and streams — cited summary",
+    .summary = "Immutable lists preserve earlier values, while lazy streams evaluate only the values a consumer requests. Together they support traceable, composable transformations.",
+    .boundary = .grounded,
+    .citations = &.{
+        .{ .id = "demo-citation-lecture", .source_id = "demo-source-lecture", .source_title = "Synthetic lecture notes", .location = "Section 2", .snippet = "Immutable operations return a new value instead of changing the existing list." },
+        .{ .id = "demo-citation-lab", .source_id = "demo-source-lab", .source_title = "Synthetic lab brief", .location = "Exercise 4", .snippet = "A stream computes its next element only when requested." },
+    },
+};
+
+pub const health_summary: types.HealthSummary = .{ .healthy = 2, .warning = 1, .failed = 1, .stale = 1, .unknown = 1 };
+pub const health_findings: []const types.HealthFinding = &.{
+    .{ .id = "demo-health-healthy", .severity = .info, .state = .healthy, .title = "Citation coverage healthy", .detail = "Every claim in the selected page has a source reference.", .subject = "Immutable lists", .recommendation = "No action needed." },
+    .{ .id = "demo-health-warning", .severity = .warning, .state = .warning, .title = "Thin topic coverage", .detail = "Only one synthetic source supports recursion.", .subject = "Recursion", .recommendation = "Add a second source before generating a summary." },
+    .{ .id = "demo-health-failed", .severity = .critical, .state = .failed, .title = "Broken source reference", .detail = "A fixture link has no indexed target.", .subject = "Lab checklist", .recommendation = "Review or remove the reference." },
+    .{ .id = "demo-health-stale", .severity = .warning, .state = .stale, .title = "Page may be stale", .detail = "The source changed after the page version.", .subject = "Streams", .recommendation = "Regenerate after comparing history." },
+    .{ .id = "demo-health-unknown", .severity = .info, .state = .unknown, .title = "File status unknown", .detail = "No check result exists for this synthetic item.", .subject = "Practice appendix", .recommendation = "Run checks when backend support is available." },
+};
+
+pub const history_changes: []const types.HistoryChange = &.{
+    .{
+        .id = "demo-history-streams-v3",
+        .change_type = "content",
+        .subject_id = "demo-wiki-streams",
+        .subject_title = "Immutable lists and streams",
+        .version_from = 2,
+        .version_to = 3,
+        .changed_at = "2026-05-19T09:00:00Z",
+        .summary = "Clarified lazy evaluation and added one citation.",
+        .citation_change = "+1 citation (2 → 3)",
+        .diff = &.{ .{ .kind = .context, .text = "@@ -8,2 +8,2 @@" }, .{ .kind = .deletion, .text = "- Streams calculate all values immediately." }, .{ .kind = .addition, .text = "+ Streams calculate values when a consumer requests them." } },
+    },
+    .{
+        .id = "demo-history-lab-v2",
+        .change_type = "citations",
+        .subject_id = "demo-wiki-lab",
+        .subject_title = "Functional collections checklist",
+        .version_from = 1,
+        .version_to = 2,
+        .changed_at = "2026-05-18T14:30:00Z",
+        .summary = "Linked the deadline announcement to the checklist.",
+        .citation_change = "+1 citation (1 → 2)",
+        .diff = &.{ .{ .kind = .context, .text = "@@ Citations @@" }, .{ .kind = .addition, .text = "+ Lab 6 deadline announcement" } },
+    },
+};
+
+pub const knowledge_meters: []const types.KnowledgeMeter = &.{
+    .{ .id = "demo-meter-immutability", .topic = "Immutability", .estimate_percent = 78, .confidence = "medium", .evidence_count = 6, .recency = "2 days ago", .trend = "improving", .signals = &.{.{ .id = "demo-signal-cards", .label = "Flashcard practice", .evidence = "4 of 5 recent prompts correct", .trend = "up", .observed_at = "2026-05-18" }} },
+    .{ .id = "demo-meter-recursion", .topic = "Recursion", .estimate_percent = null, .confidence = "insufficient evidence", .evidence_count = 1, .recency = "12 days ago", .trend = "unknown", .signals = &.{.{ .id = "demo-signal-recursion", .label = "Single answer", .evidence = "One observation cannot support an estimate", .trend = "unknown", .observed_at = "2026-05-08" }} },
+};
+pub const recommendations: []const types.KnowledgeRecommendation = &.{.{ .id = "demo-recommendation-recursion", .topic_id = "demo-meter-recursion", .title = "Collect more recursion evidence", .why = "The topic has only one old observation.", .evidence = "1 answer, last observed 12 days ago", .next_action = "Review two cited cards and record confidence." }};
+
+pub const marked_papers: []const types.MarkedPaper = &.{
+    .{ .id = "demo-paper-functional-midterm", .title = "Synthetic functional programming practice paper", .imported_at = "2026-05-16", .privacy_note = "Synthetic demo only. Real marked papers may contain sensitive educational data and must remain account-scoped.", .score = .{ .earned = 17, .possible = 25 }, .extraction_confidence = "medium", .evidence = &.{
+        .{ .id = "demo-evidence-q1", .question = "Question 1: immutable list transformations", .topic = "Immutability", .score = .{ .earned = 7, .possible = 8 }, .extraction_confidence = "high", .feedback = "The synthetic marking note rewards pure transformations.", .proposal = "Proposed evidence: strong understanding of immutable transformations." },
+        .{ .id = "demo-evidence-q2", .question = "Question 2: recursive stream construction", .topic = "Recursion", .score = .{ .earned = null, .possible = null }, .extraction_confidence = "low", .feedback = "The score could not be read reliably.", .proposal = "Proposed evidence only: review recursion before using this signal." },
+    } },
+    .{ .id = "demo-paper-unknown-score", .title = "Synthetic annotated worksheet", .imported_at = "2026-05-14", .privacy_note = "Synthetic demo only; no uploaded document exists.", .score = .{ .earned = null, .possible = null }, .extraction_confidence = "low", .evidence = &.{} },
+};

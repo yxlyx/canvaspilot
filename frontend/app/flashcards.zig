@@ -45,7 +45,7 @@ pub fn render(req: mer.Request) mer.Response {
         \\  </div>
         \\  <div class="cp-page-actions">
         \\    <a class="cp-btn cp-btn-ghost" href="/wiki">Open wiki</a>
-        \\    <a class="cp-btn cp-btn-primary" href="/chat">Ask follow-up</a>
+        \\    <a class="cp-btn cp-btn-primary" href="/progress">View progress</a>
         \\  </div>
         \\</header>
     ) catch return mer.internalError("flashcards render failed");

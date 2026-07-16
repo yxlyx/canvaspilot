@@ -67,7 +67,8 @@ pub fn render(req: mer.Request) mer.Response {
         \\    <div class="cp-page-sub">Track what has been imported, chunked, and made available for cited answers.</div>
         \\  </div>
         \\  <div class="cp-page-actions">
-        \\    <a class="cp-btn cp-btn-ghost" href="/dashboard">Workspace</a>
+        \\    <a class="cp-btn cp-btn-ghost" href="/health">Health</a>
+        \\    <a class="cp-btn cp-btn-ghost" href="/marked-papers">Marked papers</a>
         \\    <a class="cp-btn cp-btn-primary" href="/chat">Ask with sources</a>
         \\  </div>
         \\</header>

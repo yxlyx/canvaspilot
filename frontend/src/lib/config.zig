@@ -14,10 +14,15 @@ pub const Config = struct {
     mock_enabled: bool,
 };
 
+pub fn parseEnabled(value: ?[]const u8) bool {
+    const raw = value orelse return false;
+    return std.mem.eql(u8, raw, "1") or std.ascii.eqlIgnoreCase(raw, "true");
+}
+
 pub fn load() Config {
     return .{
         .backend_url = mer.env("WIKIBASE_BACKEND_URL") orelse "http://localhost:8000",
         .session_cookie = mer.env("WIKIBASE_SESSION_COOKIE") orelse "cp_session",
-        .mock_enabled = true,
+        .mock_enabled = parseEnabled(mer.env("WIKIBASE_MOCK_ENABLED")),
     };
 }

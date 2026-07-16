@@ -654,6 +654,8 @@ Prototype. Implement richer source ingestion, wiki compiler, search, cited Q&A, 
 
 Extensions. Add health checks, output generation, knowledge completion meters, marked-paper evidence, export, and UI refinements.
 
+The frontend now includes honest M3 preview routes for provider settings, cited outputs, health, history, progress, and marked papers. These require explicit demo gating and do not imply that blocked backend contracts are complete. See [`docs/milestone-3-frontend.md`](docs/milestone-3-frontend.md) for routes and demo instructions.
+
 ### Splashdown
 
 Refinement. Polish workflows, fix outstanding issues, strengthen tests, and prepare final showcase materials.

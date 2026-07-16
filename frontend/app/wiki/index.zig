@@ -55,8 +55,10 @@ pub fn render(req: mer.Request) mer.Response {
         \\    <div class="cp-page-sub">Browse study pages compiled from indexed workspace sources.</div>
         \\  </div>
         \\  <div class="cp-page-actions">
-        \\    <a class="cp-btn cp-btn-ghost" href="/sources">Review sources</a>
-        \\    <a class="cp-btn cp-btn-primary" href="/chat">Ask with citations</a>
+        \\    <a class="cp-btn cp-btn-ghost" href="/sources">Sources</a>
+        \\    <a class="cp-btn cp-btn-ghost" href="/chat">Ask with citations</a>
+        \\    <a class="cp-btn cp-btn-ghost" href="/outputs">Outputs</a>
+        \\    <a class="cp-btn cp-btn-ghost" href="/history">History</a>
         \\  </div>
         \\</header>
     ) catch return mer.internalError("wiki index render failed");
@@ -74,6 +76,32 @@ pub fn render(req: mer.Request) mer.Response {
     }
 
     w.writeAll(
+        \\<section class="cp-card cp-export-panel" aria-labelledby="wiki-export-title">
+        \\  <div class="cp-card-title"><h2 id="wiki-export-title">Markdown export</h2><span>backend unavailable</span></div>
+        \\  <fieldset class="cp-export-options"><legend>Select wiki pages</legend>
+    ) catch return mer.internalError("wiki index render failed");
+    if (live_pages) |pages| {
+        for (pages) |page| {
+            if (std.mem.eql(u8, page.page_type, "index")) continue;
+            const safe_title = lib.ui.escape(req.allocator, page.title) catch page.title;
+            const safe_slug = safeSlug(page.slug);
+            w.print("    <label><input type=\"checkbox\" name=\"page\" value=\"{s}\"> {s}</label>\n", .{ safe_slug, safe_title }) catch return mer.internalError("wiki index render failed");
+        }
+    } else {
+        for (lib.mock.wiki_pages) |page| {
+            const safe_title = lib.ui.escape(req.allocator, page.title) catch page.title;
+            const safe_slug = safeSlug(page.slug);
+            w.print("    <label><input type=\"checkbox\" name=\"page\" value=\"{s}\"> {s}</label>\n", .{ safe_slug, safe_title }) catch return mer.internalError("wiki index render failed");
+        }
+    }
+    w.writeAll(
+        \\  </fieldset>
+        \\  <div class="cp-action-row">
+        \\    <button class="cp-btn cp-btn-ghost" type="button" disabled>Export selected</button>
+        \\    <button class="cp-btn cp-btn-ghost" type="button" disabled>Export full wiki</button>
+        \\  </div>
+        \\  <p class="cp-muted-copy">Canonical Markdown and archive generation remain disabled until the authenticated backend export endpoint is available. No placeholder download is created.</p>
+        \\</section>
         \\<section class="cp-card">
         \\  <div class="cp-card-title"><span>Wiki pages</span><span>metadata</span></div>
         \\  <div class="cp-wiki-list">
