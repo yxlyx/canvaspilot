@@ -28,6 +28,9 @@ pub fn render(req: mer.Request) mer.Response {
     if (req.method != .POST) {
         return .{ .status = .method_not_allowed, .content_type = .text, .body = "POST only" };
     }
+    if (lib.m3.isExplicitDemo(req)) {
+        return mer.badRequest("flashcard attempts are unavailable in demo mode");
+    }
 
     const session = lib.session.fromRequest(req);
     const card_id = lib.form.value(req.allocator, req.body, "card_id") catch null;

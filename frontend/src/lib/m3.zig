@@ -15,6 +15,10 @@ pub fn accessFor(mock_enabled: bool, requested_mock: ?[]const u8, authenticated:
     return if (authenticated) .unavailable else .login;
 }
 
+pub fn isExplicitDemo(req: mer.Request) bool {
+    return accessFor(config.load().mock_enabled, req.queryParam("mock"), session.fromRequest(req).isAuthenticated()) == .demo;
+}
+
 pub fn access(req: mer.Request) Access {
     return accessFor(config.load().mock_enabled, req.queryParam("mock"), session.fromRequest(req).isAuthenticated());
 }
@@ -28,7 +32,7 @@ pub fn gate(req: mer.Request, feature: []const u8) ?mer.Response {
 
     var buf = ui.buildHtml(req.allocator);
     const w = &buf.writer;
-    const safe_feature = ui.escape(req.allocator, feature) catch feature;
+    const safe_feature = ui.escapeSafe(req.allocator, feature);
     w.print(
         \\<header class="cp-page-header"><div><h1 class="cp-page-title">{s}</h1>
         \\<p class="cp-page-sub">Signed in, but live Milestone 3 data is unavailable.</p></div></header>
@@ -42,8 +46,32 @@ pub fn gate(req: mer.Request, feature: []const u8) ?mer.Response {
     return ui.htmlResponse(&buf);
 }
 
-pub fn demoBanner(w: *std.Io.Writer) !void {
-    try w.writeAll("<span hidden data-cp-auth=\"anonymous\" data-cp-demo=\"true\"></span><div class=\"cp-demo-label\" role=\"status\">Demo data · synthetic fixtures, not live workspace data</div>\n");
+pub fn demoMarker(req: mer.Request, w: *std.Io.Writer) !void {
+    if (!isExplicitDemo(req)) return;
+    if (session.fromRequest(req).isAuthenticated()) {
+        try w.writeAll("<span hidden data-cp-demo=\"true\"></span>");
+    } else {
+        try w.writeAll("<span hidden data-cp-auth=\"anonymous\" data-cp-demo=\"true\"></span>");
+    }
+}
+
+pub fn demoBanner(req: mer.Request, w: *std.Io.Writer) !void {
+    try demoMarker(req, w);
+    try w.writeAll("<div class=\"cp-demo-label\" role=\"status\">Demo data · synthetic fixtures, not live workspace data</div>\n");
+}
+
+pub fn demoHref(allocator: std.mem.Allocator, req: mer.Request, path: []const u8) ![]const u8 {
+    if (!isExplicitDemo(req)) return path;
+    const separator: []const u8 = if (std.mem.indexOfScalar(u8, path, '?') == null) "?" else "&";
+    return std.fmt.allocPrint(allocator, "{s}{s}mock=1", .{ path, separator });
+}
+
+pub fn safeInternalHref(raw: []const u8, fallback: []const u8) []const u8 {
+    if (raw.len == 0 or raw[0] != '/' or std.mem.startsWith(u8, raw, "//")) return fallback;
+    for (raw) |c| {
+        if (c <= 0x20 or c == 0x7f or c == '\\') return fallback;
+    }
+    return raw;
 }
 
 pub fn safeId(raw: []const u8, fallback: []const u8) []const u8 {
@@ -76,5 +104,6 @@ pub fn safeExportFilename(allocator: std.mem.Allocator, title: []const u8) ![]co
 }
 
 pub fn meterValue(estimate: ?u8) ?u8 {
-    return estimate;
+    const value = estimate orelse return null;
+    return if (value <= 100) value else null;
 }

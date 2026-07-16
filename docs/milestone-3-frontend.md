@@ -6,11 +6,11 @@ This document describes the frontend-only Milestone 3 surfaces. It does not clai
 
 | Route | Frontend surface |
 | --- | --- |
-| `/settings/providers` | Provider status, capabilities, and disabled write-only credential controls |
-| `/outputs` | Source/wiki selection, cited summary, grounding boundary, and disabled export |
-| `/health` | Summary, severity URL filters, and structured findings |
-| `/history` | Timeline filters, versions, citation changes, and unified diff |
-| `/progress` | Evidence-based semantic meters, uncertainty, signals, and recommendations |
+| `/settings/providers` | Provider-specific status, capabilities, and disabled write-only configuration controls |
+| `/outputs` | Source-scoped synthetic previews, cited summaries, grounding boundaries, and disabled export |
+| `/health` | Summary, active severity URL filters, structured findings, and safe follow-up links |
+| `/history` | Active timeline filters, versions, citation changes, and unified diff |
+| `/progress` | Workspace aggregate, evidence-based semantic meters, uncertainty, signals, and safe recommendation links |
 | `/marked-papers` | Synthetic paper list and privacy guidance |
 | `/marked-papers/:id` | Synthetic extraction details and unconfirmed evidence proposals |
 
@@ -55,9 +55,10 @@ zig fmt app src tools build.zig
 zig build codegen
 zig build test --summary all
 zig build -Doptimize=ReleaseSafe
+./tests/m3-smoke.sh
 ```
 
-The Zig tests cover explicit demo gating, safe IDs and export filenames, unknown meter semantics, and fixture secret-sentinel absence.
+The Zig tests cover explicit demo gating, safe IDs and internal links, export filenames, meter bounds, and provider fixture secret safety. The smoke script builds the ReleaseSafe app, starts it on an ephemeral loopback port, and verifies M3 demo access, non-demo redirects, fixture labels, provider fields, URL filters, meter uncertainty, output boundary states, source-scoped citations, demo navigation, and dynamic 404 handling.
 
 ## Accessibility and manual checklist
 
