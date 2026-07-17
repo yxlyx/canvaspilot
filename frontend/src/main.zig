@@ -3,6 +3,7 @@
 //   zig build serve               (dev server on :3001, hot reload)
 //   zig build serve -- --port 8080
 //   zig build serve -- --no-dev   (disable hot reload)
+//   zig build serve -- --no-dotenv (ignore local .env values)
 
 const std = @import("std");
 const mer = @import("mer");
@@ -22,8 +23,13 @@ pub fn main(init: std.process.Init.Minimal) !void {
     defer arena_state.deinit();
     const args = try init.args.toSlice(arena_state.allocator());
 
-    // Load .env before threads start.
-    mer.loadDotenv(alloc);
+    // Load .env before threads start unless an isolated test/deployment asks
+    // to rely exclusively on inherited environment variables.
+    var load_dotenv = true;
+    for (args[1..]) |arg| {
+        if (std.mem.eql(u8, arg, "--no-dotenv")) load_dotenv = false;
+    }
+    if (load_dotenv) mer.loadDotenv(alloc);
 
     var config = mer.Config{
         .host = "127.0.0.1",
@@ -227,6 +233,38 @@ test "escapeSafe releases partial output after allocation failure" {
     try testing.expect(failing.has_induced_failure);
     try testing.expectEqual(failing.allocations, failing.deallocations);
     try testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+}
+
+test "chat SSE aggregation requires a valid completed response" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const sse =
+        "event: token\r\ndata: {\"text\":\"Hello \"}\r\n\r\n" ++
+        "event: token\r\ndata: {\"text\":\"world\"}\r\n\r\n" ++
+        "event: citations\r\ndata: {\"citations\":[{\"title\":\"Notes\",\"url\":\"/sources\",\"snippet\":\"Grounded text\"}]}\r\n\r\n" ++
+        "event: done\r\ndata: {\"grounded\":true,\"confidence\":0.75}\r\n\r\n";
+
+    const reply = try lib.chat.aggregateSse(alloc, sse);
+    try testing.expectEqualStrings("Hello world", reply.message);
+    try testing.expect(reply.grounded);
+    try testing.expectEqual(@as(usize, 1), reply.citations.len);
+    try testing.expectEqualStrings("Notes", reply.citations[0].title);
+
+    const no_context = try lib.chat.aggregateSse(
+        alloc,
+        "event: done\ndata: {\"grounded\":false,\"confidence\":0.0,\"message\":\"No grounded context was found.\"}\n\n",
+    );
+    try testing.expectEqualStrings("No grounded context was found.", no_context.message);
+    try testing.expect(!no_context.grounded);
+
+    try testing.expectError(error.InvalidSse, lib.chat.aggregateSse(alloc, "event: token\ndata: {\"text\":\"truncated\"}\n\n"));
+    try testing.expectError(error.InvalidSse, lib.chat.aggregateSse(alloc, "event: token\ndata: not-json\n\nevent: done\ndata: {\"grounded\":false,\"confidence\":0.0}\n\n"));
+    try testing.expectError(error.InvalidSse, lib.chat.aggregateSse(alloc, "event: citations\ndata: not-json\n\nevent: done\ndata: {\"grounded\":false,\"confidence\":0.0}\n\n"));
+    try testing.expectError(error.InvalidSse, lib.chat.aggregateSse(alloc, "event: done\ndata: not-json\n\n"));
+    try testing.expectError(error.InvalidSse, lib.chat.aggregateSse(alloc, "event: token\ndata: {\"text\":\"partial\"}\n\nevent: done\ndata: {}\n\n"));
+    try testing.expectError(error.InvalidSse, lib.chat.aggregateSse(alloc, "event: done\ndata: {\"grounded\":false,\"confidence\":0.0,\"message\":\"complete\"}\n\nevent: token\ndata: {\"text\":\"late\"}\n\n"));
+    try testing.expectError(error.InvalidSse, lib.chat.aggregateSse(alloc, "event: done\ndata: {\"grounded\":false,\"confidence\":0.0,\"message\":\"complete\"}\n\nevent: done\ndata: {\"grounded\":false,\"confidence\":0.0,\"message\":\"duplicate\"}\n\n"));
 }
 
 test "markdown renderMarkdown handles blockquote list and references" {
