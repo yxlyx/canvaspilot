@@ -23,15 +23,6 @@ const NAV_ITEMS = [_]NavItem{
     .{ .href = "/chat", .label = "Chat", .match = "/chat" },
 };
 
-const SIDEBAR_M3_ITEMS = [_]NavItem{
-    .{ .href = "/outputs", .label = "Outputs", .match = "/outputs" },
-    .{ .href = "/health", .label = "Health", .match = "/health" },
-    .{ .href = "/progress", .label = "Progress", .match = "/progress" },
-    .{ .href = "/history", .label = "History", .match = "/history" },
-    .{ .href = "/marked-papers", .label = "Marked papers", .match = "/marked-papers" },
-    .{ .href = "/settings/providers", .label = "Settings", .match = "/settings" },
-};
-
 pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, meta: mer.Meta) []const u8 {
     var buf: std.Io.Writer.Allocating = .init(allocator);
     const w = &buf.writer;
@@ -42,7 +33,6 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     else
         "A student workspace for sources, wiki notes, cited Q&A, and flashcards.";
     const anonymous_page = std.mem.indexOf(u8, body, "data-cp-auth=\"anonymous\"") != null;
-    const demo_page = std.mem.indexOf(u8, body, "data-cp-demo=\"true\"") != null;
     const signed_in = std.mem.indexOf(u8, path, "/login") == null and !std.mem.eql(u8, path, "/") and !anonymous_page;
 
     w.writeAll(
@@ -92,26 +82,9 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         const active = std.mem.startsWith(u8, path, item.match);
         const cls: []const u8 = if (active) "cp-tab cp-tab-active" else "cp-tab";
         const current: []const u8 = if (active) " aria-current=\"page\"" else "";
-        const href = if (demo_page)
-            std.fmt.allocPrint(allocator, "{s}?mock=1", .{item.href}) catch item.href
-        else
-            item.href;
         w.print(
             "      <a class=\"{s}\" href=\"{s}\"{s}>{s}</a>\n",
-            .{ cls, href, current, item.label },
-        ) catch return body;
-    }
-    for (SIDEBAR_M3_ITEMS) |item| {
-        const active = std.mem.startsWith(u8, path, item.match);
-        const cls: []const u8 = if (active) "cp-tab cp-tab-active" else "cp-tab";
-        const current: []const u8 = if (active) " aria-current=\"page\"" else "";
-        const href = if (demo_page)
-            std.fmt.allocPrint(allocator, "{s}?mock=1", .{item.href}) catch item.href
-        else
-            item.href;
-        w.print(
-            "      <a class=\"{s}\" href=\"{s}\"{s}>{s}</a>\n",
-            .{ cls, href, current, item.label },
+            .{ cls, item.href, current, item.label },
         ) catch return body;
     }
 
@@ -144,30 +117,6 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         \\        <span class="cp-brand-mark"><img src="/icon-512.png?v=wikibase-2" alt="WikiBase" width="36" height="36"></span>
         \\        <span class="cp-brand-name">WikiBase</span>
         \\      </a>
-    ) catch return body;
-    w.writeAll("      <details class=\"cp-mobile-more\"><summary aria-label=\"More workspace pages\">More</summary><nav aria-label=\"Additional workspace pages\">\n") catch return body;
-    for (SIDEBAR_M3_ITEMS) |item| {
-        const active = std.mem.startsWith(u8, path, item.match);
-        const current: []const u8 = if (active) " aria-current=\"page\"" else "";
-        const href = if (demo_page)
-            std.fmt.allocPrint(allocator, "{s}?mock=1", .{item.href}) catch item.href
-        else
-            item.href;
-        w.print("        <a href=\"{s}\"{s}>{s}</a>\n", .{ href, current, item.label }) catch return body;
-    }
-    if (signed_in) {
-        w.writeAll(
-            \\        <form action="/logout" method="post" class="cp-mobile-account">
-            \\          <input type="hidden" name="action" value="logout">
-            \\          <button type="submit">Sign out</button>
-            \\        </form>
-            \\
-        ) catch return body;
-    } else {
-        w.writeAll("        <a class=\"cp-mobile-account\" href=\"/login\">Sign in</a>\n") catch return body;
-    }
-    w.writeAll(
-        \\      </nav></details>
         \\    </header>
         \\    <main class="cp-main" id="main">
         \\
@@ -191,13 +140,9 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         const active = std.mem.startsWith(u8, path, item.match);
         const cls: []const u8 = if (active) "cp-bottom-item cp-bottom-active" else "cp-bottom-item";
         const current: []const u8 = if (active) " aria-current=\"page\"" else "";
-        const href = if (demo_page)
-            std.fmt.allocPrint(allocator, "{s}?mock=1", .{item.href}) catch item.href
-        else
-            item.href;
         w.print(
             "  <a class=\"{s}\" href=\"{s}\"{s}>{s}</a>\n",
-            .{ cls, href, current, item.label },
+            .{ cls, item.href, current, item.label },
         ) catch return body;
     }
 
