@@ -10,6 +10,8 @@ pub const FetchRequest = struct {
     method: std.http.Method = .GET,
     body: ?[]const u8 = null,
     headers: []const std.http.Header = &.{},
+    /// Reject response bodies larger than this many bytes. Null is unlimited.
+    max_response_bytes: ?usize = null,
 };
 
 /// Response from an HTTP fetch. Owns the body — call `deinit()` when done.
@@ -74,16 +76,24 @@ pub fn fetch(allocator: std.mem.Allocator, opts: FetchRequest) !FetchResponse {
 
     var collecting: std.Io.Writer.Allocating = .init(allocator);
     defer collecting.deinit();
+    var fixed_buffer: ?[]u8 = null;
+    defer if (fixed_buffer) |buffer| allocator.free(buffer);
+    var fixed_writer: std.Io.Writer = undefined;
+    const response_writer: *std.Io.Writer = if (opts.max_response_bytes) |max_bytes| bounded: {
+        fixed_buffer = try allocator.alloc(u8, max_bytes);
+        fixed_writer = .fixed(fixed_buffer.?);
+        break :bounded &fixed_writer;
+    } else &collecting.writer;
 
     const result = try client.fetch(.{
         .location = .{ .url = opts.url },
         .method = opts.method,
         .payload = opts.body,
         .extra_headers = opts.headers,
-        .response_writer = &collecting.writer,
+        .response_writer = response_writer,
     });
 
-    const raw = collecting.writer.buffer[0..collecting.writer.end];
+    const raw = response_writer.buffer[0..response_writer.end];
     const owned = try allocator.dupe(u8, raw);
     return .{ .status = result.status, .body = owned };
 }
