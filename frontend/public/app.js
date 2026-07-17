@@ -53,9 +53,9 @@
   }
 
   function safeCitationUrl(raw) {
-    if (!raw || /[\u0000-\u0020\u007f\\]/.test(raw)) return "#";
+    if (!raw) return "#";
     try {
-      if (raw.startsWith("/") && !raw.startsWith("//")) return raw;
+      if (raw.startsWith("/")) return raw;
       const url = new URL(raw, window.location.origin);
       if (url.protocol === "http:" || url.protocol === "https:") {
         return url.href;
@@ -97,8 +97,7 @@
     pending.textContent = "…thinking";
 
     try {
-      const endpoint = form.dataset.endpoint || "/api/chat";
-      const resp = await fetch(endpoint, {
+      const resp = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

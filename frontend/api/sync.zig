@@ -12,10 +12,6 @@ pub fn render(req: mer.Request) mer.Response {
         return .{ .status = .method_not_allowed, .content_type = .text, .body = "POST only" };
     }
 
-    if (lib.m3.isExplicitDemo(req)) {
-        return mer.badRequest("sync is unavailable in demo mode");
-    }
-
     const session = lib.session.fromRequest(req);
     if (!session.isAuthenticated()) {
         return mer.redirect("/login", .see_other);
