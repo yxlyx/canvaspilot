@@ -22,12 +22,6 @@ pub fn escape(allocator: std.mem.Allocator, src: []const u8) ![]const u8 {
     return out.written();
 }
 
-/// Escape untrusted display text without ever falling back to the raw value.
-/// Allocation failure renders an empty value rather than unsafe HTML.
-pub fn escapeSafe(allocator: std.mem.Allocator, src: []const u8) []const u8 {
-    return escape(allocator, src) catch "";
-}
-
 /// Wrap a list of children inside <ul class="cp-list">…</ul>.
 pub fn buildHtml(allocator: std.mem.Allocator) std.Io.Writer.Allocating {
     return std.Io.Writer.Allocating.init(allocator);
