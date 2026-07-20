@@ -1,3 +1,4 @@
+import os
 import uuid
 from datetime import UTC, datetime
 
@@ -7,6 +8,33 @@ from httpx import ASGITransport, AsyncClient
 from app.config import Settings
 from app.main import app
 from app.models.user import User
+
+DATABASE_TEST_MODULES = {
+    "test_flashcards.py",
+    "test_ingestion_jobs.py",
+    "test_retrieval_chat_integration.py",
+    "test_search.py",
+    "test_source_imports.py",
+    "test_sources.py",
+    "test_wiki.py",
+}
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Identify integration modules that connect to PostgreSQL directly."""
+    for item in items:
+        if item.path.name in DATABASE_TEST_MODULES:
+            item.add_marker(pytest.mark.database)
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Make service-backed CI fail if any test was skipped."""
+    if os.getenv("FAIL_ON_SKIPPED_TESTS") != "1":
+        return
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None and reporter.stats.get("skipped"):
+        reporter.write_sep("ERROR", "FAIL_ON_SKIPPED_TESTS=1 but the suite skipped tests")
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 @pytest.fixture
