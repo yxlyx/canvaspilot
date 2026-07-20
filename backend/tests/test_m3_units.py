@@ -17,6 +17,7 @@ from app.schemas.m3 import (
 )
 from app.schemas.source_imports import SourceImportRun
 from app.services import exports, marked_papers
+from app.services.idempotency import request_hash
 from app.services.marked_papers import MAX_QUESTIONS, extract_supported_text
 from app.services.meters import TopicEvidence, calculate_topic_meter
 from app.services.providers import decrypt_provider_key, encrypt_provider_key, endpoint_for
@@ -103,6 +104,14 @@ def test_chat_and_history_payloads_are_bounded():
             message="question",
             history=[{"role": "user", "content": "x"} for _ in range(41)],
         )
+
+
+def test_idempotency_hash_is_canonical_and_operation_scoped():
+    assert request_hash("paper.upload", {"b": 2, "a": 1}) == request_hash(
+        "paper.upload", {"a": 1, "b": 2}
+    )
+    assert request_hash("paper.upload", {"a": 1}) != request_hash("output.create", {"a": 1})
+    assert request_hash("paper.upload", {"a": 1}) != request_hash("paper.upload", {"a": 2})
 
 
 def test_grounded_markdown_is_extractive_and_cited():

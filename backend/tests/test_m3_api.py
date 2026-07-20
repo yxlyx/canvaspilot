@@ -16,14 +16,24 @@ from app.dependencies import get_current_user
 from app.main import app
 from app.models.base import Base
 from app.models.flashcard import LearningEvidence
-from app.models.m3 import MarkedPaperQuestion, SourceChange
+from app.models.m3 import IdempotencyRecord, MarkedPaperQuestion, SourceChange
 from app.models.source import SourceStatus
 from app.models.source_chunk import SourceChunk
 from app.models.user import User
 from app.schemas.sources import SourceCreate
+from app.services import idempotency as idempotency_service
 from app.services import meters as meter_service
 from app.services import providers as provider_service
+from app.services.idempotency import execute_idempotent
 from app.services.sources import create_or_update_source
+
+
+async def _add_idempotency_key(request) -> None:
+    if (
+        request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        and "Idempotency-Key" not in request.headers
+    ):
+        request.headers["Idempotency-Key"] = str(uuid.uuid4())
 
 
 async def _require_database(session: AsyncSession) -> None:
@@ -56,7 +66,11 @@ async def m3_client() -> AsyncGenerator[tuple[AsyncClient, AsyncSession, User, U
         app.dependency_overrides[get_db] = override_db
         transport = ASGITransport(app=app)
         try:
-            async with AsyncClient(transport=transport, base_url="http://test") as client:
+            async with AsyncClient(
+                transport=transport,
+                base_url="http://test",
+                event_hooks={"request": [_add_idempotency_key]},
+            ) as client:
                 yield client, session, owner, other, principal
         finally:
             app.dependency_overrides.clear()
@@ -77,9 +91,21 @@ async def authenticated_m3_clients():
     password = "integration-password"
     transport = ASGITransport(app=app)
     async with (
-        AsyncClient(transport=transport, base_url="http://test") as owner_client,
-        AsyncClient(transport=transport, base_url="http://test") as other_client,
-        AsyncClient(transport=transport, base_url="http://test") as parallel_owner_client,
+        AsyncClient(
+            transport=transport,
+            base_url="http://test",
+            event_hooks={"request": [_add_idempotency_key]},
+        ) as owner_client,
+        AsyncClient(
+            transport=transport,
+            base_url="http://test",
+            event_hooks={"request": [_add_idempotency_key]},
+        ) as other_client,
+        AsyncClient(
+            transport=transport,
+            base_url="http://test",
+            event_hooks={"request": [_add_idempotency_key]},
+        ) as parallel_owner_client,
     ):
         owner_registration = await owner_client.post(
             "/api/auth/register",
@@ -145,11 +171,9 @@ async def test_real_sessions_isolate_users_and_serialize_duplicate_writes(
         ),
     )
     assert sorted(response.status_code for response in duplicate_results) == [201, 422]
-    created_question = next(
-        response.json()["questions"][0]
-        for response in duplicate_results
-        if response.status_code == 201
-    )
+    created_question = (await owner_client.get(f"/api/marked-papers/{paper_id}")).json()[
+        "questions"
+    ][0]
     update_results = await asyncio.gather(
         owner_client.patch(
             f"/api/marked-papers/{paper_id}/questions/{created_question['id']}",
@@ -178,9 +202,10 @@ async def test_real_sessions_isolate_users_and_serialize_duplicate_writes(
             )
         )
     assert evidence_count == 1
-    assert all(
-        response.json()["questions"][0]["topic_tag"] == "integration" for response in update_results
-    )
+    updated_question = (await owner_client.get(f"/api/marked-papers/{paper_id}")).json()[
+        "questions"
+    ][0]
+    assert updated_question["topic_tag"] == "integration"
 
     provider_results = await asyncio.gather(
         owner_client.put(
@@ -199,9 +224,261 @@ async def test_real_sessions_isolate_users_and_serialize_duplicate_writes(
 
 
 @pytest.mark.asyncio
+async def test_idempotency_is_durable_replays_and_conflicts_transactionally(
+    authenticated_m3_clients,
+):
+    owner_client, _, parallel_owner_client = authenticated_m3_clients
+    key = str(uuid.uuid4())
+    payload = {
+        "filename": "idempotent.txt",
+        "content_type": "text/plain",
+        "content_base64": base64.b64encode(b"Q1: Durable request").decode(),
+    }
+    first, concurrent = await asyncio.gather(
+        owner_client.post("/api/marked-papers", json=payload, headers={"Idempotency-Key": key}),
+        parallel_owner_client.post(
+            "/api/marked-papers", json=payload, headers={"Idempotency-Key": key}
+        ),
+    )
+    assert first.status_code == concurrent.status_code == 201
+    assert first.json() == concurrent.json()
+
+    replay = await owner_client.post(
+        "/api/marked-papers", json=payload, headers={"Idempotency-Key": key}
+    )
+    assert replay.status_code == 201
+    assert replay.json() == first.json()
+    async with async_session_factory() as session:
+        stored = await session.scalar(
+            select(IdempotencyRecord).where(IdempotencyRecord.idempotency_key == key)
+        )
+        assert stored.response_body == first.json()
+        assert set(stored.response_body) == {"id"}
+
+    conflict = await owner_client.post(
+        "/api/marked-papers",
+        json={**payload, "filename": "different.txt"},
+        headers={"Idempotency-Key": key},
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["error"] == "idempotency_key_reused"
+
+
+@pytest.mark.asyncio
+async def test_idempotency_locks_same_key_without_serializing_different_keys(
+    m3_client, monkeypatch
+):
+    _, _, owner, _, _ = m3_client
+    monkeypatch.setattr(idempotency_service, "MAX_IDEMPOTENCY_RECORDS_PER_USER", 1)
+
+    async def run(key, execute):
+        async with async_session_factory() as concurrent_session:
+            return await execute_idempotent(
+                db=concurrent_session,
+                user=owner,
+                key=key,
+                operation="test.concurrent",
+                payload={"value": 1},
+                status_code=200,
+                response_type=dict,
+                execute=execute,
+            )
+
+    different_started = 0
+    both_different_started = asyncio.Event()
+    release_different = asyncio.Event()
+
+    async def execute_different():
+        nonlocal different_started
+        different_started += 1
+        if different_started == 2:
+            both_different_started.set()
+        await release_different.wait()
+        return {"ok": True}
+
+    different_tasks = [
+        asyncio.create_task(run(str(uuid.uuid4()), execute_different)) for _ in range(2)
+    ]
+    try:
+        await asyncio.wait_for(both_different_started.wait(), timeout=5)
+    finally:
+        release_different.set()
+        different_responses = await asyncio.gather(*different_tasks)
+    assert [response.status_code for response in different_responses] == [200, 200]
+    async with async_session_factory() as count_session:
+        concurrent_count = await count_session.scalar(
+            select(func.count(IdempotencyRecord.id)).where(IdempotencyRecord.user_id == owner.id)
+        )
+    assert concurrent_count == 2  # At most one overshoot for two in-flight keys.
+
+    same_key = str(uuid.uuid4())
+    same_started = asyncio.Event()
+    release_same = asyncio.Event()
+    same_executions = 0
+
+    async def execute_same():
+        nonlocal same_executions
+        same_executions += 1
+        same_started.set()
+        await release_same.wait()
+        return {"ok": True}
+
+    first = asyncio.create_task(run(same_key, execute_same))
+    await asyncio.wait_for(same_started.wait(), timeout=5)
+    second = asyncio.create_task(run(same_key, execute_same))
+    await asyncio.sleep(0.1)
+    assert not second.done()
+    assert same_executions == 1
+    release_same.set()
+    first_response, second_response = await asyncio.gather(first, second)
+    assert first_response.status_code == second_response.status_code == 200
+    assert same_executions == 1
+    async with async_session_factory() as count_session:
+        eventual_count = await count_session.scalar(
+            select(func.count(IdempotencyRecord.id)).where(IdempotencyRecord.user_id == owner.id)
+        )
+    assert eventual_count == 1
+
+
+@pytest.mark.asyncio
+async def test_transient_failure_does_not_complete_idempotency_record(m3_client):
+    _, session, owner, _, _ = m3_client
+    key = str(uuid.uuid4())
+
+    async def fail():
+        raise RuntimeError("transient upstream failure")
+
+    with pytest.raises(RuntimeError):
+        await execute_idempotent(
+            db=session,
+            user=owner,
+            key=key,
+            operation="test.create",
+            payload={"value": 1},
+            status_code=201,
+            response_type=dict,
+            execute=fail,
+        )
+    assert (
+        await session.scalar(
+            select(func.count(IdempotencyRecord.id)).where(
+                IdempotencyRecord.user_id == owner.id,
+                IdempotencyRecord.idempotency_key == key,
+            )
+        )
+        == 0
+    )
+
+    async def succeed():
+        return {"created": True}
+
+    response = await execute_idempotent(
+        db=session,
+        user=owner,
+        key=key,
+        operation="test.create",
+        payload={"value": 1},
+        status_code=201,
+        response_type=dict,
+        execute=succeed,
+    )
+    assert response.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_idempotency_ttl_cleanup_is_bounded_and_user_cap_is_enforced(m3_client, monkeypatch):
+    _, session, owner, _, _ = m3_client
+    now = datetime.now(UTC)
+    for index in range(6):
+        session.add(
+            IdempotencyRecord(
+                user_id=owner.id,
+                idempotency_key=f"seed-key-{index:016d}",
+                operation="seed",
+                request_hash="0" * 64,
+                response_status=200,
+                response_body={"ok": True},
+                created_at=now - timedelta(hours=6 - index),
+                expires_at=now - timedelta(hours=1) if index < 3 else now + timedelta(hours=1),
+            )
+        )
+    await session.commit()
+    monkeypatch.setattr(idempotency_service, "MAX_IDEMPOTENCY_RECORDS_PER_USER", 3)
+    monkeypatch.setattr(idempotency_service, "CLEANUP_BATCH_SIZE", 2)
+
+    async def succeed():
+        return {"ok": True}
+
+    response = await execute_idempotent(
+        db=session,
+        user=owner,
+        key=str(uuid.uuid4()),
+        operation="test.cleanup",
+        payload=None,
+        status_code=200,
+        response_type=dict,
+        execute=succeed,
+    )
+    assert response.status_code == 200
+    records = list(
+        (
+            await session.execute(
+                select(IdempotencyRecord).where(IdempotencyRecord.user_id == owner.id)
+            )
+        ).scalars()
+    )
+    assert len(records) <= 3
+    assert sum(record.expires_at <= now for record in records) <= 1
+
+
+@pytest.mark.asyncio
+async def test_marked_paper_pagination_preserves_default_collection_and_stable_pages(m3_client):
+    client, session, owner, _, _ = m3_client
+    for index in range(3):
+        response = await client.post(
+            "/api/marked-papers",
+            json={
+                "filename": f"page-{index}.pdf",
+                "content_type": "application/pdf",
+                "content_base64": base64.b64encode(str(index).encode()).decode(),
+            },
+        )
+        assert response.status_code == 201
+    await session.execute(
+        text("UPDATE marked_papers SET created_at = now() WHERE user_id = :user_id"),
+        {"user_id": owner.id},
+    )
+    await session.commit()
+
+    default_page = (await client.get("/api/marked-papers")).json()
+    first_page = (await client.get("/api/marked-papers/page?limit=2")).json()
+    inserted = await client.post(
+        "/api/marked-papers",
+        json={
+            "filename": "inserted.pdf",
+            "content_type": "application/pdf",
+            "content_base64": base64.b64encode(b"inserted").decode(),
+        },
+    )
+    second_page = (
+        await client.get("/api/marked-papers/page?limit=2&cursor=" + first_page["next_cursor"])
+    ).json()
+    traversed_ids = [paper["id"] for paper in first_page["items"] + second_page["items"]]
+    assert traversed_ids == [paper["id"] for paper in default_page]
+    assert len(traversed_ids) == len(set(traversed_ids))
+    fresh_ids = [
+        paper["id"]
+        for paper in (await client.get("/api/marked-papers/page?limit=100")).json()["items"]
+    ]
+    assert inserted.json()["id"] in fresh_ids
+    assert (await client.get("/api/marked-papers?limit=1&offset=10001")).status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_m3_migration_tables_and_durable_audit_columns_exist(m3_client):
     _, session, _, _, _ = m3_client
     table_names = {
+        "idempotency_records",
         "study_outputs",
         "study_output_citations",
         "wiki_revisions",
@@ -245,7 +522,10 @@ async def test_m3_migration_tables_and_durable_audit_columns_exist(m3_client):
                 "SELECT indexname FROM pg_indexes WHERE schemaname = 'public' "
                 "AND indexname IN ('uq_marked_questions_paper_number', "
                 "'uq_learning_evidence_marked_question', "
-                "'uq_provider_settings_user_provider')"
+                "'uq_provider_settings_user_provider', "
+                "'uq_idempotency_records_user_key', "
+                "'ix_idempotency_records_created_at', "
+                "'ix_idempotency_records_expires_at')"
             )
         )
     }
@@ -253,6 +533,9 @@ async def test_m3_migration_tables_and_durable_audit_columns_exist(m3_client):
         "uq_marked_questions_paper_number",
         "uq_learning_evidence_marked_question",
         "uq_provider_settings_user_provider",
+        "uq_idempotency_records_user_key",
+        "ix_idempotency_records_created_at",
+        "ix_idempotency_records_expires_at",
     }
 
 
@@ -382,6 +665,7 @@ async def test_m3_grounded_output_wiki_history_health_export_and_two_user_isolat
         str(second.id),
     }
     assert (await client.get("/api/outputs")).status_code == 200
+    assert (await client.get("/api/outputs?limit=21&offset=10001")).status_code == 200
     assert (await client.get(f"/api/outputs/{output['id']}")).status_code == 200
     page_generated = await client.post(
         "/api/outputs",
@@ -390,6 +674,21 @@ async def test_m3_grounded_output_wiki_history_health_export_and_two_user_isolat
     assert page_generated.status_code == 201
     assert page_generated.json()["status"] == "grounded"
     assert page_generated.json()["content"] == "Overview. [1]"
+    output_first_page = (await client.get("/api/outputs/page?limit=1")).json()
+    inserted_output = await client.post(
+        "/api/outputs", json={"output_type": "outline", "source_ids": [str(first.id)]}
+    )
+    output_second_page = (
+        await client.get("/api/outputs/page?limit=100&cursor=" + output_first_page["next_cursor"])
+    ).json()
+    traversed_output_ids = [
+        item["id"] for item in output_first_page["items"] + output_second_page["items"]
+    ]
+    assert traversed_output_ids == [page_generated.json()["id"], output["id"]]
+    assert inserted_output.json()["id"] not in traversed_output_ids
+    assert inserted_output.json()["id"] in [
+        item["id"] for item in (await client.get("/api/outputs/page?limit=100")).json()["items"]
+    ]
 
     page_download = await client.get(f"/api/wiki/pages/{source_page['slug']}/download")
     assert page_download.status_code == 200
@@ -409,7 +708,7 @@ async def test_m3_grounded_output_wiki_history_health_export_and_two_user_isolat
     second_health = await client.post("/api/workspace/health")
     listed_health = await client.get("/api/workspace/health")
     assert first_health.status_code == second_health.status_code == listed_health.status_code == 200
-    assert len(listed_health.json()) == len(second_health.json())
+    assert first_health.json() == second_health.json() == {"ok": True}
     assert "duplicate_source" in {finding["code"] for finding in listed_health.json()}
     finding_id = listed_health.json()[0]["id"]
     assert (await client.get(f"/api/workspace/health/{finding_id}")).status_code == 200
@@ -422,8 +721,10 @@ async def test_m3_grounded_output_wiki_history_health_export_and_two_user_isolat
     first.topic_tags = ["integration", "archived-only"]
     await session.commit()
     resolved_health = await client.post("/api/workspace/health")
-    assert "duplicate_source" not in {finding["code"] for finding in resolved_health.json()}
-    assert "archived-only" not in {finding["topic"] for finding in resolved_health.json()}
+    assert resolved_health.json() == {"ok": True}
+    resolved_findings = (await client.get("/api/workspace/health")).json()
+    assert "duplicate_source" not in {finding["code"] for finding in resolved_findings}
+    assert "archived-only" not in {finding["topic"] for finding in resolved_findings}
     assert (await client.post("/api/wiki/compile")).status_code == 200
     unavailable_download = await client.get(f"/api/wiki/pages/{source_page['slug']}/download")
     assert unavailable_download.status_code == 404
@@ -490,8 +791,11 @@ async def test_marked_paper_manual_lifecycle_validation_meter_and_isolation(m3_c
         },
     )
     assert incomplete_upload.status_code == 201
-    assert incomplete_upload.json()["extraction_status"] == "pending_review"
-    incomplete_question = incomplete_upload.json()["questions"][0]
+    incomplete_paper = (
+        await client.get(f"/api/marked-papers/{incomplete_upload.json()['id']}")
+    ).json()
+    assert incomplete_paper["extraction_status"] == "pending_review"
+    incomplete_question = incomplete_paper["questions"][0]
     assert incomplete_question["reviewed"] is False
     assert incomplete_question["awarded_marks"] is None
     assert incomplete_question["available_marks"] is None
@@ -508,6 +812,8 @@ async def test_marked_paper_manual_lifecycle_validation_meter_and_isolation(m3_c
         },
     )
     assert bounded_upload.status_code == 201
+    assert set(bounded_upload.json()) == {"id"}
+    assert len(bounded_upload.content) < 1024
     quota = await client.post(
         f"/api/marked-papers/{bounded_upload.json()['id']}/questions",
         json={"question_number": 201, "question_text": "Over quota"},
@@ -522,7 +828,7 @@ async def test_marked_paper_manual_lifecycle_validation_meter_and_isolation(m3_c
         },
     )
     assert uploaded.status_code == 201
-    paper = uploaded.json()
+    paper = (await client.get(f"/api/marked-papers/{uploaded.json()['id']}")).json()
     assert paper["extraction_status"] == "unsupported"
     assert paper["questions"] == []
 
@@ -539,7 +845,7 @@ async def test_marked_paper_manual_lifecycle_validation_meter_and_isolation(m3_c
         },
     )
     assert created.status_code == 201
-    question = created.json()["questions"][0]
+    question = (await client.get(f"/api/marked-papers/{paper['id']}")).json()["questions"][0]
     assert question["reviewed_at"] is not None
     stored_question = await session.get(MarkedPaperQuestion, uuid.UUID(question["id"]))
     stored_question.reviewed_at = datetime.now(UTC) - timedelta(days=45)
@@ -550,6 +856,25 @@ async def test_marked_paper_manual_lifecycle_validation_meter_and_isolation(m3_c
         json={"feedback": "Freshly reviewed"},
     )
     assert refreshed.status_code == 200
+    replay_key = str(uuid.uuid4())
+    replay_payload = {"feedback": "Exactly once review"}
+    first_review = await client.patch(
+        f"/api/marked-papers/{paper['id']}/questions/{question['id']}",
+        json=replay_payload,
+        headers={"Idempotency-Key": replay_key},
+    )
+    replayed_review = await client.patch(
+        f"/api/marked-papers/{paper['id']}/questions/{question['id']}",
+        json=replay_payload,
+        headers={"Idempotency-Key": replay_key},
+    )
+    assert first_review.json() == replayed_review.json()
+    changed_review = await client.patch(
+        f"/api/marked-papers/{paper['id']}/questions/{question['id']}",
+        json={"feedback": "Changed"},
+        headers={"Idempotency-Key": replay_key},
+    )
+    assert changed_review.status_code == 409
     assert (await client.get("/api/meters/topics")).json()[0]["stale"] is False
     duplicate = await client.post(
         f"/api/marked-papers/{paper['id']}/questions",
@@ -617,14 +942,24 @@ async def test_provider_lifecycle_fixed_target_and_two_user_isolation(m3_client,
     assert configured.status_code == 200
     assert configured.json()["credential"] == "********"
     assert (await client.get("/api/providers/settings")).status_code == 200
+    provider_test_key = str(uuid.uuid4())
     with respx.mock:
         route = respx.get("https://api.openai.com/v1/models")
         route.mock(return_value=Response(200, json={"data": [{"id": "other-model"}]}))
-        rejected_model = await client.post("/api/providers/openai/test")
+        rejected_model = await client.post(
+            "/api/providers/openai/test", headers={"Idempotency-Key": provider_test_key}
+        )
         route.mock(return_value=Response(200, json={"data": [{"id": "gpt-4o-mini"}]}))
-        tested = await client.post("/api/providers/openai/test")
+        tested = await client.post(
+            "/api/providers/openai/test", headers={"Idempotency-Key": provider_test_key}
+        )
+        replayed_test = await client.post(
+            "/api/providers/openai/test", headers={"Idempotency-Key": provider_test_key}
+        )
     assert rejected_model.status_code == 422
     assert tested.status_code == 200
+    assert replayed_test.json() == tested.json()
+    assert route.call_count == 2
 
     azure_endpoint = "https://resource.openai.azure.com"
     allowed_settings = provider_service.get_settings().model_copy(

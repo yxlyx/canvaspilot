@@ -181,9 +181,9 @@ pub fn render(req: mer.Request) mer.Response {
         \\    <div class="cp-card-title"><span>Workspace focus</span><span>prototype</span></div>
     ) catch return mer.internalError("workspace render failed");
 
-    const safe_code = lib.ui.escape(req.allocator, focus.code) catch focus.code;
-    const safe_name = lib.ui.escape(req.allocator, focus.name) catch focus.name;
-    const safe_term = lib.ui.escape(req.allocator, focus.term) catch focus.term;
+    const safe_code = lib.ui.escapeSafe(req.allocator, focus.code);
+    const safe_name = lib.ui.escapeSafe(req.allocator, focus.name);
+    const safe_term = lib.ui.escapeSafe(req.allocator, focus.term);
     w.print(
         \\    <div class="cp-module-summary">
         \\      <div class="cp-module-code">{s}</div>
@@ -217,9 +217,9 @@ pub fn render(req: mer.Request) mer.Response {
         if (!std.mem.eql(u8, a.module_id, focus.id)) continue;
         if (ann_shown >= 3) break;
         ann_shown += 1;
-        const safe_title = lib.ui.escape(req.allocator, a.title) catch a.title;
+        const safe_title = lib.ui.escapeSafe(req.allocator, a.title);
         const summary = a.summary orelse a.content;
-        const safe_summary = lib.ui.escape(req.allocator, summary) catch summary;
+        const safe_summary = lib.ui.escapeSafe(req.allocator, summary);
         const when = lib.time.formatRelative(req.allocator, a.posted_at, now_secs) catch "—";
         w.print(
             \\      <li class="cp-feed-item">
@@ -244,8 +244,8 @@ pub fn render(req: mer.Request) mer.Response {
     ) catch return mer.internalError("workspace render failed");
 
     for (lib.mock.wiki_pages) |page| {
-        const safe_title = lib.ui.escape(req.allocator, page.title) catch page.title;
-        const safe_summary = lib.ui.escape(req.allocator, page.summary) catch page.summary;
+        const safe_title = lib.ui.escapeSafe(req.allocator, page.title);
+        const safe_summary = lib.ui.escapeSafe(req.allocator, page.summary);
         const href = std.fmt.allocPrint(req.allocator, "/wiki/{s}", .{page.slug}) catch "/wiki/immutable-lists";
         w.print(
             \\      <a class="cp-wiki-row" href="{s}">
@@ -264,8 +264,8 @@ pub fn render(req: mer.Request) mer.Response {
 
     if (lib.mock.decks.len > 0) {
         const deck = lib.mock.decks[0];
-        const safe_title = lib.ui.escape(req.allocator, deck.title) catch deck.title;
-        const safe_desc = lib.ui.escape(req.allocator, deck.description) catch deck.description;
+        const safe_title = lib.ui.escapeSafe(req.allocator, deck.title);
+        const safe_desc = lib.ui.escapeSafe(req.allocator, deck.description);
         w.print(
             \\    <div class="cp-study-card">
             \\      <div class="cp-study-title">{s}</div>
@@ -317,8 +317,8 @@ fn renderSourcePreview(
     source: lib.types.WorkspaceSource,
     now_secs: i64,
 ) !void {
-    const safe_title = lib.ui.escape(req.allocator, source.title) catch source.title;
-    const safe_summary = lib.ui.escape(req.allocator, source.summary) catch source.summary;
+    const safe_title = lib.ui.escapeSafe(req.allocator, source.title);
+    const safe_summary = lib.ui.escapeSafe(req.allocator, source.summary);
     const when = lib.time.formatRelative(req.allocator, source.updated_at, now_secs) catch "—";
     const status_cls = sourceStatusClass(source.status);
     try w.print(

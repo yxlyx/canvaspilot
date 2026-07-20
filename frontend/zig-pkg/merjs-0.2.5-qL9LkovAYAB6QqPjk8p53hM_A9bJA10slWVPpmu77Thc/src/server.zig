@@ -183,6 +183,8 @@ fn handleConn(ctx: *ConnCtx) void {
         _ttfb_ns = 0;
         const start = _request_start_ns;
         serveRequest(alloc, &std_req, ctx.router, ctx.watcher, ctx.kuri, ctx.dev, ctx.verbose, ctx.io) catch |err| {
+            // Oversized bodies are rejected with Connection: close; never parse an unread tail.
+            if (err == error.RequestBodyTooLarge) return;
             log.err("serveRequest: {}", .{err});
             if (ctx.dev) {
                 dev_mod.sendErrorOverlay(&std_req, std_req.head.target, err, mer.version) catch {};
@@ -207,8 +209,8 @@ fn handleConn(ctx: *ConnCtx) void {
             }
         }
 
-        // Reset arena between requests on the same connection (keep-alive).
-        _ = arena.reset(.retain_capacity);
+        // Release request/response peaks between requests on the same connection.
+        _ = arena.reset(.free_all);
     }
 }
 
@@ -230,7 +232,7 @@ fn serveRequest(
     io: std.Io,
 ) !void {
     _ = verbose;
-    const raw_target = std_req.head.target;
+    const raw_target = try alloc.dupe(u8, std_req.head.target);
 
     const path: []const u8 = if (std.mem.indexOfScalar(u8, raw_target, '?')) |q|
         raw_target[0..q]
@@ -291,23 +293,42 @@ fn serveRequest(
     headers = std_req.iterateHeaders();
     var header_index: usize = 0;
     while (headers.next()) |header| : (header_index += 1) {
-        request_headers[header_index] = .{ .name = header.name, .value = header.value };
+        request_headers[header_index] = .{ .name = try alloc.dupe(u8, header.name), .value = try alloc.dupe(u8, header.value) };
         if (!cookie_seen and std.ascii.eqlIgnoreCase(header.name, "cookie")) {
-            cookies_raw = header.value;
+            cookies_raw = request_headers[header_index].value;
             cookie_seen = true;
         }
     }
 
+    const max_request_body_bytes = 15 * 1024 * 1024;
+    if (std_req.head.content_length) |content_length| {
+        if (content_length > max_request_body_bytes) {
+            const close_headers = [_]std.http.Header{.{ .name = "connection", .value = "close" }};
+            var too_large = mer.Response.init(.payload_too_large, .json, "{\"error\":\"content_length_too_large\"}");
+            too_large.headers = &close_headers;
+            try sendResponse(std_req, too_large);
+            return error.RequestBodyTooLarge;
+        }
+    }
     const body_bytes: []const u8 = blk: {
-        const cl = std_req.head.content_length orelse break :blk "";
-        if (cl == 0) break :blk "";
+        if ((std_req.head.content_length orelse 0) == 0 and std_req.head.transfer_encoding == .none) break :blk "";
         var transfer_buf: [4096]u8 = undefined;
         var br = std_req.server.reader.bodyReader(
             &transfer_buf,
             std_req.head.transfer_encoding,
             std_req.head.content_length,
         );
-        break :blk br.allocRemaining(alloc, .limited(4 * 1024 * 1024)) catch "";
+        break :blk br.allocRemaining(alloc, .limited(max_request_body_bytes)) catch |err| switch (err) {
+            error.StreamTooLong => {
+                const close_headers = [_]std.http.Header{.{ .name = "connection", .value = "close" }};
+                var too_large = mer.Response.init(.payload_too_large, .json, "{\"error\":\"chunked_body_too_large\"}");
+                too_large.headers = &close_headers;
+                try sendResponse(std_req, too_large);
+                return error.RequestBodyTooLarge;
+            },
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return err,
+        };
     };
 
     var req = mer.Request.init(alloc, mer.Method.fromStd(std_req.head.method), path);
@@ -423,6 +444,7 @@ fn streamFlushImpl(ctx: *anyopaque) void {
 
 /// Maximum number of Set-Cookie headers we emit per response.
 const MAX_COOKIES = 8;
+const MAX_RESPONSE_HEADERS = 8;
 
 fn sendResponse(std_req: *std.http.Server.Request, response: mer.Response) !void {
     // Format Set-Cookie header values on the stack.
@@ -459,16 +481,18 @@ fn sendResponse(std_req: *std.http.Server.Request, response: mer.Response) !void
         .{ .name = "content-type", .value = response.content_type.mime() },
     } ++ security_headers;
 
-    var extra: [fixed.len + MAX_COOKIES]std.http.Header = undefined;
+    var extra: [fixed.len + MAX_COOKIES + MAX_RESPONSE_HEADERS]std.http.Header = undefined;
     @memcpy(extra[0..fixed.len], &fixed);
     @memcpy(extra[fixed.len .. fixed.len + n_cookies], cookie_headers[0..n_cookies]);
+    const n_headers = @min(response.headers.len, MAX_RESPONSE_HEADERS);
+    @memcpy(extra[fixed.len + n_cookies .. fixed.len + n_cookies + n_headers], response.headers[0..n_headers]);
 
     var header_buf: [4096]u8 = undefined;
     var bw = try std_req.respondStreaming(&header_buf, .{
         .content_length = response.body.len,
         .respond_options = .{
             .status = response.status,
-            .extra_headers = extra[0 .. fixed.len + n_cookies],
+            .extra_headers = extra[0 .. fixed.len + n_cookies + n_headers],
         },
     });
     markTtfb();

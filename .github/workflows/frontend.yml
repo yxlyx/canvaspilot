@@ -71,7 +71,9 @@ jobs:
           done
           [ "$status" = 200 ] || { cat /tmp/wikibase-boot.log; exit 1; }
       - name: Run HTTP boundary smoke tests
-        run: ./tests/chat-boundary-smoke.sh
+        run: |
+          ./tests/chat-boundary-smoke.sh
+          ./tests/m3-live-smoke.sh
       - name: Install browser test dependencies
         working-directory: frontend/e2e
         run: |
@@ -110,9 +112,11 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
+      ENVIRONMENT: test
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/wikibase_full_stack_test
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/wikibase_full_stack_test
       SESSION_SECRET: full-stack-test-session-secret-32-bytes
+      SECURE_COOKIES: "false"
       CANVAS_TOKEN_SECRET: eE-4RX-m39GFpdZXEDBtsaKZoOlMC7EpNlV9XiFrOO8=
       PROVIDER_ENCRYPTION_SECRET: XRoe-9icgC8y3-AtmJVDwhbrRraWTUXCsSu013nHztY=
       CANVAS_BASE_URL: https://canvas.test.example.com

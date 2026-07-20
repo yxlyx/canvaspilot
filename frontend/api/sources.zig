@@ -79,7 +79,7 @@ fn mutationAllowedForOrigin(req: mer.Request, public_origin: ?[]const u8) bool {
 }
 
 fn mutationAllowed(req: mer.Request) bool {
-    return mutationAllowedForOrigin(req, lib.config.load().public_origin);
+    return lib.mutation.guard(req, 64 * 1024) == null;
 }
 
 pub fn render(req: mer.Request) mer.Response {

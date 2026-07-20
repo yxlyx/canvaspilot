@@ -58,7 +58,7 @@ pub fn render(req: mer.Request) mer.Response {
         }
     }
     if (backend_message) |message| {
-        const safe_message = lib.ui.escape(req.allocator, message) catch message;
+        const safe_message = lib.ui.escapeSafe(req.allocator, message);
         w.print("<div class=\"cp-status-banner cp-status-info\">{s}</div>\n", .{safe_message}) catch return mer.internalError("flashcards render failed");
     }
 
@@ -90,8 +90,8 @@ fn renderLiveDecks(
         renderLiveDeckLink(req, w, deck, selected_deck.id, now_secs) catch return mer.internalError("flashcards render failed");
     }
 
-    const safe_title = lib.ui.escape(req.allocator, selected_deck.title) catch selected_deck.title;
-    const safe_desc = lib.ui.escape(req.allocator, selected_deck.description) catch selected_deck.description;
+    const safe_title = lib.ui.escapeSafe(req.allocator, selected_deck.title);
+    const safe_desc = lib.ui.escapeSafe(req.allocator, selected_deck.description);
     renderQueueHeader(w, selected_deck.cards.len, safe_title, safe_desc, selected_deck.cards.len, selected_deck.card_count) catch return mer.internalError("flashcards render failed");
 
     if (selected_deck.cards.len == 0) {
@@ -144,8 +144,8 @@ fn renderMockDecks(
         renderMockDeckLink(req, w, d, deck.id, now_secs) catch return mer.internalError("flashcards render failed");
     }
 
-    const safe_title = lib.ui.escape(req.allocator, deck.title) catch deck.title;
-    const safe_desc = lib.ui.escape(req.allocator, deck.description) catch deck.description;
+    const safe_title = lib.ui.escapeSafe(req.allocator, deck.title);
+    const safe_desc = lib.ui.escapeSafe(req.allocator, deck.description);
     renderQueueHeader(w, selected_cards, safe_title, safe_desc, deck.due_count, deck.card_count) catch return mer.internalError("flashcards render failed");
 
     var rendered_cards: usize = 0;
@@ -262,8 +262,8 @@ fn renderLiveDeckLink(
     selected_id: []const u8,
     now_secs: i64,
 ) !void {
-    const safe_title = lib.ui.escape(req.allocator, deck.title) catch deck.title;
-    const safe_desc = lib.ui.escape(req.allocator, deck.description) catch deck.description;
+    const safe_title = lib.ui.escapeSafe(req.allocator, deck.title);
+    const safe_desc = lib.ui.escapeSafe(req.allocator, deck.description);
     const safe_deck_id = lib.ui.escape(req.allocator, safeToken(deck.id, "")) catch "";
     const when = lib.time.formatRelative(req.allocator, deck.updated_at, now_secs) catch "—";
     const cls: []const u8 = if (std.mem.eql(u8, deck.id, selected_id)) "cp-deck-row cp-deck-row-active" else "cp-deck-row";
@@ -284,8 +284,8 @@ fn renderMockDeckLink(
     selected_id: []const u8,
     now_secs: i64,
 ) !void {
-    const safe_title = lib.ui.escape(req.allocator, deck.title) catch deck.title;
-    const safe_desc = lib.ui.escape(req.allocator, deck.description) catch deck.description;
+    const safe_title = lib.ui.escapeSafe(req.allocator, deck.title);
+    const safe_desc = lib.ui.escapeSafe(req.allocator, deck.description);
     const when = lib.time.formatRelative(req.allocator, deck.updated_at, now_secs) catch "—";
     const cls: []const u8 = if (std.mem.eql(u8, deck.id, selected_id)) "cp-deck-row cp-deck-row-active" else "cp-deck-row";
 
@@ -305,11 +305,11 @@ fn renderLiveFlashcard(
     card: lib.types.FlashcardResponse,
     index: usize,
 ) !void {
-    const safe_question = lib.ui.escape(req.allocator, card.question) catch card.question;
-    const safe_answer = lib.ui.escape(req.allocator, card.answer) catch card.answer;
-    const safe_topic = lib.ui.escape(req.allocator, card.topic_tag) catch card.topic_tag;
-    const safe_source = lib.ui.escape(req.allocator, card.source_title) catch card.source_title;
-    const safe_ref = lib.ui.escape(req.allocator, card.citation_ref) catch card.citation_ref;
+    const safe_question = lib.ui.escapeSafe(req.allocator, card.question);
+    const safe_answer = lib.ui.escapeSafe(req.allocator, card.answer);
+    const safe_topic = lib.ui.escapeSafe(req.allocator, card.topic_tag);
+    const safe_source = lib.ui.escapeSafe(req.allocator, card.source_title);
+    const safe_ref = lib.ui.escapeSafe(req.allocator, card.citation_ref);
     const safe_card_id = lib.ui.escape(req.allocator, safeToken(card.id, "")) catch "";
     const safe_deck_id = lib.ui.escape(req.allocator, safeToken(deck_id, "")) catch "";
 
@@ -387,11 +387,11 @@ fn renderMockFlashcard(
     index: usize,
     can_submit_attempts: bool,
 ) !void {
-    const safe_question = lib.ui.escape(req.allocator, card.question) catch card.question;
-    const safe_answer = lib.ui.escape(req.allocator, card.answer) catch card.answer;
-    const safe_topic = lib.ui.escape(req.allocator, card.topic) catch card.topic;
-    const safe_citation_title = lib.ui.escape(req.allocator, card.citation.title) catch card.citation.title;
-    const safe_snippet = lib.ui.escape(req.allocator, card.citation.snippet) catch card.citation.snippet;
+    const safe_question = lib.ui.escapeSafe(req.allocator, card.question);
+    const safe_answer = lib.ui.escapeSafe(req.allocator, card.answer);
+    const safe_topic = lib.ui.escapeSafe(req.allocator, card.topic);
+    const safe_citation_title = lib.ui.escapeSafe(req.allocator, card.citation.title);
+    const safe_snippet = lib.ui.escapeSafe(req.allocator, card.citation.snippet);
 
     try w.print(
         \\      <article class="cp-flashcard">
