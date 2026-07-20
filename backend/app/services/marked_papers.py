@@ -4,7 +4,7 @@ import re
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -18,6 +18,7 @@ from app.schemas.m3 import (
     MarkedPaperUploadRequest,
 )
 from app.schemas.sources import normalize_topic_tags
+from app.services.pagination import decode_cursor, encode_cursor
 
 MAX_MARKED_PAPER_BYTES = 10 * 1024 * 1024
 MAX_MARKED_PAPERS_PER_USER = 100
@@ -147,20 +148,44 @@ async def upload_marked_paper(
     await db.flush()
     for values in questions:
         db.add(MarkedPaperQuestion(paper_id=paper.id, reviewed=False, **values))
-    await db.commit()
+    await db.flush()
     await db.refresh(paper, attribute_names=["questions"])
     return paper
 
 
-async def list_marked_papers(user: User, db: AsyncSession) -> list[MarkedPaper]:
+async def list_marked_papers(
+    user: User, db: AsyncSession, limit: int = 100, offset: int = 0
+) -> list[MarkedPaper]:
     result = await db.execute(
         select(MarkedPaper)
         .options(selectinload(MarkedPaper.questions))
         .where(MarkedPaper.user_id == user.id)
-        .order_by(MarkedPaper.created_at.desc())
-        .limit(MAX_PAPERS_RETURNED)
+        .order_by(MarkedPaper.created_at.desc(), MarkedPaper.id.desc())
+        .offset(offset)
+        .limit(min(limit, MAX_PAPERS_RETURNED))
     )
     return list(result.scalars().unique())
+
+
+async def page_marked_papers(
+    user: User, db: AsyncSession, limit: int = 20, cursor: str | None = None
+) -> tuple[list[MarkedPaper], str | None]:
+    statement = (
+        select(MarkedPaper)
+        .options(selectinload(MarkedPaper.questions))
+        .where(MarkedPaper.user_id == user.id)
+        .order_by(MarkedPaper.created_at.desc(), MarkedPaper.id.desc())
+    )
+    if cursor is not None:
+        statement = statement.where(
+            tuple_(MarkedPaper.created_at, MarkedPaper.id) < decode_cursor(cursor)
+        )
+    rows = list((await db.execute(statement.limit(limit + 1))).scalars().unique().all())
+    items = rows[:limit]
+    next_cursor = (
+        encode_cursor(items[-1].created_at, items[-1].id) if len(rows) > limit and items else None
+    )
+    return items, next_cursor
 
 
 async def get_marked_paper(user: User, paper_id: uuid.UUID, db: AsyncSession) -> MarkedPaper:
@@ -236,7 +261,7 @@ async def create_question(
     )
     paper.extraction_status = "pending_review" if unreviewed else "reviewed"
     paper.extraction_message = "Manually entered question; review state is user supplied."
-    await db.commit()
+    await db.flush()
     return await get_marked_paper(user, paper_id, db)
 
 
@@ -293,7 +318,7 @@ async def update_question(
     paper = await db.get(MarkedPaper, paper_id)
     if paper is not None:
         paper.extraction_status = "reviewed" if remaining == 0 else "pending_review"
-    await db.commit()
+    await db.flush()
     return await get_marked_paper(user, paper_id, db)
 
 
@@ -327,11 +352,11 @@ async def delete_question(
         paper.extraction_status = (
             "unsupported" if not remaining else "pending_review" if unreviewed else "reviewed"
         )
-    await db.commit()
+    await db.flush()
     return await get_marked_paper(user, paper_id, db)
 
 
 async def delete_marked_paper(user: User, paper_id: uuid.UUID, db: AsyncSession) -> None:
     paper = await get_marked_paper(user, paper_id, db)
     await db.delete(paper)
-    await db.commit()
+    await db.flush()

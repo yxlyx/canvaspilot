@@ -19,6 +19,19 @@ that one image.
 | `WIKIBASE_BACKEND_URL` | Base URL of the FastAPI backend, e.g. `https://wikibase-backend.up.railway.app`. | Yes for real backend |
 | `WIKIBASE_PUBLIC_ORIGIN` | Exact public frontend origin used to validate authenticated mutations, e.g. `https://study.example.com`. Do not include a path or trailing slash. | Yes outside loopback development |
 | `WIKIBASE_SESSION_COOKIE` | Name of the HttpOnly cookie storing the app JWT. Defaults to `cp_session`. | No |
+| `WIKIBASE_MOCK_ENABLED` | Enables synthetic data only when a request also explicitly includes `?mock=1`. Keep disabled in production unless a demo is required. | No |
+
+## Milestone 3 live routes
+
+Authenticated routes `/outputs`, `/wiki`, `/health`, `/history`, `/progress`,
+`/marked-papers`, and `/settings/providers` use the FastAPI Milestone 3
+contracts. A backend failure is rendered as unavailable and never replaced by
+fixtures. Wiki downloads are bounded to 10 MiB and proxied with stable
+`Content-Disposition` filenames. Browser mutations use the same-origin
+`/api/m3` allowlist; configure `WIKIBASE_PUBLIC_ORIGIN` to the canonical public
+origin so direct and reverse-proxied deployments fail closed. Provider keys are
+write-only request-body values and must not be placed in URLs or environment
+variables exposed to the browser.
 
 ## 1. Railway (matches the proposal)
 

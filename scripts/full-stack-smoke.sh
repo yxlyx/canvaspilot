@@ -4,6 +4,11 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON=${PYTHON:-python}
 "$PYTHON" -c 'import sys; raise SystemExit(sys.version_info < (3, 12))'
+export ENVIRONMENT=test
+export SESSION_SECRET=test-session-secret-with-at-least-32-bytes
+export CANVAS_TOKEN_SECRET=eE-4RX-m39GFpdZXEDBtsaKZoOlMC7EpNlV9XiFrOO8=
+export PROVIDER_ENCRYPTION_SECRET=XRoe-9icgC8y3-AtmJVDwhbrRraWTUXCsSu013nHztY=
+export SECURE_COOKIES=false
 
 free_port() {
     "$PYTHON" -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
@@ -132,6 +137,7 @@ wait_for "$FRONTEND_URL/login" "$FRONTEND_LOG" "$frontend_pid" frontend
 email="full-stack-$(date +%s)-$$@test.example.com"
 register_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
     --cookie "$COOKIE_JAR" --cookie-jar "$COOKIE_JAR" \
+    --header "Origin: $FRONTEND_URL" --header 'Sec-Fetch-Site: same-origin' \
     --data-urlencode 'name=Full Stack Smoke' \
     --data-urlencode "email=$email" \
     --data-urlencode 'password=smoke-password' \
@@ -145,6 +151,7 @@ printf '%s' "$registered_me" | "$PYTHON" -c 'import json,sys; data=json.load(sys
 : >"$COOKIE_JAR"
 signin_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
     --cookie "$COOKIE_JAR" --cookie-jar "$COOKIE_JAR" \
+    --header "Origin: $FRONTEND_URL" --header 'Sec-Fetch-Site: same-origin' \
     --data-urlencode "email=$email" \
     --data-urlencode 'password=smoke-password' \
     "$FRONTEND_URL/api/auth/signin")
