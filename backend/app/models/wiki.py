@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,6 +21,7 @@ class WikiPage(TimestampMixin, Base):
     slug: Mapped[str] = mapped_column(String(255))
     title: Mapped[str] = mapped_column(String(1000))
     page_type: Mapped[str] = mapped_column(String(50), default="source")
+    is_current: Mapped[bool] = mapped_column(Boolean, default=True)
     markdown: Mapped[str] = mapped_column(Text)
     summary: Mapped[str] = mapped_column(Text, default="")
     source_ids: Mapped[list[uuid.UUID]] = mapped_column(

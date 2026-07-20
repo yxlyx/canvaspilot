@@ -2,6 +2,16 @@ from app.models.base import Base
 from app.models.content import ContentChunk
 from app.models.flashcard import Flashcard, FlashcardAttempt, FlashcardDeck, LearningEvidence
 from app.models.ingestion_job import IngestionJob
+from app.models.m3 import (
+    HealthFinding,
+    MarkedPaper,
+    MarkedPaperQuestion,
+    ProviderSetting,
+    SourceChange,
+    StudyOutput,
+    StudyOutputCitation,
+    WikiRevision,
+)
 from app.models.module import Announcement, Assignment, Module
 from app.models.source import Source
 from app.models.source_chunk import SourceChunk
@@ -26,4 +36,12 @@ __all__ = [
     "IngestionJob",
     "WikiPage",
     "WikiCitation",
+    "StudyOutput",
+    "StudyOutputCitation",
+    "WikiRevision",
+    "SourceChange",
+    "HealthFinding",
+    "MarkedPaper",
+    "MarkedPaperQuestion",
+    "ProviderSetting",
 ]

@@ -5,13 +5,20 @@ from datetime import UTC, datetime
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.config import Settings
-from app.main import app
-from app.models.user import User
+os.environ.setdefault("ENVIRONMENT", "test")
+os.environ.setdefault("SESSION_SECRET", "test-session-secret-with-at-least-32-bytes")
+os.environ.setdefault("CANVAS_TOKEN_SECRET", "eE-4RX-m39GFpdZXEDBtsaKZoOlMC7EpNlV9XiFrOO8=")
+os.environ.setdefault("PROVIDER_ENCRYPTION_SECRET", "XRoe-9icgC8y3-AtmJVDwhbrRraWTUXCsSu013nHztY=")
+os.environ.setdefault("SECURE_COOKIES", "false")
+
+from app.config import Settings  # noqa: E402
+from app.main import app  # noqa: E402
+from app.models.user import User  # noqa: E402
 
 DATABASE_TEST_MODULES = {
     "test_flashcards.py",
     "test_ingestion_jobs.py",
+    "test_m3_api.py",
     "test_retrieval_chat_integration.py",
     "test_search.py",
     "test_source_imports.py",
@@ -42,7 +49,8 @@ def settings():
     return Settings(
         database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/wikibase_test",
         session_secret="test-session-secret-with-at-least-32-bytes",
-        canvas_token_secret="dGVzdC1mZXJuZXQta2V5LW5vdC1mb3ItcHJvZHVjdGlvbg==",
+        canvas_token_secret="eE-4RX-m39GFpdZXEDBtsaKZoOlMC7EpNlV9XiFrOO8=",
+        provider_encryption_secret="XRoe-9icgC8y3-AtmJVDwhbrRraWTUXCsSu013nHztY=",
         canvas_base_url="https://canvas.test.example.com",
         canvas_client_id="test-client",
         canvas_client_secret="test-secret",

@@ -7,9 +7,13 @@ from app.services import embedding
 class DummyDB:
     def __init__(self):
         self.commits = 0
+        self.flushes = 0
 
     async def commit(self):
         self.commits += 1
+
+    async def flush(self):
+        self.flushes += 1
 
 
 class FakeEmbeddingData:
@@ -34,7 +38,7 @@ def make_chunk(idx: int) -> ContentChunk:
 
 
 @pytest.mark.asyncio
-async def test_embed_chunks_batches_and_commits(settings, monkeypatch):
+async def test_embed_chunks_batches_without_committing(settings, monkeypatch):
     calls: list[list[str]] = []
 
     class FakeEmbeddings:
@@ -58,7 +62,8 @@ async def test_embed_chunks_batches_and_commits(settings, monkeypatch):
 
     assert [len(call) for call in calls] == [100, 1]
     assert len(chunks[0].embedding) == 1536
-    assert db.commits == 1
+    assert db.flushes == 1
+    assert db.commits == 0
 
 
 @pytest.mark.asyncio

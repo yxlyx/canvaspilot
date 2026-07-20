@@ -2,11 +2,12 @@ import re
 import uuid
 from dataclasses import dataclass, field
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.exceptions import NotFoundError
+from app.exceptions import NotFoundError, WikiBaseError
+from app.models.m3 import WikiRevision
 from app.models.source import Source, SourceStatus
 from app.models.source_chunk import SourceChunk
 from app.models.user import User
@@ -39,6 +40,8 @@ class PageDraft:
 
 _slug_re = re.compile(r"[^a-z0-9]+")
 _wiki_link_re = re.compile(r"\[\[([^\]]+)\]\]")
+MAX_WIKI_PAGES = 99
+MAX_WIKI_CONTENT_CHARS = 5_000_000
 
 
 def slugify(value: str) -> str:
@@ -231,17 +234,37 @@ async def _load_sources(
     db: AsyncSession,
     require_all: bool = True,
 ) -> list[Source]:
+    content_size_statement = (
+        select(func.coalesce(func.sum(func.length(SourceChunk.content)), 0))
+        .join(Source, SourceChunk.source_id == Source.id)
+        .where(Source.user_id == user.id, Source.status == SourceStatus.READY)
+    )
+    if source_ids is not None:
+        content_size_statement = content_size_statement.where(Source.id.in_(source_ids))
+    if await db.scalar(content_size_statement) > MAX_WIKI_CONTENT_CHARS:
+        raise WikiBaseError(
+            413,
+            "wiki_too_large",
+            "Wiki compilation input exceeds 5,000,000 characters",
+        )
     statement = (
         select(Source)
-        .where(Source.user_id == user.id, Source.status == SourceStatus.READY)
+        .where(
+            Source.user_id == user.id,
+            Source.status == SourceStatus.READY,
+            Source.chunks.any(),
+        )
         .options(selectinload(Source.chunks))
         .order_by(Source.title.asc(), Source.id.asc())
+        .limit(MAX_WIKI_PAGES + 1)
     )
     if source_ids is not None:
         statement = statement.where(Source.id.in_(source_ids))
 
     result = await db.execute(statement)
     sources = list(result.scalars().unique().all())
+    if len(sources) > MAX_WIKI_PAGES:
+        raise WikiBaseError(413, "wiki_too_large", "Wiki compilation is limited to 100 sources")
 
     if require_all and source_ids is not None and len(sources) != len(set(source_ids)):
         raise NotFoundError("One or more ready sources were not found")
@@ -252,7 +275,9 @@ async def _load_sources(
 async def _load_existing_compiled_source_ids(user: User, db: AsyncSession) -> list[uuid.UUID]:
     result = await db.execute(
         select(WikiPage.source_ids).where(
-            WikiPage.user_id == user.id, WikiPage.page_type == "source"
+            WikiPage.user_id == user.id,
+            WikiPage.page_type == "source",
+            WikiPage.is_current.is_(True),
         )
     )
     source_ids: list[uuid.UUID] = []
@@ -269,6 +294,29 @@ async def _lock_user_wiki(user: User, db: AsyncSession) -> None:
     await db.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
         {"lock_key": f"wiki:{user.id}"},
+    )
+
+
+async def _store_revision(
+    page: WikiPage, user: User, change_summary: str, db: AsyncSession
+) -> None:
+    revision_number = (
+        await db.scalar(
+            select(func.max(WikiRevision.revision_number)).where(WikiRevision.page_id == page.id)
+        )
+        or 0
+    ) + 1
+    db.add(
+        WikiRevision(
+            user_id=user.id,
+            page_id=page.id,
+            revision_number=revision_number,
+            title=page.title,
+            markdown=page.markdown,
+            source_ids=list(page.source_ids),
+            citation_count=page.citation_count,
+            change_summary=change_summary,
+        )
     )
 
 
@@ -297,27 +345,67 @@ async def compile_workspace_wiki(
     for page in drafts:
         page.backlinks = backlink_map[page.slug]
 
-    await db.execute(delete(WikiPage).where(WikiPage.user_id == user.id))
+    existing = list(
+        (
+            await db.execute(
+                select(WikiPage)
+                .where(WikiPage.user_id == user.id)
+                .options(selectinload(WikiPage.citations))
+            )
+        )
+        .scalars()
+        .unique()
+    )
+    source_pages = {
+        page.source_ids[0]: page
+        for page in existing
+        if page.page_type == "source" and len(page.source_ids) == 1
+    }
+    index_page = next((page for page in existing if page.page_type == "index"), None)
+    for page in existing:
+        page.slug = f"__compiling-{page.id}"
+    await db.flush()
 
     stored_pages: list[WikiPage] = []
+    active_page_ids: set[uuid.UUID] = set()
     for draft in drafts:
-        page = WikiPage(
-            user_id=user.id,
-            slug=draft.slug,
-            title=draft.title,
-            page_type="source",
-            markdown=render_page_markdown(draft, pages_by_slug),
-            summary=draft.summary,
-            source_ids=draft.source_ids,
-            citation_count=len(draft.citations),
-            backlinks=draft.backlinks,
+        page = source_pages.get(draft.source_ids[0])
+        markdown = render_page_markdown(draft, pages_by_slug)
+        created = page is None
+        if page is None:
+            page = WikiPage(
+                user_id=user.id,
+                slug=draft.slug,
+                title=draft.title,
+                page_type="source",
+                markdown=markdown,
+                summary=draft.summary,
+                source_ids=draft.source_ids,
+                citation_count=0,
+                backlinks=[],
+            )
+            db.add(page)
+            await db.flush()
+        changed = created or any(
+            (
+                page.title != draft.title,
+                page.markdown != markdown,
+                page.source_ids != draft.source_ids,
+                page.backlinks != draft.backlinks,
+            )
         )
-        db.add(page)
-        await db.flush()
+        page.slug = draft.slug
+        page.is_current = True
+        page.title = draft.title
+        page.markdown = markdown
+        page.summary = draft.summary
+        page.source_ids = draft.source_ids
+        page.citation_count = len(draft.citations)
+        page.backlinks = draft.backlinks
+        page.citations.clear()
         for citation in draft.citations:
-            db.add(
+            page.citations.append(
                 WikiCitation(
-                    page_id=page.id,
                     source_id=citation.source_id,
                     source_chunk_id=citation.source_chunk_id,
                     citation_key=citation.citation_key,
@@ -328,21 +416,53 @@ async def compile_workspace_wiki(
                     snippet=citation.snippet,
                 )
             )
+        if changed:
+            await _store_revision(
+                page, user, "Initial compilation" if created else "Source content changed", db
+            )
+        active_page_ids.add(page.id)
         stored_pages.append(page)
 
-    index_page = WikiPage(
-        user_id=user.id,
-        slug="index",
-        title="Workspace Wiki Index",
-        page_type="index",
-        markdown=render_index_page(drafts),
-        summary=f"{len(drafts)} compiled pages",
-        source_ids=[source.id for source in sources],
-        citation_count=sum(len(draft.citations) for draft in drafts),
-        backlinks=[],
-    )
-    db.add(index_page)
+    index_markdown = render_index_page(drafts)
+    index_created = index_page is None
+    if index_page is None:
+        index_page = WikiPage(
+            user_id=user.id,
+            slug="index",
+            title="Workspace Wiki Index",
+            page_type="index",
+            markdown=index_markdown,
+            summary="",
+            source_ids=[],
+            citation_count=0,
+            backlinks=[],
+        )
+        db.add(index_page)
+        await db.flush()
+    index_changed = index_created or index_page.markdown != index_markdown
+    index_page.slug = "index"
+    index_page.is_current = True
+    index_page.title = "Workspace Wiki Index"
+    index_page.markdown = index_markdown
+    index_page.summary = f"{len(drafts)} compiled pages"
+    index_page.source_ids = [source.id for source in sources]
+    index_page.citation_count = sum(len(draft.citations) for draft in drafts)
+    index_page.backlinks = []
+    index_page.citations.clear()
+    if index_changed:
+        await _store_revision(
+            index_page,
+            user,
+            "Initial compilation" if index_created else "Workspace index changed",
+            db,
+        )
+    active_page_ids.add(index_page.id)
     stored_pages.insert(0, index_page)
+
+    for page in existing:
+        if page.id not in active_page_ids:
+            page.is_current = False
+            page.slug = f"__retired-{page.id}"
 
     await db.commit()
     for page in stored_pages:
@@ -353,9 +473,10 @@ async def compile_workspace_wiki(
 async def list_wiki_pages(user: User, db: AsyncSession) -> list[WikiPage]:
     result = await db.execute(
         select(WikiPage)
-        .where(WikiPage.user_id == user.id)
+        .where(WikiPage.user_id == user.id, WikiPage.is_current.is_(True))
         .options(selectinload(WikiPage.citations))
         .order_by(WikiPage.page_type.asc(), WikiPage.title.asc())
+        .limit(MAX_WIKI_PAGES + 1)
     )
     return list(result.scalars().unique().all())
 
@@ -363,7 +484,11 @@ async def list_wiki_pages(user: User, db: AsyncSession) -> list[WikiPage]:
 async def get_wiki_page(user: User, slug: str, db: AsyncSession) -> WikiPage:
     result = await db.execute(
         select(WikiPage)
-        .where(WikiPage.user_id == user.id, WikiPage.slug == slug)
+        .where(
+            WikiPage.user_id == user.id,
+            WikiPage.slug == slug,
+            WikiPage.is_current.is_(True),
+        )
         .options(selectinload(WikiPage.citations))
     )
     page = result.scalar_one_or_none()
