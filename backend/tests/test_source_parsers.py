@@ -62,6 +62,27 @@ def test_parse_pdf_rejects_invalid_base64():
         parse_pdf("not base64")
 
 
+def test_pdf_extracted_text_limit_stops_per_page_extraction(monkeypatch):
+    extracted_pages = 0
+
+    class Page:
+        def extract_text(self):
+            nonlocal extracted_pages
+            extracted_pages += 1
+            return "x" * 20_000
+
+    class Reader:
+        def __init__(self, *_args, **_kwargs):
+            self.pages = [Page() for _ in range(200)]
+
+    monkeypatch.setattr("pypdf.PdfReader", Reader)
+
+    with pytest.raises(SourceParseError, match="extracted text exceeds"):
+        list(source_parsers._extract_pdf_page_texts(b"pdf-bytes"))
+
+    assert extracted_pages == 101
+
+
 def test_parse_source_payload_marks_link_and_repository_metadata_only():
     for source_type in (SourceKind.LINK, SourceKind.REPOSITORY):
         source = Source(
