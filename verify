@@ -98,6 +98,9 @@ else
 fi
 
 printf '%s\n' '==> Harness safety'
+find verify scripts -type f \( -name '*.sh' -o -name verify \) -print0 \
+    | xargs -0 -n1 bash -n
+"$PYTHON" -m compileall -q scripts
 bash "$ROOT_DIR/scripts/tests/verify-safety.sh"
 
 printf '%s\n' '==> Backend'
@@ -105,7 +108,9 @@ printf '%s\n' '==> Backend'
     cd backend
     "$PYTHON" -m ruff check .
     "$PYTHON" -m ruff format --check .
-    if ((RUN_AUDIT)); then "$PYTHON" -m pip_audit -r requirements-dev.lock; fi
+    if ((RUN_AUDIT)); then
+        "$PYTHON" -m pip_audit --no-deps --disable-pip -r requirements-dev.lock
+    fi
     if ((USE_DATABASE)); then
         "$PYTHON" -m alembic upgrade head
         "$PYTHON" -m pytest --cov=app --cov-report=term-missing --cov-fail-under=60

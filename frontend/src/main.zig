@@ -36,6 +36,9 @@ pub fn main(init: std.process.Init.Minimal) !void {
         .port = 3001,
         .dev = true,
     };
+    if (mer.env("PORT")) |port| {
+        config.port = try std.fmt.parseInt(u16, port, 10);
+    }
 
     var do_prerender = false;
 
