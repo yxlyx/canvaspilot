@@ -42,7 +42,7 @@ direction is now anchored around the student knowledge-base workflow.
 | Local auth flow | Implemented, awaiting review | PR #31 open |
 | Source ingestion foundation | Basic implementation | ingestion service and database-backed content records |
 | Retrieval pipeline | Basic implementation | chunking, embedding, vector lookup, chat route |
-| CI | Done | Backend CI and Frontend CI workflows |
+| Local verification | Done | `./verify` runs backend, frontend, database, browser, and security checks locally |
 
 ## What We Have Actually Built
 
@@ -245,7 +245,7 @@ merjs frontend
 | Retrieval | Embeddings and vector lookup | Grounded Q&A and search over workspace chunks. |
 | Document parsing | PyMuPDF, python-docx, BeautifulSoup, Markdown tooling | Support for PDFs, DOCX, links, and Markdown sources. |
 | Testing | pytest, Ruff, Zig format/build tests | Automated checks across backend and frontend. |
-| CI/CD | GitHub Actions | Pull request checks and deployment confidence. |
+| Verification | Local `./verify` harness | Repeatable lint, test, build, audit, browser, and full-stack checks. |
 | Local services | Docker Compose | Repeatable local PostgreSQL and pgvector setup. |
 
 ## Software Engineering Practices
@@ -270,7 +270,7 @@ review.
 ### Testing
 
 Backend tests cover auth, schema validation, ingestion, retrieval, and exceptions.
-Frontend CI covers formatting, build, tests, and a boot smoke test.
+Local frontend checks cover formatting, build, tests, browser flows, and boot smoke.
 
 ### Documentation
 
@@ -394,9 +394,8 @@ browser-boundary tests. Its database-backed full-stack smoke selects unused loop
 starts both services, registers and signs in through frontend routes with a cookie jar,
 checks frontend session and authenticated rendering, and creates and renders a source
 through the frontend API bridge. Explicit occupied ports are refused and either child
-exiting fails the test. CI passes the dynamic frontend and backend URLs to both services,
-starts pgvector, validates Compose and both container builds, scans dependencies, secrets,
-configuration and images, and fails if any backend test is skipped.
+exiting fails the test. All verification runs locally; database mode starts pgvector,
+validates Compose, and fails if any backend test is skipped.
 
 ## Risks (generated)
 
@@ -520,7 +519,7 @@ The proof of concept demonstrates that the project has a working base, not just 
 - PostgreSQL and pgvector migrations
 - Frontend scaffold and workspace UI
 - Chat interface and API bridge
-- CI workflows for backend and frontend
+- Local backend, frontend, browser, and full-stack verification harness
 
 ### Auth PR In Review
 
@@ -611,17 +610,19 @@ Relational records plus vector similarity search in one database.
 
 ### Quality
 
-**GitHub Actions, pytest, Ruff**
+**Local verification, pytest, Ruff, Zig, and Playwright**
 
-Backend and frontend CI for formatting, linting, tests, build, and boot smoke checks.
+The `./verify` harness runs formatting, linting, tests, builds, dependency audits,
+browser checks, and the full-stack smoke flow on the developer machine.
 
 ## GitHub Evidence
 
-GitHub workflow is part of the Milestone 1 evidence. The project already has merged PRs, visible issues, milestones, labels, and CI checks.
+The project has merged PRs, visible issues, milestones, labels, and review history.
+Verification evidence is produced locally before changes are pushed.
 
 | PR | Status | Evidence |
 | --- | --- | --- |
-| #24 | Merged | merjs scaffold, auth UI, shared library, frontend CI workflow. |
+| #24 | Merged | merjs scaffold, auth UI, and shared frontend library. |
 | #25 | Merged | workspace/dashboard foundation with mock/backend data path. |
 | #26 | Merged | chat UI and frontend API bridge for cited Q&A. |
 | #27 | Merged | frontend Dockerfile and deployment files. |
