@@ -157,12 +157,14 @@ async def update_source(source: Source, payload: SourceUpdate, db: AsyncSession)
         setattr(source, field, value)
 
     touched_metadata = set(update_data).intersection(IMPORT_METADATA_FIELDS)
-    if touched_metadata:
+    changed_metadata = {
+        field for field in touched_metadata if before[field] != getattr(source, field)
+    }
+    if changed_metadata:
         source.metadata_overrides = sorted(
-            set(source.metadata_overrides or []).union(touched_metadata)
+            set(source.metadata_overrides or []).union(changed_metadata)
         )
-    metadata_changed = any(before[field] != getattr(source, field) for field in touched_metadata)
-    change_type = "source_metadata_updated" if metadata_changed else "source_updated"
+    change_type = "source_metadata_updated" if changed_metadata else "source_updated"
     record_source_change(source, before, db, change_type)
     await db.commit()
     await db.refresh(source)

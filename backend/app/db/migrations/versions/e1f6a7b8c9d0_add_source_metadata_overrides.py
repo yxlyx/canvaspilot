@@ -28,36 +28,50 @@ def upgrade() -> None:
         ),
     )
 
-    # Older source updates did not identify user-edited metadata explicitly.
-    # Preserve every field that a historical update changed; this may retain
-    # some import-managed values, but it cannot overwrite an existing user edit.
+    # Source changes were not recorded before the Milestone 3 audit table existed,
+    # so preserve every metadata field on external sources without a creation audit.
+    # For newer sources, preserve fields changed by a historical update. Those updates
+    # did not identify their actor, so this intentionally favors retaining user edits.
     op.execute(
         """
         UPDATE sources AS source
-        SET metadata_overrides = ARRAY(
-            SELECT metadata_field.field_name
-            FROM unnest(
-                ARRAY[
-                    'citation_label',
-                    'topic_tags',
-                    'course_context',
-                    'project_context'
-                ]::character varying[]
-            ) AS metadata_field(field_name)
-            WHERE EXISTS (
+        SET metadata_overrides = CASE
+            WHEN NOT EXISTS (
                 SELECT 1
                 FROM source_changes AS source_change
                 WHERE source_change.source_id = source.id
-                  AND source_change.change_type IN (
-                      'source_updated',
-                      'source_metadata_updated'
-                  )
-                  AND source_change.before_snapshot -> metadata_field.field_name
-                      IS DISTINCT FROM
-                      source_change.after_snapshot -> metadata_field.field_name
+                  AND source_change.change_type = 'source_created'
+            ) THEN ARRAY[
+                'citation_label',
+                'course_context',
+                'project_context',
+                'topic_tags'
+            ]::character varying[]
+            ELSE ARRAY(
+                SELECT metadata_field.field_name
+                FROM unnest(
+                    ARRAY[
+                        'citation_label',
+                        'topic_tags',
+                        'course_context',
+                        'project_context'
+                    ]::character varying[]
+                ) AS metadata_field(field_name)
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM source_changes AS source_change
+                    WHERE source_change.source_id = source.id
+                      AND source_change.change_type IN (
+                          'source_updated',
+                          'source_metadata_updated'
+                      )
+                      AND source_change.before_snapshot -> metadata_field.field_name
+                          IS DISTINCT FROM
+                          source_change.after_snapshot -> metadata_field.field_name
+                )
+                ORDER BY metadata_field.field_name
             )
-            ORDER BY metadata_field.field_name
-        )
+        END
         WHERE source.external_id IS NOT NULL
         """
     )

@@ -338,6 +338,18 @@ async def test_reimport_updates_metadata_fields_not_edited_by_user(source_sessio
     )
     source = await update_source(
         source,
+        SourceUpdate(
+            citation_label="Original Label",
+            topic_tags=["original"],
+            course_context="Original Course",
+            project_context="Original Project",
+        ),
+        session,
+    )
+    assert source.metadata_overrides == []
+
+    source = await update_source(
+        source,
         SourceUpdate(title="User Title", citation_label="User Label"),
         session,
     )
