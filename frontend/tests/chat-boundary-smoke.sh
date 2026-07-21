@@ -135,6 +135,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             status, body = 200, b"x" * (512 * 1024 + 1)
         elif self.path == "/api/modules/sync":
             status, body = 200, b'{"status":"started"}'
+        elif self.path == "/api/sources" and b'created source' in payload:
+            status = 201
+            body = b'{"id":"source-1","user_id":"user-1","source_type":"link","origin":"test","title":"created source","status":"ready"}'
+        elif self.path == "/api/sources" and b'oversized source response' in payload:
+            status, body = 200, b"x" * (1024 * 1024 + 1)
+        elif self.path == "/api/sources" and b'unauthorized source' in payload:
+            status, body = 401, b'{"detail":"unauthorized"}'
+        elif self.path == "/api/sources" and b'forbidden source' in payload:
+            status, body = 403, b'{"detail":"forbidden"}'
+        elif self.path == "/api/sources" and b'invalid source' in payload:
+            status, body = 422, b'{"detail":"invalid"}'
         else:
             status, body = 503, b'{"detail":"backend spy intentionally unavailable"}'
 
@@ -173,8 +184,10 @@ for ((attempt = 1; attempt <= 100; attempt++)); do
 done
 ((backend_ready == 1)) || fail "backend spy was not ready at $BACKEND_URL after 5 seconds"
 
+PUBLIC_ORIGIN="https://study.example.com"
 WIKIBASE_MOCK_ENABLED=true \
 WIKIBASE_BACKEND_URL="$BACKEND_URL" \
+WIKIBASE_PUBLIC_ORIGIN="$PUBLIC_ORIGIN" \
     "$APP" --host 127.0.0.1 --port "$PORT" --no-dev --no-dotenv \
     >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
@@ -350,5 +363,65 @@ grep -Eiq '^location:[[:space:]]*/dashboard\?synced=1[[:space:]]*\r?$' "$HEADERS
 assert_backend_count 5
 [[ "$(grep -Fxc '/api/chat' "$BACKEND_RECORD")" == "4" ]] || fail 'unexpected live chat backend request count'
 [[ "$(grep -Fxc '/api/modules/sync' "$BACKEND_RECORD")" == "1" ]] || fail 'unexpected live sync backend request count'
+
+# Cookie-authenticated source mutations fail closed unless the browser proves same origin.
+source_payload='{"source_type":"link","origin":"test","title":"invalid source","source_url":"https://example.com"}'
+request "$BASE_URL/api/sources" \
+    --header 'Cookie: cp_session=chat-boundary' \
+    --header 'Content-Type: text/plain' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
+    --data "$source_payload"
+assert_status 403
+request "$BASE_URL/api/sources" \
+    --header 'Cookie: cp_session=chat-boundary' \
+    --header 'Content-Type: application/json' \
+    --header 'Origin: https://evil.example.com' \
+    --header 'Sec-Fetch-Site: same-site' \
+    --data "$source_payload"
+assert_status 403
+request "$BASE_URL/api/sources" \
+    --header 'Host: frontend:3000' \
+    --header 'Cookie: cp_session=chat-boundary' \
+    --header 'Content-Type: application/json' \
+    --header 'Origin: https://evil.example.com' \
+    --header 'Sec-Fetch-Site: same-origin' \
+    --header 'Forwarded: host=study.example.com;proto=https' \
+    --header 'X-Forwarded-Host: study.example.com' \
+    --header 'X-Forwarded-Proto: https' \
+    --data "$source_payload"
+assert_status 403
+assert_backend_count 5
+
+# A configured public origin works behind a proxy without trusting forwarding headers.
+for case in 'unauthorized source:401' 'forbidden source:403' 'invalid source:422' 'oversized source response:502'; do
+    title=${case%:*}
+    expected=${case##*:}
+    request "$BASE_URL/api/sources" \
+        --header 'Host: frontend:3000' \
+        --header 'Cookie: cp_session=chat-boundary' \
+        --header 'Content-Type: application/json' \
+        --header "Origin: $PUBLIC_ORIGIN" \
+        --header 'Sec-Fetch-Site: same-origin' \
+        --header 'Forwarded: host=study.example.com;proto=https' \
+        --header 'X-Forwarded-Host: study.example.com' \
+        --header 'X-Forwarded-Proto: https' \
+        --data "{\"source_type\":\"link\",\"origin\":\"test\",\"title\":\"$title\",\"source_url\":\"https://example.com\"}"
+    assert_status "$expected"
+done
+
+# Preserve backend success status and authenticate from the first repeated Cookie field.
+request "$BASE_URL/api/sources" \
+    --header 'Host: frontend:3000' \
+    --header 'Cookie: cp_session=chat-boundary' \
+    --header 'Cookie: other=value' \
+    --header 'Content-Type: application/json' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
+    --data '{"source_type":"link","origin":"test","title":"created source","source_url":"https://example.com"}'
+assert_status 201
+assert_json_field title 'created source'
+assert_backend_count 10
+[[ "$(grep -Fxc '/api/sources' "$BACKEND_RECORD")" == "5" ]] || fail 'unexpected live source backend request count'
 
 printf 'chat-boundary-smoke: all assertions passed at %s\n' "$BASE_URL"

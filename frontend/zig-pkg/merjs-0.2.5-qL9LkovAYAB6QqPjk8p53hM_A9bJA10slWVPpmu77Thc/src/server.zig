@@ -281,13 +281,22 @@ fn serveRequest(
 
     // ── Build Request ──────────────────────────────────────────────────────
 
-    const cookies_raw: []const u8 = blk: {
-        var it = std_req.iterateHeaders();
-        while (it.next()) |hdr| {
-            if (std.ascii.eqlIgnoreCase(hdr.name, "cookie")) break :blk hdr.value;
+    var header_count: usize = 0;
+    var headers = std_req.iterateHeaders();
+    while (headers.next() != null) header_count += 1;
+
+    const request_headers = try alloc.alloc(mer.Header, header_count);
+    var cookies_raw: []const u8 = "";
+    var cookie_seen = false;
+    headers = std_req.iterateHeaders();
+    var header_index: usize = 0;
+    while (headers.next()) |header| : (header_index += 1) {
+        request_headers[header_index] = .{ .name = header.name, .value = header.value };
+        if (!cookie_seen and std.ascii.eqlIgnoreCase(header.name, "cookie")) {
+            cookies_raw = header.value;
+            cookie_seen = true;
         }
-        break :blk "";
-    };
+    }
 
     const body_bytes: []const u8 = blk: {
         const cl = std_req.head.content_length orelse break :blk "";
@@ -304,6 +313,7 @@ fn serveRequest(
     var req = mer.Request.init(alloc, mer.Method.fromStd(std_req.head.method), path);
     req.query_string = query_string;
     req.body = body_bytes;
+    req.headers = request_headers;
     req.cookies_raw = cookies_raw;
 
     mer.h.setRenderAllocator(alloc);

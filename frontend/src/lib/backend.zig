@@ -7,6 +7,8 @@ const mer = @import("mer");
 const types = @import("types.zig");
 const config = @import("config.zig");
 
+const max_response_bytes = 1024 * 1024;
+
 pub fn Result(comptime T: type) type {
     return struct {
         status: u16,
@@ -59,6 +61,7 @@ fn requestJson(
         .method = method,
         .body = body,
         .headers = headers_buf[0..n],
+        .max_response_bytes = max_response_bytes,
     }) catch |e| {
         return .{ .status = 0, .err = @errorName(e) };
     };
@@ -91,6 +94,7 @@ fn requestJsonNoAuth(
         .method = method,
         .body = body,
         .headers = &headers,
+        .max_response_bytes = max_response_bytes,
     }) catch |e| {
         return .{ .status = 0, .err = @errorName(e) };
     };
@@ -181,6 +185,17 @@ pub fn upcomingTasks(allocator: std.mem.Allocator, token: []const u8) Result([]t
 
 pub fn listSources(allocator: std.mem.Allocator, token: []const u8) Result([]types.SourceResponse) {
     return requestJson([]types.SourceResponse, allocator, token, .GET, "/api/sources", null);
+}
+
+pub fn createSource(
+    allocator: std.mem.Allocator,
+    token: []const u8,
+    payload: anytype,
+) Result(types.SourceResponse) {
+    const body = stringify(allocator, payload) catch {
+        return .{ .status = 0, .err = "could not encode request" };
+    };
+    return requestJson(types.SourceResponse, allocator, token, .POST, "/api/sources", body);
 }
 
 pub fn listWikiPages(allocator: std.mem.Allocator, token: []const u8) Result([]types.WikiPageResponse) {

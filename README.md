@@ -367,28 +367,36 @@ Milestone 3 should extend the prototype into a stronger study workspace.
 
 ## Testing Strategy
 
-Backend:
+Run the complete local verification harness from the repository root:
 
 ```bash
-cd backend
-ruff check .
-ruff format --check .
-pytest --cov=app --cov-report=term-missing
+./verify
 ```
 
-Frontend:
+Database verification requires `TEST_DATABASE_URL` whose effective SQLAlchemy database
+name has a distinct `test` segment. PostgreSQL URLs with any query parameters are refused,
+so connection parameters cannot override the validated database; `DATABASE_URL` is never
+reused. For the local Compose service, set
+`TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/wikibase_test`.
+`./verify --no-db` blocks and deselects database tests, `./verify --no-e2e` omits browser
+and full-stack tests, and `./verify --no-audit` explicitly omits dependency auditing.
+Each option produces a clearly marked partial result. Use one Python 3.12+ interpreter
+and install the hash-locked development dependencies first:
 
 ```bash
-cd frontend
-zig fmt --check src app api tools
-zig build
-zig build test --summary all
+python -m pip install --require-hashes -r backend/requirements-dev.lock
+python -m pip install --no-deps -e backend
 ```
 
-CI:
-
-- Backend CI runs Ruff and pytest with a PostgreSQL + pgvector service.
-- Frontend CI runs formatting, build, tests, and a boot smoke test.
+The harness runs Ruff, Alembic migrations, backend coverage, Zig format/build/unit tests,
+HTTP smoke tests, mandatory Python and npm audits, and deterministic Chromium
+browser-boundary tests. Its database-backed full-stack smoke selects unused loopback ports,
+starts both services, registers and signs in through frontend routes with a cookie jar,
+checks frontend session and authenticated rendering, and creates and renders a source
+through the frontend API bridge. Explicit occupied ports are refused and either child
+exiting fails the test. CI passes the dynamic frontend and backend URLs to both services,
+starts pgvector, validates Compose and both container builds, scans dependencies, secrets,
+configuration and images, and fails if any backend test is skipped.
 
 ## Risks (generated)
 
