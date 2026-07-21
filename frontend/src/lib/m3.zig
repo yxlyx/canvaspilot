@@ -8,11 +8,11 @@ const config = @import("config.zig");
 const session = @import("session.zig");
 const ui = @import("ui.zig");
 
-pub const Access = enum { demo, unavailable, login };
+pub const Access = enum { demo, live, login };
 
 pub fn accessFor(mock_enabled: bool, requested_mock: ?[]const u8, authenticated: bool) Access {
     if (mock_enabled and requested_mock != null and std.mem.eql(u8, requested_mock.?, "1")) return .demo;
-    return if (authenticated) .unavailable else .login;
+    return if (authenticated) .live else .login;
 }
 
 pub fn isExplicitDemo(req: mer.Request) bool {
@@ -24,25 +24,22 @@ pub fn access(req: mer.Request) Access {
 }
 
 pub fn gate(req: mer.Request, feature: []const u8) ?mer.Response {
-    switch (access(req)) {
-        .demo => return null,
-        .login => return mer.redirect("/login", .see_other),
-        .unavailable => {},
-    }
+    _ = feature;
+    return if (access(req) == .login) mer.redirect("/login", .see_other) else null;
+}
 
+pub fn liveError(req: mer.Request, feature: []const u8, status: u16) mer.Response {
+    if (status == 401) {
+        const cookies = req.allocator.alloc(mer.SetCookie, 1) catch return mer.internalError("session clear failed");
+        cookies[0] = session.clearCookie();
+        return mer.withCookies(mer.redirect("/login", .see_other), cookies);
+    }
     var buf = ui.buildHtml(req.allocator);
-    const w = &buf.writer;
     const safe_feature = ui.escapeSafe(req.allocator, feature);
-    w.print(
-        \\<header class="cp-page-header"><div><h1 class="cp-page-title">{s}</h1>
-        \\<p class="cp-page-sub">Signed in, but live Milestone 3 data is unavailable.</p></div></header>
-        \\<section class="cp-card cp-unavailable" aria-labelledby="m3-unavailable-title">
-        \\  <div class="cp-demo-label cp-live-label">Live unavailable</div>
-        \\  <h2 id="m3-unavailable-title">Backend contract not implemented</h2>
-        \\  <p>This frontend does not substitute demo fixtures for your live workspace. The controls remain unavailable until the corresponding backend endpoint is delivered.</p>
-        \\  <a class="cp-btn cp-btn-ghost" href="/dashboard">Return to workspace</a>
-        \\</section>
-    , .{safe_feature}) catch return mer.internalError("M3 unavailable state failed");
+    buf.writer.print(
+        "<header class=\"cp-page-header\"><div><h1 class=\"cp-page-title\">{s}</h1><p class=\"cp-page-sub\">Live workspace</p></div></header><section class=\"cp-card cp-unavailable\" role=\"alert\"><h2>Service unavailable</h2><p>WikiBase could not load this live data (backend status {d}). No demo data has been substituted.</p><a class=\"cp-btn cp-btn-ghost\" href=\"\">Try again</a></section>",
+        .{ safe_feature, status },
+    ) catch return mer.internalError("M3 error state failed");
     return ui.htmlResponse(&buf);
 }
 
@@ -103,4 +100,56 @@ pub fn safeInternalHref(raw: []const u8, fallback: []const u8) []const u8 {
         if (c <= 0x20 or c == 0x7f or c == '\\') return fallback;
     }
     return raw;
+}
+
+pub fn pageOffset(raw: ?[]const u8, page_size: usize) usize {
+    const page = std.fmt.parseInt(usize, raw orelse "1", 10) catch return 0;
+    if (page < 1) return 0;
+    return std.math.mul(usize, page - 1, page_size) catch 0;
+}
+
+pub fn safeId(raw: []const u8, fallback: []const u8) []const u8 {
+    if (raw.len == 0 or raw.len > 128) return fallback;
+    for (raw) |c| switch (c) {
+        'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {},
+        else => return fallback,
+    };
+    return raw;
+}
+
+pub fn safeExportFilename(allocator: std.mem.Allocator, title: []const u8) ![]const u8 {
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    defer out.deinit();
+    var last_dash = false;
+    for (title) |c| {
+        const lower = std.ascii.toLower(c);
+        if (std.ascii.isAlphanumeric(lower)) {
+            try out.writer.writeByte(lower);
+            last_dash = false;
+        } else if (!last_dash and out.written().len > 0) {
+            try out.writer.writeByte('-');
+            last_dash = true;
+        }
+    }
+    var stem: []const u8 = out.written();
+    while (stem.len > 0 and stem[stem.len - 1] == '-') stem = stem[0 .. stem.len - 1];
+    if (stem.len == 0) stem = "wikibase-export";
+    return std.fmt.allocPrint(allocator, "{s}.md", .{stem});
+}
+
+pub fn meterValue(estimate: anytype) ?u8 {
+    const value = estimate orelse return null;
+    return switch (@typeInfo(@TypeOf(value))) {
+        .int, .comptime_int => if (value <= 100) @intCast(value) else null,
+        .float, .comptime_float => if (std.math.isFinite(value) and value >= 0 and value <= 1) @intFromFloat(@round(value * 100)) else null,
+        else => null,
+    };
+}
+
+pub fn meterPercent(estimate: ?f64) ?u8 {
+    const value = estimate orelse return null;
+    return if (std.math.isFinite(value) and value >= 0 and value <= 100)
+        @intFromFloat(@round(value))
+    else
+        null;
 }

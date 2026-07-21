@@ -1,7 +1,7 @@
 // app/wiki/index.zig — generated wiki index for the M2 prototype.
 //
-// Lists generated workspace wiki pages. Authenticated sessions request backend
-// wiki metadata and fall back to fixture pages when unavailable.
+// Lists generated workspace wiki pages. Live sessions use backend metadata;
+// fixtures are reachable only through the explicit demo gate.
 
 const std = @import("std");
 const mer = @import("mer");
@@ -14,22 +14,14 @@ pub const meta: mer.Meta = .{
 
 pub fn render(req: mer.Request) mer.Response {
     const session = lib.session.fromRequest(req);
-    const use_mock = req.queryParam("mock") != null or !session.isAuthenticated();
+    if (lib.m3.access(req) == .login) return mer.redirect("/login", .see_other);
+    const use_mock = lib.m3.isExplicitDemo(req);
     var live_pages: ?[]const lib.types.WikiPageResponse = null;
-    var backend_message: ?[]const u8 = if (use_mock) "Showing prototype wiki fixtures." else null;
+    const backend_message: ?[]const u8 = if (use_mock) "Explicit demo · showing synthetic wiki fixtures." else null;
 
     if (!use_mock) {
         const result = lib.backend.listWikiPages(req.allocator, session.token);
-        if (result.value) |parsed_pages| {
-            if (parsed_pages.value.len > 0) {
-                live_pages = parsed_pages.value;
-                backend_message = null;
-            } else {
-                backend_message = "No generated backend wiki pages yet — showing prototype fixtures.";
-            }
-        } else {
-            backend_message = "Backend wiki metadata is unavailable — showing prototype fixtures.";
-        }
+        if (result.value) |parsed_pages| live_pages = parsed_pages.value else return lib.m3.liveError(req, "Wiki", result.status);
     }
 
     var page_count: usize = 0;
@@ -69,7 +61,7 @@ pub fn render(req: mer.Request) mer.Response {
     w.writeAll("</section>\n") catch return mer.internalError("wiki index render failed");
 
     if (backend_message) |message| {
-        const safe_message = lib.ui.escape(req.allocator, message) catch message;
+        const safe_message = lib.ui.escapeSafe(req.allocator, message);
         w.print("<div class=\"cp-status-banner cp-status-info\">{s}</div>\n", .{safe_message}) catch return mer.internalError("wiki index render failed");
     }
 
@@ -99,6 +91,14 @@ pub fn render(req: mer.Request) mer.Response {
         \\</section>
     ) catch return mer.internalError("wiki index render failed");
 
+    if (live_pages) |pages| {
+        w.writeAll("<section class=\"cp-card\" aria-labelledby=\"export-title\"><h2 id=\"export-title\">Export Markdown workspace</h2><p>Select one or more current pages. The backend creates a canonical ZIP archive; no browser-derived Markdown is used.</p><form method=\"post\" action=\"/api/m3\" data-wiki-export><fieldset><legend>Pages to include</legend>") catch return mer.internalError("wiki export render failed");
+        for (pages) |page| if (!std.mem.eql(u8, page.page_type, "index")) w.print("<label class=\"cp-check-row\"><input type=\"checkbox\" name=\"page_ids\" value=\"{s}\"> {s}</label>", .{ lib.ui.escapeSafe(req.allocator, page.id), lib.ui.escapeSafe(req.allocator, page.title) }) catch return mer.internalError("wiki export render failed");
+        w.writeAll("</fieldset><div class=\"cp-action-row\"><button class=\"cp-btn cp-btn-primary\" name=\"selection\" value=\"selected\" type=\"submit\">Download selected pages</button><button class=\"cp-btn cp-btn-ghost\" name=\"selection\" value=\"all\" type=\"submit\">Download full workspace</button></div><p class=\"cp-form-status\" role=\"status\" aria-live=\"polite\"></p></form></section><script src=\"/m3.js\" defer></script>") catch return mer.internalError("wiki export render failed");
+    } else {
+        w.writeAll("<section class=\"cp-card\" aria-labelledby=\"export-title\"><h2 id=\"export-title\">Export Markdown workspace</h2><p>This preview would export selected pages or the full workspace as a canonical backend ZIP.</p><div class=\"cp-action-row\"><button class=\"cp-btn cp-btn-primary\" type=\"button\" disabled>Download selected pages</button><button class=\"cp-btn cp-btn-ghost\" type=\"button\" disabled>Download full workspace</button></div><p class=\"cp-muted-copy\">Export is unavailable in synthetic demo mode; no browser-derived file is created.</p></section>") catch return mer.internalError("wiki export render failed");
+    }
+
     return lib.ui.htmlResponse(&buf);
 }
 
@@ -124,8 +124,8 @@ fn safeSlug(raw: []const u8) []const u8 {
 }
 
 fn renderLivePageRow(req: mer.Request, w: *std.Io.Writer, page: lib.types.WikiPageResponse) !void {
-    const safe_title = lib.ui.escape(req.allocator, page.title) catch page.title;
-    const safe_summary = lib.ui.escape(req.allocator, page.summary) catch page.summary;
+    const safe_title = lib.ui.escapeSafe(req.allocator, page.title);
+    const safe_summary = lib.ui.escapeSafe(req.allocator, page.summary);
     const href = std.fmt.allocPrint(req.allocator, "/wiki/{s}", .{safeSlug(page.slug)}) catch "/wiki";
     const safe_href = lib.ui.escape(req.allocator, href) catch "/wiki";
     const plural: []const u8 = if (page.citation_count == 1) "citation" else "citations";
@@ -139,8 +139,8 @@ fn renderLivePageRow(req: mer.Request, w: *std.Io.Writer, page: lib.types.WikiPa
 }
 
 fn renderMockPageRow(req: mer.Request, w: *std.Io.Writer, page: lib.types.WikiPage) !void {
-    const safe_title = lib.ui.escape(req.allocator, page.title) catch page.title;
-    const safe_summary = lib.ui.escape(req.allocator, page.summary) catch page.summary;
+    const safe_title = lib.ui.escapeSafe(req.allocator, page.title);
+    const safe_summary = lib.ui.escapeSafe(req.allocator, page.summary);
     const href = std.fmt.allocPrint(req.allocator, "/wiki/{s}", .{page.slug}) catch "/wiki/immutable-lists";
     const count = page.citations.len;
     const plural: []const u8 = if (count == 1) "citation" else "citations";

@@ -2,7 +2,7 @@ import re
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -13,6 +13,7 @@ from app.models.source_chunk import SourceChunk
 from app.models.user import User
 from app.models.wiki import WikiPage
 from app.schemas.m3 import StudyOutputGenerateRequest
+from app.services.pagination import decode_cursor, encode_cursor
 
 MIN_EVIDENCE_CHARS = 40
 MAX_EVIDENCE_ITEMS = 12
@@ -225,20 +226,44 @@ async def generate_study_output(
                 snippet=_sentence(item.text, 240),
             )
         )
-    await db.commit()
+    await db.flush()
     await db.refresh(output, attribute_names=["citations"])
     return output
 
 
-async def list_study_outputs(user: User, db: AsyncSession) -> list[StudyOutput]:
+async def list_study_outputs(
+    user: User, db: AsyncSession, limit: int = 20, offset: int = 0
+) -> list[StudyOutput]:
     result = await db.execute(
         select(StudyOutput)
         .options(selectinload(StudyOutput.citations))
         .where(StudyOutput.user_id == user.id)
-        .order_by(StudyOutput.created_at.desc())
-        .limit(100)
+        .order_by(StudyOutput.created_at.desc(), StudyOutput.id.desc())
+        .offset(offset)
+        .limit(limit)
     )
     return list(result.scalars().unique().all())
+
+
+async def page_study_outputs(
+    user: User, db: AsyncSession, limit: int = 20, cursor: str | None = None
+) -> tuple[list[StudyOutput], str | None]:
+    statement = (
+        select(StudyOutput)
+        .options(selectinload(StudyOutput.citations))
+        .where(StudyOutput.user_id == user.id)
+        .order_by(StudyOutput.created_at.desc(), StudyOutput.id.desc())
+    )
+    if cursor is not None:
+        statement = statement.where(
+            tuple_(StudyOutput.created_at, StudyOutput.id) < decode_cursor(cursor)
+        )
+    rows = list((await db.execute(statement.limit(limit + 1))).scalars().unique().all())
+    items = rows[:limit]
+    next_cursor = (
+        encode_cursor(items[-1].created_at, items[-1].id) if len(rows) > limit and items else None
+    )
+    return items, next_cursor
 
 
 async def get_study_output(user: User, output_id: uuid.UUID, db: AsyncSession) -> StudyOutput:

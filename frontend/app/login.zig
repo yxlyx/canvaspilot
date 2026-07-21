@@ -49,7 +49,7 @@ pub fn render(req: mer.Request) mer.Response {
     ) catch return mer.internalError("login render failed");
 
     if (req.queryParam("error")) |err| {
-        const safe = lib.ui.escape(req.allocator, errorText(err)) catch errorText(err);
+        const safe = lib.ui.escapeSafe(req.allocator, errorText(err));
         w.print("<div class=\"cp-status-banner cp-status-error\">{s}</div>\n", .{safe}) catch return mer.internalError("login render failed");
     } else if (req.queryParam("signed_out") != null) {
         w.writeAll("<div class=\"cp-status-banner cp-status-info\">You have been signed out.</div>\n") catch return mer.internalError("login render failed");

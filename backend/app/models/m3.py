@@ -12,6 +12,7 @@ from sqlalchemy import (
     LargeBinary,
     String,
     Text,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -19,9 +20,30 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, TimestampMixin, gen_uuid
 
 
+class IdempotencyRecord(Base):
+    __tablename__ = "idempotency_records"
+    __table_args__ = (
+        Index("uq_idempotency_records_user_key", "user_id", "idempotency_key", unique=True),
+        Index("ix_idempotency_records_created_at", "created_at"),
+        Index("ix_idempotency_records_expires_at", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=gen_uuid)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    operation: Mapped[str] = mapped_column(String(200))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    response_status: Mapped[int | None] = mapped_column(Integer)
+    response_body: Mapped[dict | list | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="now()")
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now() + interval '24 hours'")
+    )
+
+
 class StudyOutput(TimestampMixin, Base):
     __tablename__ = "study_outputs"
-    __table_args__ = (Index("ix_study_outputs_user_created", "user_id", "created_at"),)
+    __table_args__ = (Index("ix_study_outputs_user_created", "user_id", "created_at", "id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=gen_uuid)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
@@ -108,7 +130,7 @@ class HealthFinding(Base):
 
 class MarkedPaper(TimestampMixin, Base):
     __tablename__ = "marked_papers"
-    __table_args__ = (Index("ix_marked_papers_user_created", "user_id", "created_at"),)
+    __table_args__ = (Index("ix_marked_papers_user_created", "user_id", "created_at", "id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=gen_uuid)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))

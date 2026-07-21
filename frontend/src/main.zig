@@ -165,7 +165,7 @@ test "M3 demo requires server and query opt-in" {
     try testing.expectEqual(lib.m3.Access.login, lib.m3.accessFor(false, "1", false));
     try testing.expectEqual(lib.m3.Access.login, lib.m3.accessFor(true, null, false));
     try testing.expectEqual(lib.m3.Access.login, lib.m3.accessFor(true, "true", false));
-    try testing.expectEqual(lib.m3.Access.unavailable, lib.m3.accessFor(true, "0", true));
+    try testing.expectEqual(lib.m3.Access.live, lib.m3.accessFor(true, "0", true));
     try testing.expect(lib.config.parseEnabled("true"));
     try testing.expect(lib.config.parseEnabled("TRUE"));
     try testing.expect(lib.config.parseEnabled("1"));
@@ -201,6 +201,24 @@ test "M3 demo links preserve explicit mode" {
     const empty_query = try lib.m3.demoHrefFor(testing.allocator, true, "/outputs?#preview");
     defer testing.allocator.free(empty_query);
     try testing.expectEqualStrings("/outputs?mock=1#preview", empty_query);
+}
+
+test "M3 meters preserve unknown and reject fabricated percentages" {
+    try testing.expectEqual(@as(?u8, 78), lib.m3.meterValue(@as(?u8, 78)));
+    try testing.expectEqual(@as(?u8, null), lib.m3.meterValue(@as(?u8, 101)));
+    try testing.expectEqual(@as(?u8, 63), lib.m3.meterValue(@as(?f64, 0.625)));
+    try testing.expectEqual(@as(?u8, null), lib.m3.meterValue(@as(?f64, null)));
+    try testing.expectEqual(@as(?u8, null), lib.m3.meterValue(@as(?f64, -0.1)));
+    try testing.expectEqual(@as(?u8, 73), lib.m3.meterPercent(72.5));
+    try testing.expectEqual(@as(?u8, 1), lib.m3.meterPercent(1.0));
+    try testing.expectEqual(@as(?u8, null), lib.m3.meterPercent(100.1));
+    try testing.expectEqual(@as(usize, 1_999_980), lib.m3.pageOffset("100000", 20));
+}
+
+test "M3 export filenames are stable and path safe" {
+    const filename = try lib.m3.safeExportFilename(testing.allocator, " ../My Study: Guide ");
+    defer testing.allocator.free(filename);
+    try testing.expectEqualStrings("my-study-guide.md", filename);
 }
 
 test "M3 internal links reject external and ambiguous paths" {

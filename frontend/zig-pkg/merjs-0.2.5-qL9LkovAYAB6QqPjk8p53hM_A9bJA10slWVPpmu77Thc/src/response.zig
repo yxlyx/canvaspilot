@@ -14,6 +14,8 @@ pub const ContentType = enum {
     ico,
     webp,
     octet_stream,
+    markdown,
+    zip,
     /// Internal sentinel used by redirect(). server.zig emits Location header.
     redirect,
 
@@ -32,6 +34,8 @@ pub const ContentType = enum {
             .ico => "image/x-icon",
             .webp => "image/webp",
             .octet_stream => "application/octet-stream",
+            .markdown => "text/markdown; charset=utf-8",
+            .zip => "application/zip",
             .redirect => "text/html; charset=utf-8",
         };
     }
@@ -80,6 +84,8 @@ pub const Response = struct {
     body: []const u8,
     /// Cookies to emit as Set-Cookie headers. Slice must outlive the Response.
     cookies: []const SetCookie = &.{},
+    /// Additional response headers for bounded proxies and downloads.
+    headers: []const std.http.Header = &.{},
 
     pub fn init(status: std.http.Status, ct: ContentType, body: []const u8) Response {
         return .{ .status = status, .content_type = ct, .body = body };

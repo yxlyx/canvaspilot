@@ -1142,3 +1142,16 @@ a:focus-visible, .cp-btn:focus-visible, .cp-chip:focus-visible, .cp-tab:focus-vi
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
+
+/* Milestone 3 live workspaces */
+.cp-selector-grid,.cp-provider-grid,.cp-meter-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,16rem),1fr));gap:16px}
+.cp-list-grid,.cp-timeline{display:grid;gap:16px;list-style:none;padding:0}.cp-list-heading{grid-column:1/-1}
+.cp-provider-card,.cp-meter-card,.cp-finding{min-width:0}.cp-provider-form{display:grid;gap:12px}
+.cp-filter-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:16px 0}.cp-filter-row a{padding:8px 12px}.cp-filter-active,.cp-filter-row [aria-current="page"]{font-weight:700;text-decoration:underline}
+.cp-state{display:inline-block;padding:4px 9px;border-radius:999px;background:var(--cp-surface-2);font-size:13px;font-weight:700;text-transform:capitalize}
+.cp-boundary,.cp-privacy-note,.cp-unavailable{border-inline-start:4px solid var(--cp-accent)}.cp-warning-label,.cp-state-warning,.cp-state-stale{color:var(--cp-warning)}.cp-state-failed,.cp-state-error,.cp-error{color:var(--cp-danger)}
+.cp-form-status{display:block;min-height:1.5em;margin-top:8px}.cp-unknown-meter{padding:12px;background:var(--cp-surface-2);border-radius:8px}meter{width:min(16rem,100%);margin:8px}
+.cp-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(8rem,1fr));gap:12px}.cp-facts div{padding:8px;background:var(--cp-surface-2)}.cp-facts dt{font-weight:700}.cp-facts dd{margin:0}
+.cp-diff{max-width:100%;max-height:32rem;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:16px;background:#10131a;color:#f2f4f8;border-radius:8px}.cp-diff-addition{color:#8ee8ac}.cp-diff-deletion{color:#ff9d9d}
+.cp-check-row{display:block;padding:7px}.cp-export-bar{margin-bottom:16px}.cp-recommendation{margin-top:16px;padding:16px;border:1px solid var(--cp-border)}textarea{width:100%;min-height:7rem;resize:vertical}
+@media(max-width:760px){.cp-selector-grid,.cp-provider-grid,.cp-meter-grid{grid-template-columns:1fr}.cp-bottomnav{display:flex;overflow-x:auto;justify-content:flex-start}.cp-bottom-item{flex:0 0 auto;min-width:5.25rem}.cp-page-header{align-items:flex-start}.cp-diff{font-size:12px}}

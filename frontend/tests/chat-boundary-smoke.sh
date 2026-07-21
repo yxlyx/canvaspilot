@@ -278,6 +278,13 @@ assert_status 200
 assert_json_field source mock
 assert_contains '/sources?type=announcement&mock=1'
 
+request "$BASE_URL/api/chat" \
+    --header 'Content-Type: application/json' \
+    --data '{"message":"anonymous live boundary check"}'
+assert_status 401
+assert_json_field error 'authentication required'
+assert_backend_count 0
+
 request "$BASE_URL/api/sync?mock=1" --header 'Cookie: cp_session=chat-boundary' --data 'action=sync'
 assert_status 400
 assert_contains 'sync is unavailable in demo mode'

@@ -145,7 +145,7 @@ async def configure_provider(
         setting.encryption_key_id = key_id
         setting.status = "configured"
         setting.last_tested_at = None
-    await db.commit()
+    await db.flush()
     await db.refresh(setting)
     return setting
 
@@ -212,7 +212,7 @@ async def test_provider(user: User, provider: str, db: AsyncSession) -> Provider
         valid = False
     setting.status = "connected" if valid else "invalid"
     setting.last_tested_at = datetime.now(UTC)
-    await db.commit()
+    await db.flush()
     await db.refresh(setting)
     if not valid:
         raise WikiBaseError(
@@ -224,4 +224,4 @@ async def test_provider(user: User, provider: str, db: AsyncSession) -> Provider
 async def disconnect_provider(user: User, provider: str, db: AsyncSession) -> None:
     setting = await _owned_setting(user, provider, db)
     await db.delete(setting)
-    await db.commit()
+    await db.flush()
