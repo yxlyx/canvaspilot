@@ -5,7 +5,8 @@
 # Multi-stage build:
 #   1. `build` installs Zig 0.16, vendors merjs from zig-pkg/, runs codegen and
 #      compiles the `app` binary in ReleaseSafe mode.
-#   2. The runtime image is a slim Debian with the binary + public/ assets.
+#   2. The runtime image is a package-free scratch image with the static-musl
+#      binary, CA trust bundle, and public/ assets.
 #
 # Targets Railway by default (PORT env, binds 0.0.0.0). Works on any container
 # host: Fly.io, Render, Cloud Run, plain Docker, etc. See DEPLOY.md.
@@ -43,25 +44,27 @@ COPY . .
 
 ENV ZIG_GLOBAL_CACHE_DIR=/tmp/.zig-cache-global
 
-RUN zig build -Doptimize=ReleaseSafe
+RUN set -eux; \
+    case "$(uname -m)" in \
+        x86_64) TARGET=x86_64-linux-musl ;; \
+        aarch64) TARGET=aarch64-linux-musl ;; \
+        *) printf 'unsupported architecture\n' >&2; exit 1 ;; \
+    esac; \
+    zig build -Doptimize=ReleaseSafe -Dtarget="$TARGET"
 
 # ── runtime stage ───────────────────────────────────────────────────────────
-FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
+FROM scratch
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --create-home --uid 10001 wikibase
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=build --chown=10001:10001 /src/zig-out/bin/app /app/app
+COPY --from=build --chown=10001:10001 /src/public /app/public
 
 WORKDIR /app
-COPY --from=build /src/zig-out/bin/app /app/app
-COPY --from=build /src/public /app/public
+USER 10001:10001
 
-USER wikibase
-
-# Railway injects $PORT; locally falls back to 3001.
+# Railway injects $PORT; the application falls back to 3001.
 ENV PORT=3001
 EXPOSE 3001
 
 # Bind 0.0.0.0 so the container is reachable from outside the network namespace.
-CMD ["sh", "-c", "/app/app --host 0.0.0.0 --port ${PORT:-3001} --no-dev"]
+CMD ["/app/app", "--host", "0.0.0.0", "--no-dev"]
