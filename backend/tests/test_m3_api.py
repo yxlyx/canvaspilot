@@ -52,11 +52,13 @@ async def m3_client() -> AsyncGenerator[tuple[AsyncClient, AsyncSession, User, U
         await session.execute(delete(User).where(User.email.in_(emails)))
         owner = User(id=uuid.uuid4(), name="M3 Owner", email=emails[0])
         other = User(id=uuid.uuid4(), name="M3 Other", email=emails[1])
+        user_ids = [owner.id, other.id]
         session.add_all([owner, other])
         await session.commit()
         principal = {"user": owner}
 
         async def override_user():
+            await session.refresh(principal["user"])
             return principal["user"]
 
         async def override_db():
@@ -75,7 +77,7 @@ async def m3_client() -> AsyncGenerator[tuple[AsyncClient, AsyncSession, User, U
         finally:
             app.dependency_overrides.clear()
             await session.rollback()
-            await session.execute(delete(User).where(User.id.in_([owner.id, other.id])))
+            await session.execute(delete(User).where(User.id.in_(user_ids)))
             await session.commit()
     await engine.dispose()
 
@@ -359,6 +361,7 @@ async def test_transient_failure_does_not_complete_idempotency_record(m3_client)
             response_type=dict,
             execute=fail,
         )
+    await session.refresh(owner)
     assert (
         await session.scalar(
             select(func.count(IdempotencyRecord.id)).where(
@@ -505,7 +508,7 @@ async def test_m3_migration_tables_and_durable_audit_columns_exist(m3_client):
         row[0]: row[1]
         for row in await session.execute(
             text(
-                "SELECT conname, confdeltype FROM pg_constraint "
+                "SELECT conname, confdeltype::text FROM pg_constraint "
                 "WHERE conname IN ('ck_marked_question_marks', "
                 "'fk_learning_evidence_marked_question')"
             )
@@ -672,8 +675,11 @@ async def test_m3_grounded_output_wiki_history_health_export_and_two_user_isolat
         json={"output_type": "summary", "wiki_page_id": source_page["id"]},
     )
     assert page_generated.status_code == 201
-    assert page_generated.json()["status"] == "grounded"
-    assert page_generated.json()["content"] == "Overview. [1]"
+    page_output = page_generated.json()
+    assert page_output["status"] == "grounded"
+    assert page_output["content"].startswith("Overview. [1]")
+    assert "Alpha evidence section 4" in page_output["content"]
+    assert len(page_output["citations"]) == 4
     output_first_page = (await client.get("/api/outputs/page?limit=1")).json()
     inserted_output = await client.post(
         "/api/outputs", json={"output_type": "outline", "source_ids": [str(first.id)]}
