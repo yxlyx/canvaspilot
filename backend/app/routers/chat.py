@@ -3,7 +3,7 @@ from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sse_starlette.sse import EventSourceResponse
+from starlette.responses import StreamingResponse
 
 from app.db.database import get_db
 from app.dependencies import get_current_user
@@ -13,6 +13,19 @@ from app.services.llm import stream_rag_response
 from app.services.retrieval import build_context, retrieve
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+
+async def _encode_sse(events: AsyncGenerator[dict[str, str], None]) -> AsyncGenerator[bytes, None]:
+    async for event in events:
+        yield f"event: {event['event']}\r\ndata: {event['data']}\r\n\r\n".encode()
+
+
+def _event_stream(events: AsyncGenerator[dict[str, str], None]) -> StreamingResponse:
+    return StreamingResponse(
+        _encode_sse(events),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("")
@@ -43,16 +56,15 @@ async def chat(
                 ),
             }
 
-        return EventSourceResponse(no_results(), media_type="text/event-stream")
+        return _event_stream(no_results())
 
     context = build_context(chunks)
 
-    return EventSourceResponse(
+    return _event_stream(
         stream_rag_response(
             query=chat_request.message,
             context=context,
             chunks=chunks,
             history=chat_request.history,
-        ),
-        media_type="text/event-stream",
+        )
     )

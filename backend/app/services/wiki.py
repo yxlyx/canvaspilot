@@ -383,6 +383,7 @@ async def compile_workspace_wiki(
                 source_ids=draft.source_ids,
                 citation_count=0,
                 backlinks=[],
+                citations=[],
             )
             db.add(page)
             await db.flush()
@@ -436,6 +437,7 @@ async def compile_workspace_wiki(
             source_ids=[],
             citation_count=0,
             backlinks=[],
+            citations=[],
         )
         db.add(index_page)
         await db.flush()
@@ -466,7 +468,7 @@ async def compile_workspace_wiki(
 
     await db.commit()
     for page in stored_pages:
-        await db.refresh(page, attribute_names=["citations"])
+        await db.refresh(page, attribute_names=["citations", "updated_at"])
     return stored_pages
 
 
