@@ -64,16 +64,16 @@ pub fn render(req: mer.Request) mer.Response {
 
     if (req.queryParam("attempt")) |attempt| {
         if (std.mem.eql(u8, attempt, "saved")) {
-            w.writeAll("<div class=\"cp-status-banner cp-status-info\">Practice result saved to learning evidence.</div>\n") catch return mer.internalError("flashcards render failed");
+            w.writeAll("<div class=\"cp-status-banner cp-status-info\" role=\"status\" aria-live=\"polite\">Practice result saved to learning evidence.</div>\n") catch return mer.internalError("flashcards render failed");
         } else if (std.mem.eql(u8, attempt, "failed")) {
-            w.writeAll("<div class=\"cp-status-banner cp-status-error\">Practice result could not be saved. Your answer was not recorded; try again.</div>\n") catch return mer.internalError("flashcards render failed");
+            w.writeAll("<div class=\"cp-status-banner cp-status-error\" role=\"alert\">Practice result could not be saved. Your answer was not recorded; try again.</div>\n") catch return mer.internalError("flashcards render failed");
         }
     }
     if (live_decks) |decks| {
         if (decks.len == 0) {
             renderMetrics(w, 0, 0, 0) catch return mer.internalError("flashcards render failed");
             w.writeAll("<section class=\"cp-card\"><div class=\"cp-empty\">No flashcard decks have been generated yet.</div></section>") catch return mer.internalError("flashcards render failed");
-            return lib.ui.htmlResponse(&buf);
+            return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
         }
         return renderLiveDecks(req, w, &buf, decks, selected_deck_id, now_secs);
     }
@@ -109,7 +109,7 @@ fn renderLiveDecks(
         renderLiveFlashcard(req, w, selected_deck.id, card, index + 1) catch return mer.internalError("flashcards render failed");
     }
     renderLayoutEnd(w) catch return mer.internalError("flashcards render failed");
-    return lib.ui.htmlResponse(buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(buf));
 }
 
 fn renderMockDecks(
@@ -134,7 +134,7 @@ fn renderMockDecks(
         renderQueueHeader(w, 0, "Deck not found", "No deck matches that id.", 0) catch return mer.internalError("flashcards render failed");
         w.writeAll("      <div class=\"cp-empty\">No deck matches the requested id. Pick one from the list.</div>\n") catch return mer.internalError("flashcards render failed");
         renderLayoutEnd(w) catch return mer.internalError("flashcards render failed");
-        return lib.ui.htmlResponse(buf);
+        return lib.m3.privateForSession(req, lib.ui.htmlResponse(buf));
     }
     const deck = selected_deck.?;
 
@@ -164,7 +164,7 @@ fn renderMockDecks(
         w.writeAll("      <div class=\"cp-empty\">This deck does not have generated cards yet.</div>\n") catch return mer.internalError("flashcards render failed");
     }
     renderLayoutEnd(w) catch return mer.internalError("flashcards render failed");
-    return lib.ui.htmlResponse(buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(buf));
 }
 
 fn renderMetrics(w: *std.Io.Writer, deck_total: usize, card_total: usize, selected_cards: usize) !void {

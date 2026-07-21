@@ -2,6 +2,9 @@ const { test, expect } = require("@playwright/test");
 const fs = require("node:fs");
 const path = require("node:path");
 
+const playwrightPort = process.env.PLAYWRIGHT_PORT || "3101";
+const cookieURL = new URL("/", process.env.PLAYWRIGHT_BASE_URL || `http://127.0.0.1:${playwrightPort}`).toString();
+
 test("private mutation forms fail closed as POST when JavaScript is unavailable", async () => {
   for (const relative of ["app/settings/providers.zig", "app/marked-papers/index.zig", "app/marked-papers/[id].zig"]) {
     const source = fs.readFileSync(path.join(__dirname, "../..", relative), "utf8");
@@ -33,7 +36,7 @@ test("anonymous explicit demo shell shows sign in and never sign out", async ({ 
 });
 
 test("live backend failure is unavailable and never falls back", async ({ context, page }) => {
-  await context.addCookies([{ name: "cp_session", value: "browser-token", url: "http://127.0.0.1:3101", httpOnly: true, sameSite: "Lax" }]);
+  await context.addCookies([{ name: "cp_session", value: "browser-token", url: cookieURL, httpOnly: true, sameSite: "Lax" }]);
   await page.goto("/outputs");
   await expect(page.getByRole("heading", { name: "Service unavailable" })).toBeVisible();
   await expect(page.getByText(/No demo data has been substituted/)).toBeVisible();
@@ -66,8 +69,8 @@ test("navigation is keyboard reachable at narrow viewport and preserves demo mod
 });
 
 test("mobile Menu works without JavaScript and exposes POST sign-out", async ({ browser }) => {
-  const context = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 360, height: 640 } });
-  await context.addCookies([{ name: "cp_session", value: "browser-token", url: "http://127.0.0.1:3101" }]);
+  const context = await browser.newContext({ baseURL: cookieURL, javaScriptEnabled: false, viewport: { width: 360, height: 640 } });
+  await context.addCookies([{ name: "cp_session", value: "browser-token", url: cookieURL }]);
   const page = await context.newPage();
   await page.goto("/outputs?mock=1");
   const menu = page.locator(".cp-mobile-more");
@@ -150,7 +153,7 @@ test("structured FastAPI errors are readable, announced, and focused", async ({ 
 });
 
 test("malformed health IDs render a health-specific client error", async ({ context, page }) => {
-  await context.addCookies([{ name: "cp_session", value: "browser-token", url: "http://127.0.0.1:3101" }]);
+  await context.addCookies([{ name: "cp_session", value: "browser-token", url: cookieURL }]);
   const response = await page.goto("/health/not%20valid");
   expect(response.status()).toBe(400);
   await expect(page.getByRole("heading", { name: "Invalid health finding" })).toBeVisible();

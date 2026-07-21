@@ -6,9 +6,11 @@ from types import SimpleNamespace
 import pytest
 from cryptography.fernet import Fernet
 from pydantic import ValidationError
+from sse_starlette.sse import EventSourceResponse
 
 from app.config import Settings
 from app.exceptions import WikiBaseError
+from app.routers.chat import _event_stream
 from app.schemas.chat import ChatRequest
 from app.schemas.m3 import (
     MarkedPaperQuestionCreate,
@@ -23,6 +25,25 @@ from app.services.meters import TopicEvidence, calculate_topic_meter
 from app.services.providers import decrypt_provider_key, encrypt_provider_key, endpoint_for
 from app.services.study_outputs import Evidence, build_grounded_markdown
 from app.services.workspace_health import _workspace_status_finding
+
+
+@pytest.mark.asyncio
+async def test_chat_event_stream_keeps_sse_transport_safeguards():
+    async def events():
+        yield {"event": "done", "data": "{}"}
+
+    response = _event_stream(events())
+    body = b"".join([chunk async for chunk in response.body_iterator])
+
+    assert isinstance(response, EventSourceResponse)
+    assert response._ping_interval == 15
+    assert body == b"event: done\r\ndata: {}\r\n\r\n"
+    assert dict(response.raw_headers) == {
+        b"cache-control": b"no-store",
+        b"connection": b"keep-alive",
+        b"x-accel-buffering": b"no",
+        b"content-type": b"text/event-stream; charset=utf-8",
+    }
 
 
 @pytest.mark.parametrize("environment", ["production", "staging", "development"])

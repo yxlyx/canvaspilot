@@ -73,7 +73,7 @@ fn renderLivePage(
         , .{ safe_citation_title, safe_ref, safe_snippet }) catch return mer.internalError("wiki render failed");
     }
     renderPageEnd(req, w) catch return mer.internalError("wiki render failed");
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
 fn renderMockPage(
@@ -117,7 +117,7 @@ fn renderMockPage(
         , .{ citation_href, safe_citation_title, safe_snippet }) catch return mer.internalError("wiki render failed");
     }
     renderPageEnd(req, w) catch return mer.internalError("wiki render failed");
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
 fn renderHeader(req: mer.Request, w: *std.Io.Writer, title: []const u8, summary: []const u8) !void {
@@ -207,5 +207,5 @@ fn renderMissing(req: mer.Request, slug: []const u8, demo: bool) mer.Response {
         \\</section>
     , .{ missing_copy, safe_slug, wiki_href, dashboard_href }) catch return mer.internalError("wiki render failed");
 
-    return .{ .status = .not_found, .content_type = .html, .body = buf.written() };
+    return lib.m3.privateForSession(req, .{ .status = .not_found, .content_type = .html, .body = buf.written() });
 }

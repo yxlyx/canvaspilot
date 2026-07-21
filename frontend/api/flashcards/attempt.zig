@@ -44,6 +44,9 @@ pub fn render(req: mer.Request) mer.Response {
     if (lib.m3.isExplicitDemo(req)) {
         return mer.badRequest("flashcard attempts are unavailable in demo mode");
     }
+    if (!lib.mutation.allowedForOrigin(req, lib.config.load().public_origin)) {
+        return .{ .status = .forbidden, .content_type = .text, .body = "cross-site flashcard attempt rejected" };
+    }
 
     const session = lib.session.fromRequest(req);
     const card_id = lib.form.value(req.allocator, req.body, "card_id") catch null;
@@ -92,4 +95,16 @@ test "flashcard attempt fields accept only exact supported values" {
     try std.testing.expect(parseConfidence("6") == null);
     try std.testing.expect(parseConfidence("01") == null);
     try std.testing.expect(parseConfidence("3 ") == null);
+}
+
+test "flashcard attempts reject cross-site requests before backend access" {
+    var req = mer.Request.init(std.testing.allocator, .POST, "/api/flashcards/attempt");
+    req.headers = &.{
+        .{ .name = "Origin", .value = "https://cross-site.invalid" },
+        .{ .name = "Sec-Fetch-Site", .value = "cross-site" },
+    };
+    try std.testing.expectEqual(std.http.Status.forbidden, render(req).status);
+
+    req.headers = &.{};
+    try std.testing.expectEqual(std.http.Status.forbidden, render(req).status);
 }

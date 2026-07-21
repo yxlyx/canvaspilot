@@ -37,7 +37,7 @@ pub fn render(req: mer.Request) mer.Response {
     }
     if (shown == 0) w.writeAll("<div class=\"cp-empty\">No findings match this severity.</div>") catch return mer.internalError("health render failed");
     w.writeAll("</section>") catch return mer.internalError("health render failed");
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
 fn renderLive(req: mer.Request) mer.Response {
@@ -55,7 +55,7 @@ fn renderLive(req: mer.Request) mer.Response {
     }
     if (shown == 0) w.writeAll(if (findings.len == 0) "<div class=\"cp-empty\"><h2>No current findings</h2><p>Run health checks to establish the current workspace state.</p></div>" else "<div class=\"cp-empty\">No findings match this filter.</div>") catch return mer.internalError("health render failed");
     w.writeAll("</section><script src=\"/m3.js?v=20260721\" defer></script>") catch return mer.internalError("health render failed");
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
 fn filterLink(req: mer.Request, w: *std.Io.Writer, label: []const u8, path: []const u8, active: bool) !void {

@@ -328,7 +328,7 @@ pub fn render(req: mer.Request) mer.Response {
         w.print("<div class=\"cp-status-banner cp-status-warn\" style=\"margin-top:16px\">{d} source import is still processing; the source library shows the loading state.</div>\n", .{processing_sources}) catch return mer.internalError("workspace render failed");
     }
 
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
 fn optionalMetricCard(
@@ -461,5 +461,5 @@ fn renderEmpty(req: mer.Request, demo: bool) mer.Response {
         w.writeAll("No workspace modules have been synced yet. Sync your account to populate this live workspace.") catch return mer.internalError("workspace render failed");
     }
     w.writeAll("</div></section>") catch return mer.internalError("workspace render failed");
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }

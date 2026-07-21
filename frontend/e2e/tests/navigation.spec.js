@@ -1,5 +1,8 @@
 const { expect, test } = require("@playwright/test");
 
+const playwrightPort = process.env.PLAYWRIGHT_PORT || "3101";
+const cookieURL = new URL("/", process.env.PLAYWRIGHT_BASE_URL || `http://127.0.0.1:${playwrightPort}`).toString();
+
 test("explicit demo chat keeps demo context through a cited source link", async ({ page }) => {
   await page.goto("/chat?mock=1");
 
@@ -36,7 +39,7 @@ test("demo mutations are unavailable and anonymous live mutations require auth",
 
 test("legacy workspace pages keep fixtures behind exact explicit demo mode", async ({ context, page }) => {
   await context.addCookies([
-    { name: "cp_session", value: "browser-boundary", url: "http://127.0.0.1:3101" },
+    { name: "cp_session", value: "browser-boundary", url: cookieURL },
   ]);
 
   await page.goto("/dashboard");
@@ -114,7 +117,7 @@ test("authenticated live chat reports backend unavailability without demo fallba
   page,
 }) => {
   await context.addCookies([
-    { name: "cp_session", value: "browser-boundary", url: "http://127.0.0.1:3101" },
+    { name: "cp_session", value: "browser-boundary", url: cookieURL },
   ]);
   await page.goto("/chat");
 

@@ -8,7 +8,7 @@ fn detailState(req: mer.Request, status: std.http.Status, title: []const u8, mes
     buf.writer.print("<header class=\"cp-page-header\"><div><a href=\"/health\">← Workspace health</a><h1 class=\"cp-page-title\">{s}</h1><p class=\"cp-page-sub\">Health finding detail</p></div></header><section class=\"cp-card cp-unavailable\" role=\"alert\"><p>{s}</p><a class=\"cp-btn cp-btn-ghost\" href=\"/health\">Return to workspace health</a></section>", .{ title, message }) catch return mer.internalError("finding state render failed");
     var response = lib.ui.htmlResponse(&buf);
     response.status = status;
-    return response;
+    return lib.m3.privateForSession(req, response);
 }
 
 pub fn render(req: mer.Request) mer.Response {
@@ -22,5 +22,5 @@ pub fn render(req: mer.Request) mer.Response {
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
     w.print("<header class=\"cp-page-header\"><div><a href=\"/health\">← Workspace health</a><h1 class=\"cp-page-title\">{s}</h1><p class=\"cp-page-sub\">Current {s} finding · {s}</p></div></header><article class=\"cp-card\"><p><strong>State:</strong> {s}</p><p>{s}</p><h2>Remediation</h2><p>{s}</p><dl><dt>Resource type</dt><dd>{s}</dd><dt>Topic</dt><dd>{s}</dd><dt>Checked</dt><dd>{s}</dd></dl></article>", .{ lib.ui.escapeSafe(req.allocator, finding.code), lib.ui.escapeSafe(req.allocator, finding.severity), lib.ui.escapeSafe(req.allocator, finding.state), lib.ui.escapeSafe(req.allocator, finding.state), lib.ui.escapeSafe(req.allocator, finding.message), lib.ui.escapeSafe(req.allocator, finding.recommendation), lib.ui.escapeSafe(req.allocator, finding.resource_type), lib.ui.escapeSafe(req.allocator, finding.topic orelse "Not topic-specific"), lib.ui.escapeSafe(req.allocator, finding.created_at) }) catch return mer.internalError("finding render failed");
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }

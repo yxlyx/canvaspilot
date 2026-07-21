@@ -130,7 +130,7 @@ pub fn render(req: mer.Request) mer.Response {
         \\</section>
     ) catch return mer.internalError("sources render failed");
 
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
 fn metricCard(w: *std.Io.Writer, label: []const u8, value: usize, helper: []const u8) !void {
@@ -156,13 +156,6 @@ fn sourceStatusClass(status: []const u8) []const u8 {
     return "cp-source-status";
 }
 
-fn safeHref(raw: []const u8, fallback: []const u8) []const u8 {
-    if (std.mem.startsWith(u8, raw, "https://")) return raw;
-    if (std.mem.startsWith(u8, raw, "http://")) return raw;
-    if (std.mem.startsWith(u8, raw, "/")) return raw;
-    return fallback;
-}
-
 fn matchesStatus(actual: []const u8, selected: []const u8) bool {
     if (selected.len == 0) return true;
     if (std.mem.eql(u8, actual, selected)) return true;
@@ -184,9 +177,9 @@ fn renderBackendSource(
     const safe_summary = lib.ui.escapeSafe(req.allocator, summary);
     const when = lib.time.formatRelative(req.allocator, source.updated_at, now_secs) catch "—";
     const action_href_raw = if (source.source_url.len > 0) source.source_url else "/chat";
-    const action_href = safeHref(action_href_raw, "/sources");
+    const action_href = lib.m3.safeSourceHref(action_href_raw, "/sources");
     const safe_action_href = lib.ui.escape(req.allocator, action_href) catch "/sources";
-    const action_copy: []const u8 = if (std.mem.startsWith(u8, action_href, "http")) "Open source" else "Ask with source";
+    const action_copy: []const u8 = if (std.mem.startsWith(u8, action_href, "/")) "Ask with source" else "Open source";
     const status_cls = sourceStatusClass(source.status);
 
     try w.print(
@@ -225,7 +218,7 @@ fn renderMockSource(
     const safe_summary = lib.ui.escapeSafe(req.allocator, source.summary);
     const when = lib.time.formatRelative(req.allocator, source.updated_at, now_secs) catch "—";
     const action_href_raw = if (source.url.len > 0) source.url else "/chat";
-    const action_href = safeHref(action_href_raw, "/sources");
+    const action_href = lib.m3.safeSourceHref(action_href_raw, "/sources");
     const demo_href = if (std.mem.startsWith(u8, action_href, "/")) try lib.m3.demoHref(req.allocator, req, action_href) else action_href;
     const safe_action_href = lib.ui.escape(req.allocator, demo_href) catch "/sources?mock=1";
     const action_copy: []const u8 = if (std.mem.startsWith(u8, action_href, "/wiki/")) "Open wiki" else if (std.mem.startsWith(u8, action_href, "http")) "Open source" else "Open source";

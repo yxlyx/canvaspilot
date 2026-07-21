@@ -10,6 +10,12 @@ export CANVAS_TOKEN_SECRET=eE-4RX-m39GFpdZXEDBtsaKZoOlMC7EpNlV9XiFrOO8=
 export PROVIDER_ENCRYPTION_SECRET=XRoe-9icgC8y3-AtmJVDwhbrRraWTUXCsSu013nHztY=
 export SECURE_COOKIES=false
 
+# Every request is bounded so a half-open local service cannot stall the smoke
+# indefinitely inside an otherwise bounded readiness loop.
+curl() {
+    command curl --connect-timeout "${CURL_CONNECT_TIMEOUT:-2}" --max-time "${CURL_MAX_TIME:-15}" "$@"
+}
+
 free_port() {
     "$PYTHON" -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
 }
@@ -107,7 +113,7 @@ wait_for() {
             cat "$log" >&2
             return 1
         fi
-        if curl --fail --silent --output /dev/null "$url"; then
+        if command curl --connect-timeout 1 --max-time 2 --fail --silent --output /dev/null "$url"; then
             kill -0 "$pid" 2>/dev/null || {
                 printf '%s child exited during readiness check\n' "$name" >&2
                 cat "$log" >&2
@@ -159,6 +165,12 @@ signin_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
 
 me=$(curl --fail --silent --cookie "$COOKIE_JAR" "$FRONTEND_URL/api/me")
 printf '%s' "$me" | "$PYTHON" -c 'import json,sys; data=json.load(sys.stdin); assert data["email"] == sys.argv[1]' "$email"
+for route in api/me dashboard; do
+    private_headers=$(curl --fail --silent --dump-header - --output /dev/null --cookie "$COOKIE_JAR" "$FRONTEND_URL/$route")
+    private_headers=$(printf '%s' "$private_headers" | tr '[:upper:]' '[:lower:]')
+    [[ "$private_headers" == *$'cache-control: private, no-store\r'* ]]
+    [[ "$private_headers" == *$'vary: cookie\r'* ]]
+done
 
 dashboard=$(curl --fail --silent --cookie "$COOKIE_JAR" "$FRONTEND_URL/dashboard")
 [[ "$dashboard" == *'<h1 class="cp-page-title">Workspace</h1>'* ]]
