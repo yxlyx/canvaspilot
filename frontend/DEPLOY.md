@@ -7,9 +7,9 @@ the deploy target, but the frontend was implemented in Zig with
 binary — so Vercel's Node runtime doesn't apply. Railway (or any other
 container host) is the natural fit instead.
 
-This directory ships a `Dockerfile` that produces a small Debian image with
-the compiled binary and the `public/` static assets. Everything below uses
-that one image.
+This directory ships a `Dockerfile` that produces a package-free scratch
+runtime with the static-musl binary, CA trust bundle, and `public/` assets.
+Everything below uses that image.
 
 ## Required environment variables
 
