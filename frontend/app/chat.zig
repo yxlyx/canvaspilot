@@ -98,5 +98,5 @@ pub fn render(req: mer.Request) mer.Response {
         \\
     ) catch return mer.internalError("chat render failed");
 
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }

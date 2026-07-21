@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+curl(){ command curl --connect-timeout "${CURL_CONNECT_TIMEOUT:-2}" --max-time "${CURL_MAX_TIME:-10}" "$@"; }
 free_port(){ python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'; }
 port_is_free(){ python3 - "$1" <<'PY'
 import socket,sys
@@ -23,7 +24,15 @@ for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
  if ! port_is_free "$port"; then echo "M3 smoke refuses invalid or occupied port: $port" >&2; exit 2; fi
 done
 TMP=$(mktemp -d); U=11111111-1111-1111-1111-111111111111
-cleanup(){ code=$?; kill ${FPID:-} ${BPID:-} 2>/dev/null || true; if [ "$code" -ne 0 ]; then echo "smoke artifacts: $TMP" >&2; cat "$TMP/frontend.log" >&2 2>/dev/null || true; else rm -rf "$TMP"; fi; }; trap cleanup EXIT INT TERM
+stop_process(){
+ pid=${1:-}; [ -n "$pid" ] || return 0
+ kill "$pid" 2>/dev/null || true
+ attempts=0
+ while kill -0 "$pid" 2>/dev/null && [ "$attempts" -lt 5 ]; do sleep 1; attempts=$((attempts + 1)); done
+ if kill -0 "$pid" 2>/dev/null; then kill -KILL "$pid" 2>/dev/null || true; fi
+ wait "$pid" 2>/dev/null || true
+}
+cleanup(){ code=$?; stop_process "${FPID:-}"; stop_process "${BPID:-}"; if [ "$code" -ne 0 ]; then echo "smoke artifacts: $TMP" >&2; cat "$TMP/frontend.log" >&2 2>/dev/null || true; else rm -rf "$TMP"; fi; }; trap cleanup EXIT INT TERM
 cat >"$TMP/spy.py" <<'PY'
 import json,sys
 from http.server import BaseHTTPRequestHandler,HTTPServer
@@ -82,7 +91,7 @@ python3 "$TMP/spy.py" "$BACKEND_PORT" "$TMP/requests" & BPID=$!
 backend_ready=false
 for i in $(seq 1 50); do
  kill -0 "$BPID" 2>/dev/null || { echo "M3 backend spy exited before readiness" >&2; exit 1; }
- if curl -fsS "http://127.0.0.1:$BACKEND_PORT/api/outputs" 2>/dev/null | grep -q 'Grounded summary'; then backend_ready=true; break; fi
+ if command curl --connect-timeout 1 --max-time 2 -fsS "http://127.0.0.1:$BACKEND_PORT/api/outputs" 2>/dev/null | grep -q 'Grounded summary'; then backend_ready=true; break; fi
  sleep .1
 done
 [ "$backend_ready" = true ] || { echo "M3 backend spy did not become ready" >&2; exit 1; }
@@ -101,13 +110,13 @@ check /outputs "Grounded summary"; body=$(curl -fsS -H "Cookie: $cookie" "$base/
 # Explicit demo remains explicit; a dead live backend never falls back to its fixture title.
 body=$(curl -fsS "$base/outputs?mock=1"); case "$body" in *"synthetic fixtures"*) :;; *) exit 1;; esac
 kill "$BPID"; wait "$BPID" 2>/dev/null || true; unset BPID
-code=$(curl -sS -D "$TMP/live-error-headers" -o "$TMP/live-error-body" -w '%{http_code}' -H "Cookie: $cookie" "$base/outputs"); test "$code" = 502; grep -qi '^cache-control: no-store' "$TMP/live-error-headers"; body=$(cat "$TMP/live-error-body"); case "$body" in *"Service unavailable"*) :;; *) exit 1;; esac; case "$body" in *"Immutable lists and streams"*) exit 1;; *) :;; esac
+code=$(curl -sS -D "$TMP/live-error-headers" -o "$TMP/live-error-body" -w '%{http_code}' -H "Cookie: $cookie" "$base/outputs"); test "$code" = 502; grep -qi '^cache-control: private, no-store' "$TMP/live-error-headers"; body=$(cat "$TMP/live-error-body"); case "$body" in *"Service unavailable"*) :;; *) exit 1;; esac; case "$body" in *"Immutable lists and streams"*) exit 1;; *) :;; esac
 # Restart spy and verify origin guard, mutation forwarding/status, and real bounded download headers.
 python3 "$TMP/spy.py" "$BACKEND_PORT" "$TMP/requests" & BPID=$!
 backend_ready=false
 for i in $(seq 1 50); do
  kill -0 "$BPID" 2>/dev/null || { echo "M3 backend spy exited during restart" >&2; exit 1; }
- if curl -fsS "http://127.0.0.1:$BACKEND_PORT/api/outputs" 2>/dev/null | grep -q 'Grounded summary'; then backend_ready=true; break; fi
+ if command curl --connect-timeout 1 --max-time 2 -fsS "http://127.0.0.1:$BACKEND_PORT/api/outputs" 2>/dev/null | grep -q 'Grounded summary'; then backend_ready=true; break; fi
  sleep .1
 done
 [ "$backend_ready" = true ] || { echo "M3 backend spy restart did not become ready" >&2; exit 1; }
@@ -142,5 +151,8 @@ code=$(curl -sS -D "$TMP/expired-headers" -o /dev/null -w '%{http_code}' -H 'Coo
 code=$(curl -sS -D "$TMP/page-expired-headers" -o /dev/null -w '%{http_code}' -H 'Cookie: cp_session=expired-token' "$base/outputs"); test "$code" = 303; grep -qi 'location: /login' "$TMP/page-expired-headers"; grep -qi 'set-cookie: cp_session=;.*Max-Age=0' "$TMP/page-expired-headers"
 curl -fsS -D "$TMP/headers" -o "$TMP/export.zip" -H "Cookie: $cookie" -H "Origin: $base" -H 'Sec-Fetch-Site: same-origin' -H 'Content-Type: application/json' -d '{"action":"wiki.export","idempotency_key":"00000000-0000-4000-8000-000000000003"}' "$base/api/m3"; grep -qi 'content-disposition: attachment; filename="canonical-workspace.zip"' "$TMP/headers"; grep -qi 'content-type: application/zip' "$TMP/headers"; test -s "$TMP/export.zip"
 code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Cookie: $cookie" -H "Origin: $base" -H 'Sec-Fetch-Site: same-origin' -H 'Content-Type: application/json' -d '{"action":"wiki.export","idempotency_key":"00000000-0000-4000-8000-000000000006","payload":{"page_ids":["11111111-1111-1111-1111-111111111111"]}}' "$base/api/m3"); test "$code" = 502
+code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Cookie: $cookie" -H 'Origin: https://cross-site.invalid' -H 'Sec-Fetch-Site: cross-site' -d "card_id=$U&deck_id=$U&correct=true&confidence=3" "$base/api/flashcards/attempt"); test "$code" = 403
+code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Cookie: $cookie" -H "Origin: $base" -H 'Sec-Fetch-Site: same-origin' -d "card_id=$U&deck_id=$U&correct=true&confidence=3" "$base/api/flashcards/attempt"); test "$code" = 303
+curl -fsS -D "$TMP/private-headers" -o /dev/null -H "Cookie: $cookie" "$base/dashboard"; grep -qi '^cache-control: private, no-store' "$TMP/private-headers"; grep -qi '^vary: Cookie' "$TMP/private-headers"
 ! grep -q 'api_key' "$TMP/frontend.log"
 echo "M3 live HTTP smoke passed"

@@ -47,7 +47,7 @@ pub fn render(req: mer.Request) mer.Response {
         , .{ id, id, saveButtonLabel(provider.status), id, id, saveButtonLabel(provider.status) }) catch return mer.internalError("providers render failed");
     }
     w.writeAll("</div>") catch return mer.internalError("providers render failed");
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
 fn renderLive(req: mer.Request) mer.Response {
@@ -72,7 +72,7 @@ fn renderLive(req: mer.Request) mer.Response {
         w.writeAll("</article>") catch return mer.internalError("providers render failed");
     }
     w.writeAll("</div><script src=\"/m3.js?v=20260721\" defer></script>") catch return mer.internalError("providers render failed");
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 fn findSetting(settings: []const lib.types.ProviderStatusResponse, id: []const u8) ?lib.types.ProviderStatusResponse {
     for (settings) |setting| if (std.mem.eql(u8, setting.provider, id)) return setting;

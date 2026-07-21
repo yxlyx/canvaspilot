@@ -105,7 +105,7 @@ pub fn render(req: mer.Request) mer.Response {
         w.writeAll("<section class=\"cp-card\" aria-labelledby=\"export-title\"><h2 id=\"export-title\">Export Markdown workspace</h2><p>This preview would export selected pages or the full workspace as a canonical backend ZIP.</p><div class=\"cp-action-row\"><button class=\"cp-btn cp-btn-primary\" type=\"button\" disabled>Download selected pages</button><button class=\"cp-btn cp-btn-ghost\" type=\"button\" disabled>Download full workspace</button></div><p class=\"cp-muted-copy\">Export is unavailable in synthetic demo mode; no browser-derived file is created.</p></section>") catch return mer.internalError("wiki export render failed");
     }
 
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
 fn metricCard(w: *std.Io.Writer, label: []const u8, value: usize, helper: []const u8) !void {

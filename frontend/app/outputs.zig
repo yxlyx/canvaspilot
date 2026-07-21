@@ -66,7 +66,7 @@ pub fn render(req: mer.Request) mer.Response {
         }
         w.print("</ol><button class=\"cp-btn cp-btn-ghost\" type=\"button\" aria-disabled=\"true\" aria-describedby=\"export-note\">Export {s}</button><p id=\"export-note\" class=\"cp-muted-copy\">Backend export is unavailable; no download is created.</p></article>", .{filename}) catch return mer.internalError("outputs render failed");
     }
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
 fn selected(actual: []const u8, expected: []const u8) []const u8 {
@@ -107,5 +107,5 @@ fn renderLive(req: mer.Request) mer.Response {
     w.writeAll("</div></section><nav class=\"cp-filter-row\" aria-label=\"Output pages\">") catch return mer.internalError("outputs render failed");
     if (outputs.value.?.value.next_cursor) |next| w.print("<a href=\"/outputs?cursor={s}\">Next</a>", .{lib.ui.escapeSafe(req.allocator, next)}) catch return mer.internalError("outputs render failed");
     w.writeAll("</nav><script src=\"/m3.js?v=20260721\" defer></script>") catch return mer.internalError("outputs render failed");
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }

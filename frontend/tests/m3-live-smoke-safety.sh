@@ -2,7 +2,15 @@
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 TMP=$(mktemp -d)
-cleanup(){ kill ${PID:-} 2>/dev/null || true; rm -rf "$TMP"; }
+stop_process(){
+ pid=${1:-}; [ -n "$pid" ] || return 0
+ kill "$pid" 2>/dev/null || true
+ attempts=0
+ while kill -0 "$pid" 2>/dev/null && [ "$attempts" -lt 5 ]; do sleep 1; attempts=$((attempts + 1)); done
+ if kill -0 "$pid" 2>/dev/null; then kill -KILL "$pid" 2>/dev/null || true; fi
+ wait "$pid" 2>/dev/null || true
+}
+cleanup(){ stop_process "${PID:-}"; rm -rf "$TMP"; }
 trap cleanup EXIT INT TERM
 python3 - "$TMP/port" <<'PY' &
 import socket,sys,time

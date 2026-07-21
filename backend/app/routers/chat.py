@@ -3,7 +3,7 @@ from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.responses import StreamingResponse
+from sse_starlette.sse import EventSourceResponse
 
 from app.db.database import get_db
 from app.dependencies import get_current_user
@@ -20,12 +20,11 @@ async def _encode_sse(events: AsyncGenerator[dict[str, str], None]) -> AsyncGene
         yield f"event: {event['event']}\r\ndata: {event['data']}\r\n\r\n".encode()
 
 
-def _event_stream(events: AsyncGenerator[dict[str, str], None]) -> StreamingResponse:
-    return StreamingResponse(
-        _encode_sse(events),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+def _event_stream(events: AsyncGenerator[dict[str, str], None]) -> EventSourceResponse:
+    # Yield pre-framed bytes so the browser-facing proxy keeps the exact event
+    # format, while EventSourceResponse supplies idle heartbeats and the SSE
+    # cache, connection, and proxy-buffering headers.
+    return EventSourceResponse(_encode_sse(events), media_type="text/event-stream")
 
 
 @router.post("")
