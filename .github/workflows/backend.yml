@@ -49,7 +49,8 @@ jobs:
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/wikibase_test
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/wikibase_test
       SESSION_SECRET: test-session-secret-with-at-least-32-bytes
-      CANVAS_TOKEN_SECRET: dGVzdC1mZXJuZXQta2V5LW5vdC1mb3ItcHJvZHVjdGlvbg==
+      CANVAS_TOKEN_SECRET: eE-4RX-m39GFpdZXEDBtsaKZoOlMC7EpNlV9XiFrOO8=
+      PROVIDER_ENCRYPTION_SECRET: XRoe-9icgC8y3-AtmJVDwhbrRraWTUXCsSu013nHztY=
       CANVAS_BASE_URL: https://canvas.test.example.com
       CANVAS_CLIENT_ID: test-client-id
       CANVAS_CLIENT_SECRET: test-client-secret

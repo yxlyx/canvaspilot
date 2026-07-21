@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class WikiCompileRequest(BaseModel):
-    source_ids: list[uuid.UUID] | None = None
+    source_ids: list[uuid.UUID] | None = Field(default=None, max_length=100)
 
     @field_validator("source_ids")
     @classmethod

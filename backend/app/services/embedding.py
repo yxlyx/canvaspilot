@@ -30,7 +30,7 @@ async def embed_chunks(chunks: list[Any], db: AsyncSession) -> None:
         for chunk, embedding_data in zip(batch, response.data):
             chunk.embedding = embedding_data.embedding
 
-    await db.commit()
+    await db.flush()
 
 
 async def embed_query(query: str) -> list[float]:
