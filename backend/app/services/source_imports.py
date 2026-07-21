@@ -151,7 +151,7 @@ async def import_ingestion_job_sources(
 
     for source_id, source_title in source_refs:
         source = await db.get(Source, source_id)
-        if source is None or source.user_id != user.id:
+        if source is None or source.user_id != user_id:
             raise NotFoundError("Source not found")
         before_snapshot = _content_snapshot(source, list(source.chunks))
         try:
@@ -176,7 +176,7 @@ async def import_ingestion_job_sources(
                 failed_source.import_error = error_message
                 db.add(
                     SourceChange(
-                        user_id=user.id,
+                        user_id=user_id,
                         source_id=source_id,
                         source_title=source_title,
                         change_type="source_import_failed",
@@ -199,7 +199,7 @@ async def import_ingestion_job_sources(
         if before_snapshot != after_snapshot:
             db.add(
                 SourceChange(
-                    user_id=user.id,
+                    user_id=user_id,
                     source_id=source.id,
                     source_title=source.title,
                     change_type="source_content_imported",

@@ -1,8 +1,4 @@
-FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS build
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+FROM python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df AS build
 
 WORKDIR /build
 COPY pyproject.toml requirements.lock ./
@@ -10,12 +6,12 @@ COPY app ./app
 RUN python -m pip install --no-cache-dir --prefix=/install --require-hashes -r requirements.lock \
     && python -m pip install --no-cache-dir --prefix=/install --no-deps .
 
-FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS runtime
+FROM python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN useradd --system --uid 10001 --create-home wikibase
+RUN adduser -S -u 10001 -h /home/wikibase wikibase
 WORKDIR /app
 COPY --from=build /install /usr/local
 COPY alembic.ini ./

@@ -36,7 +36,7 @@ submission.
 | #3  | Build basic module dashboard             | ✅ Done | PR [#25](https://github.com/yxlyx/canvaspilot/pull/25) merged 2026-05-13 |
 | #4  | Build basic chat interface               | ✅ Done | PR [#26](https://github.com/yxlyx/canvaspilot/pull/26) merged 2026-05-13 |
 | #2  | Deploy proof of concept stack            | 🟡 Frontend deploy files done in PR [#27](https://github.com/yxlyx/canvaspilot/pull/27); backend deploy pending @pranavp311 | — |
-| #22 | Document CI evidence                     | 🟡 Frontend workflow passing on PRs #24-#27; screenshots still needed | See §5 below |
+| #22 | Document verification evidence           | ✅ Historical PR checks recorded; current checks run locally with `./verify` | See §5 below |
 | #21 | Enable pull request branch rules         | ✅ Closed — branch protection live on `main` | — |
 | #23 | Invite adviser to repository             | ✅ Closed — @thienkimtranhoang invited with read access | — |
 
@@ -69,24 +69,22 @@ each entry to a single sentence. Update as work lands.
   `frontend/`. Added shared `lib` module (config, session, backend client,
   mock data, types, time helpers, UI helpers) and the app shell layout.
 
-## 5. CI evidence (for #22)
+## 5. Verification evidence (for #22)
 
-The Frontend CI workflow lives at
-[`.github/workflows/frontend.yml`](../.github/workflows/frontend.yml). It
-runs on every PR touching `frontend/**` and exercises:
+The repository now uses the local [`./verify`](../verify) harness instead of
+GitHub Actions workflows. Run it from the repository root; it starts an
+isolated Postgres + pgvector test service by default and exercises:
 
-1. `zig fmt --check src app api tools`
-2. `zig build` (codegen + ReleaseSafe compile)
-3. `zig build test --summary all` (unit tests in `src/lib/time.zig`)
-4. Boot smoke test: spin up `./zig-out/bin/app --port 3001 --no-dev` and
-   `curl /` → expect HTTP 200.
+1. Shell/Python script validation, Ruff, dependency auditing, Alembic, and the
+   database-backed backend test suite with coverage enforcement.
+2. Zig formatting, route code generation, ReleaseSafe compilation, and all
+   frontend unit tests.
+3. Frontend HTTP, chat-boundary, and Milestone 3 live API smoke tests.
+4. npm auditing, Playwright browser tests, and a full-stack browser smoke test.
 
-Companion backend workflow: [`.github/workflows/backend.yml`](../.github/workflows/backend.yml)
-(Ruff + pytest with a Postgres + pgvector service container).
-
-- [ ] TODO: attach a screenshot of a successful Frontend CI run on `main`.
-- [ ] TODO: attach a screenshot of a successful Backend CI run.
-- [ ] TODO: paste the URL of one passing PR check run.
+A complete local run passed on 2026-07-21. The earlier frontend/backend GitHub
+workflow results remain part of the repository's historical PR evidence, but
+the workflow files themselves have been retired.
 
 ## 6. Poster
 
@@ -105,7 +103,7 @@ Companion backend workflow: [`.github/workflows/backend.yml`](../.github/workflo
 - [x] Frontend scaffold (#5)
 - [x] Module dashboard for one module (#3)
 - [x] Chat with citations (#4)
-- [x] CI on every PR (#22, workflow shipped)
+- [x] Verification evidence documented (#22; current harness is `./verify`)
 - [x] Branch protection (#21)
 - [x] Adviser added (#23)
 - [ ] Backend ingest pipeline live with at least one test module
