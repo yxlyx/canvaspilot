@@ -30,6 +30,11 @@ pub const Param = struct {
     value: []const u8,
 };
 
+pub const Header = struct {
+    name: []const u8,
+    value: []const u8,
+};
+
 pub const Request = struct {
     method: Method,
     path: []const u8,
@@ -39,6 +44,8 @@ pub const Request = struct {
     /// Raw request body bytes.
     /// Empty slice for GET / HEAD / requests with no body.
     body: []const u8,
+    /// Request headers in wire order.
+    headers: []const Header,
     /// Raw `Cookie:` header value.
     /// Empty slice when no cookie header is present.
     cookies_raw: []const u8,
@@ -58,9 +65,18 @@ pub const Request = struct {
             .path = path,
             .query_string = "",
             .body = "",
+            .headers = &.{},
             .cookies_raw = "",
             .params = &.{},
         };
+    }
+
+    /// Return the first value of a request header, or null if absent.
+    pub fn header(self: Request, name: []const u8) ?[]const u8 {
+        for (self.headers) |item| {
+            if (std.ascii.eqlIgnoreCase(item.name, name)) return item.value;
+        }
+        return null;
     }
 
     // ── Route parameters ───────────────────────────────────────────────────
@@ -145,6 +161,15 @@ pub fn queryParamFromStr(query: []const u8, name: []const u8) ?[]const u8 {
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
+
+test "header: returns first repeated value case-insensitively" {
+    var req = Request.init(std.testing.allocator, .GET, "/");
+    req.headers = &.{
+        .{ .name = "Cookie", .value = "session=first" },
+        .{ .name = "cookie", .value = "session=second" },
+    };
+    try std.testing.expectEqualStrings("session=first", req.header("COOKIE").?);
+}
 
 test "queryParam: basic key=value" {
     var req = Request.init(std.testing.allocator, .GET, "/search");
