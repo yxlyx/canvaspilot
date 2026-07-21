@@ -1,9 +1,10 @@
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete, inspect, text
+from sqlalchemy import delete, func, inspect, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -113,6 +114,43 @@ async def test_create_source_normalizes_metadata(source_client):
     assert data["citation_label"] == "Week 1 Notes"
     assert data["topic_tags"] == ["math", "limits"]
     assert data["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_external_imports_share_one_source(source_session):
+    _, user, _ = source_session
+    user_id = user.id
+
+    async def import_source() -> Source:
+        async with async_session_factory() as session:
+            session_user = await session.get(User, user_id)
+            assert session_user is not None
+            return await create_or_update_source(
+                session_user,
+                SourceCreate(
+                    source_type="repository",
+                    origin="github",
+                    external_id="concurrent-repo",
+                    title="Concurrent Repo",
+                    source_url="https://example.com/concurrent",
+                ),
+                session,
+            )
+
+    first, second = await asyncio.wait_for(
+        asyncio.gather(import_source(), import_source()), timeout=5
+    )
+
+    assert first.id == second.id
+    async with async_session_factory() as session:
+        source_count = await session.scalar(
+            select(func.count(Source.id)).where(
+                Source.user_id == user_id,
+                Source.origin == "github",
+                Source.external_id == "concurrent-repo",
+            )
+        )
+    assert source_count == 1
 
 
 @pytest.mark.asyncio
@@ -281,6 +319,54 @@ async def test_reimport_preserves_user_edited_metadata(source_session):
 
 
 @pytest.mark.asyncio
+async def test_reimport_updates_metadata_fields_not_edited_by_user(source_session):
+    session, user, _ = source_session
+    source = await create_or_update_source(
+        user,
+        SourceCreate(
+            source_type="repository",
+            origin="github",
+            external_id="repo-partial-override",
+            title="Original Repo",
+            source_url="https://example.com/original",
+            citation_label="Original Label",
+            topic_tags=["original"],
+            course_context="Original Course",
+            project_context="Original Project",
+        ),
+        session,
+    )
+    source = await update_source(
+        source,
+        SourceUpdate(title="User Title", citation_label="User Label"),
+        session,
+    )
+    assert source.metadata_overrides == ["citation_label"]
+
+    imported = await create_or_update_source(
+        user,
+        SourceCreate(
+            source_type="repository",
+            origin="github",
+            external_id="repo-partial-override",
+            title="Imported Title",
+            source_url="https://example.com/imported",
+            citation_label="Imported Label",
+            topic_tags=["imported"],
+            course_context="Imported Course",
+            project_context="Imported Project",
+        ),
+        session,
+    )
+
+    assert imported.title == "Imported Title"
+    assert imported.citation_label == "User Label"
+    assert imported.topic_tags == ["imported"]
+    assert imported.course_context == "Imported Course"
+    assert imported.project_context == "Imported Project"
+
+
+@pytest.mark.asyncio
 async def test_sources_schema_has_required_indexes(source_session):
     session, _, _ = source_session
 
@@ -301,6 +387,7 @@ async def test_sources_schema_has_required_indexes(source_session):
         "title",
         "citation_label",
         "topic_tags",
+        "metadata_overrides",
         "status",
         "updated_at",
     } <= column_names
