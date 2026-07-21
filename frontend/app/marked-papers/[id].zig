@@ -31,15 +31,15 @@ pub fn render(req: mer.Request) mer.Response {
         w.print("<p>{s}</p><p class=\"cp-proposal\"><strong>Unconfirmed proposal:</strong> {s}</p><div class=\"cp-action-row\"><button class=\"cp-btn cp-btn-primary\" type=\"button\" aria-disabled=\"true\" aria-describedby=\"evidence-note-{s}\">Accept</button><button class=\"cp-btn cp-btn-ghost\" type=\"button\" aria-disabled=\"true\" aria-describedby=\"evidence-note-{s}\">Edit</button><button class=\"cp-btn cp-btn-danger\" type=\"button\" aria-disabled=\"true\" aria-describedby=\"evidence-note-{s}\">Reject</button></div><small id=\"evidence-note-{s}\">Evidence decisions are unavailable until a backend mutation contract exists.</small></article>", .{ feedback, proposal, evidence_id, evidence_id, evidence_id, evidence_id }) catch return mer.internalError("paper render failed");
     }
     w.writeAll("</section>") catch return mer.internalError("paper render failed");
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
 fn renderLive(req: mer.Request) mer.Response {
-    const raw_id = req.param("id") orelse return mer.notFound();
+    const raw_id = req.param("id") orelse return lib.m3.privateForSession(req, mer.notFound());
     const id = lib.m3.safeId(raw_id, "");
-    if (id.len == 0) return mer.notFound();
+    if (id.len == 0) return lib.m3.privateForSession(req, mer.notFound());
     const result = lib.backend.getMarkedPaper(req.allocator, lib.session.fromRequest(req).token, id);
-    if (result.status == 404) return mer.notFound();
+    if (result.status == 404) return lib.m3.privateForSession(req, mer.notFound());
     const paper = if (result.value) |parsed| parsed.value else return lib.m3.liveError(req, "Marked paper", result.status);
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
@@ -47,8 +47,8 @@ fn renderLive(req: mer.Request) mer.Response {
     for (paper.questions) |question| {
         w.print("<article class=\"cp-card\"><form method=\"post\" action=\"/api/m3\" data-m3-form data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"paper.updateQuestion\"><input type=\"hidden\" name=\"id\" value=\"{s}\"><input type=\"hidden\" name=\"child_id\" value=\"{s}\"><h2>Question {d}</h2><label class=\"cp-field\"><span>Question text</span><textarea name=\"question_text\" required maxlength=\"20000\">{s}</textarea></label><div class=\"cp-selector-grid\"><label class=\"cp-field\"><span>Awarded marks</span><input type=\"number\" step=\"0.5\" min=\"0\" name=\"awarded_marks\" value=\"{s}\"></label><label class=\"cp-field\"><span>Available marks</span><input type=\"number\" step=\"0.5\" min=\"0.5\" name=\"available_marks\" value=\"{s}\"></label><label class=\"cp-field\"><span>Topic</span><input name=\"topic_tag\" maxlength=\"100\" required value=\"{s}\"></label><label class=\"cp-field\"><span>Confidence (0–1)</span><input type=\"number\" step=\"0.01\" min=\"0\" max=\"1\" name=\"confidence\" value=\"{d:.2}\"></label></div><label class=\"cp-field\"><span>Feedback</span><textarea name=\"feedback\" maxlength=\"10000\">{s}</textarea></label><label><input type=\"checkbox\" name=\"reviewed\"{s}> Reviewed and confirmed</label><div class=\"cp-action-row\"><button class=\"cp-btn cp-btn-primary\" type=\"submit\">Save review</button></div></form><div class=\"cp-action-row\"><form method=\"post\" action=\"/api/m3\" data-m3-form data-confirm=\"Delete this question?\" data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"paper.deleteQuestion\"><input type=\"hidden\" name=\"id\" value=\"{s}\"><input type=\"hidden\" name=\"child_id\" value=\"{s}\"><button class=\"cp-btn cp-btn-danger\" type=\"submit\">Delete question</button></form></div><p class=\"cp-form-status\" role=\"status\"></p></article>", .{ id, lib.ui.escapeSafe(req.allocator, question.id), question.question_number, lib.ui.escapeSafe(req.allocator, question.question_text), number(req, question.awarded_marks), number(req, question.available_marks), lib.ui.escapeSafe(req.allocator, question.topic_tag), question.confidence, lib.ui.escapeSafe(req.allocator, question.feedback), if (question.reviewed) " checked" else "", id, lib.ui.escapeSafe(req.allocator, question.id) }) catch return mer.internalError("paper render failed");
     }
-    w.print("</section><section class=\"cp-card\"><h2>Add question manually</h2><form method=\"post\" action=\"/api/m3\" data-m3-form data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"paper.addQuestion\"><input type=\"hidden\" name=\"id\" value=\"{s}\"><div class=\"cp-selector-grid\"><label class=\"cp-field\"><span>Question number</span><input type=\"number\" min=\"1\" name=\"question_number\" required></label><label class=\"cp-field\"><span>Topic</span><input name=\"topic_tag\" value=\"general\" required></label><label class=\"cp-field\"><span>Confidence (0–1)</span><input type=\"number\" step=\"0.01\" min=\"0\" max=\"1\" name=\"confidence\" value=\"0.5\" required></label></div><label class=\"cp-field\"><span>Question text</span><textarea name=\"question_text\" required></textarea></label><button class=\"cp-btn cp-btn-primary\" type=\"submit\">Add question</button><p class=\"cp-form-status\" role=\"status\"></p></form></section><script src=\"/m3.js\" defer></script>", .{id}) catch return mer.internalError("paper render failed");
-    return lib.ui.htmlResponse(&buf);
+    w.print("</section><section class=\"cp-card\"><h2>Add question manually</h2><form method=\"post\" action=\"/api/m3\" data-m3-form data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"paper.addQuestion\"><input type=\"hidden\" name=\"id\" value=\"{s}\"><div class=\"cp-selector-grid\"><label class=\"cp-field\"><span>Question number</span><input type=\"number\" min=\"1\" name=\"question_number\" required></label><label class=\"cp-field\"><span>Topic</span><input name=\"topic_tag\" value=\"general\" required></label><label class=\"cp-field\"><span>Confidence (0–1)</span><input type=\"number\" step=\"0.01\" min=\"0\" max=\"1\" name=\"confidence\" value=\"0.5\" required></label></div><label class=\"cp-field\"><span>Question text</span><textarea name=\"question_text\" required></textarea></label><button class=\"cp-btn cp-btn-primary\" type=\"submit\">Add question</button><p class=\"cp-form-status\" role=\"status\"></p></form></section><script src=\"/m3.js?v=20260721\" defer></script>", .{id}) catch return mer.internalError("paper render failed");
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 fn number(req: mer.Request, value: ?f64) []const u8 {
     return if (value) |v| std.fmt.allocPrint(req.allocator, "{d}", .{v}) catch "" else "";
@@ -64,5 +64,5 @@ fn missing(req: mer.Request, raw_id: []const u8) mer.Response {
     lib.m3.demoMarker(req, &buf.writer) catch return mer.internalError("paper render failed");
     const safe = lib.ui.escapeSafe(req.allocator, raw_id);
     buf.writer.print("<section class=\"cp-card\"><h1>Marked paper not found</h1><p>No synthetic paper matches <strong>{s}</strong>.</p><a href=\"/marked-papers?mock=1\">Return to marked papers</a></section>", .{safe}) catch return mer.internalError("paper render failed");
-    return .{ .status = .not_found, .content_type = .html, .body = buf.written() };
+    return lib.m3.privateForSession(req, .{ .status = .not_found, .content_type = .html, .body = buf.written() });
 }

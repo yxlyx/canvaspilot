@@ -30,7 +30,8 @@ pub fn render(req: mer.Request) mer.Response {
         \\      <a class="cp-btn cp-btn-ghost" href="/dashboard?mock=1">View demo data</a>
         \\    </div>
         \\  </div>
-        \\  <div class="cp-hero-panel" aria-label="WikiBase workflow preview">
+        \\  <div class="cp-hero-panel" aria-label="Illustrative WikiBase workflow preview">
+        \\    <div class="cp-demo-label" role="note">Illustrative example · not live workspace data</div>
         \\    <div class="cp-course-card">
         \\      <div class="cp-course-top">
         \\        <div>

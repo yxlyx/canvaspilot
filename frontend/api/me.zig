@@ -12,8 +12,12 @@ pub fn render(req: mer.Request) mer.Response {
     }
     const result = lib.backend.me(req.allocator, session.token);
     if (result.value) |v| {
-        return mer.typedJson(req.allocator, v.value);
+        return lib.m3.privateForSession(req, mer.typedJson(req.allocator, v.value));
     }
-    // Fall back to mock data so the demo still answers consistently.
-    return mer.typedJson(req.allocator, lib.mock.me);
+    if (result.status == 401) {
+        const cookies = req.allocator.alloc(mer.SetCookie, 1) catch return mer.internalError("session clear failed");
+        cookies[0] = lib.session.clearCookie();
+        return lib.m3.privateForSession(req, mer.withCookies(.{ .status = .unauthorized, .content_type = .json, .body = "{\"error\":\"unauthorized\"}" }, cookies));
+    }
+    return lib.m3.privateForSession(req, .{ .status = .bad_gateway, .content_type = .json, .body = "{\"error\":\"identity service unavailable\"}" });
 }

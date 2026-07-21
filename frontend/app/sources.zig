@@ -1,8 +1,8 @@
 // app/sources.zig — Milestone 2 source library prototype.
 //
 // Shows imported workspace sources that power Q&A, generated wiki pages, and
-// flashcard decks. Authenticated sessions try backend metadata first and keep
-// fixture data as a stable demo fallback.
+// flashcard decks. Live sessions use backend metadata; fixtures are available
+// only through the explicit demo gate.
 
 const std = @import("std");
 const mer = @import("mer");
@@ -15,7 +15,8 @@ pub const meta: mer.Meta = .{
 
 pub fn render(req: mer.Request) mer.Response {
     const session = lib.session.fromRequest(req);
-    const use_mock = req.queryParam("mock") != null or !session.isAuthenticated();
+    if (lib.m3.access(req) == .login) return mer.redirect("/login", .see_other);
+    const use_mock = lib.m3.isExplicitDemo(req);
     const raw_filter_type = req.queryParam("type") orelse "";
     const raw_filter_status = req.queryParam("status") orelse "";
     const filter_type = lib.form.decode(req.allocator, raw_filter_type) catch raw_filter_type;
@@ -23,18 +24,12 @@ pub fn render(req: mer.Request) mer.Response {
     const now_secs = lib.time.nowSecs();
 
     var live_sources: ?[]const lib.types.SourceResponse = null;
-    var backend_message: ?[]const u8 = if (use_mock) "Showing prototype source fixtures." else null;
     if (!use_mock) {
         const result = lib.backend.listSources(req.allocator, session.token);
         if (result.value) |parsed_sources| {
-            if (parsed_sources.value.len > 0) {
-                live_sources = parsed_sources.value;
-                backend_message = null;
-            } else {
-                backend_message = "No backend sources found yet — showing prototype fixtures.";
-            }
+            live_sources = parsed_sources.value;
         } else {
-            backend_message = "Backend source metadata is unavailable — showing prototype fixtures.";
+            return lib.m3.liveError(req, "Source library", result.status);
         }
     }
 
@@ -59,32 +54,33 @@ pub fn render(req: mer.Request) mer.Response {
 
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
+    lib.m3.demoBanner(req, w) catch return mer.internalError("sources render failed");
 
-    w.writeAll(
+    const dashboard_href = lib.m3.demoHref(req.allocator, req, "/dashboard") catch return mer.internalError("sources render failed");
+    const chat_href = lib.m3.demoHref(req.allocator, req, "/chat") catch return mer.internalError("sources render failed");
+    w.print(
         \\<header class="cp-page-header">
         \\  <div>
         \\    <h1 class="cp-page-title">Source library</h1>
         \\    <div class="cp-page-sub">Track what has been imported, chunked, and made available for cited answers.</div>
         \\  </div>
         \\  <div class="cp-page-actions">
-        \\    <a class="cp-btn cp-btn-ghost" href="/dashboard">Workspace</a>
-        \\    <a class="cp-btn cp-btn-primary" href="/chat">Ask with sources</a>
+        \\    <a class="cp-btn cp-btn-ghost" href="{s}">Workspace</a>
+        \\    <a class="cp-btn cp-btn-primary" href="{s}">Ask with sources</a>
         \\  </div>
         \\</header>
-    ) catch return mer.internalError("sources render failed");
+    , .{ dashboard_href, chat_href }) catch return mer.internalError("sources render failed");
 
     w.writeAll("<section class=\"cp-metric-grid\">\n") catch return mer.internalError("sources render failed");
     metricCard(w, "Ready", ready_count, "available for Q&A") catch return mer.internalError("sources render failed");
     metricCard(w, "Needs review", review_count, "failed or archived") catch return mer.internalError("sources render failed");
     metricCard(w, "Processing", processing_count, "pending import") catch return mer.internalError("sources render failed");
-    metricCard(w, "Chunks", total_chunks, "fixture total") catch return mer.internalError("sources render failed");
+    metricCard(w, "Chunks", total_chunks, if (use_mock) "synthetic fixture total" else "not reported by source metadata") catch return mer.internalError("sources render failed");
     w.writeAll("</section>\n") catch return mer.internalError("sources render failed");
 
-    if (backend_message) |message| {
-        const safe_message = lib.ui.escapeSafe(req.allocator, message);
-        w.print("<div class=\"cp-status-banner cp-status-info\">{s}</div>\n", .{safe_message}) catch return mer.internalError("sources render failed");
-    } else if (filter_type.len > 0 or filter_status.len > 0) {
-        w.writeAll("<div class=\"cp-status-banner cp-status-info\">Filtered source view. <a href=\"/sources\">Clear filters</a></div>\n") catch return mer.internalError("sources render failed");
+    if (filter_type.len > 0 or filter_status.len > 0) {
+        const clear_href = lib.m3.demoHref(req.allocator, req, "/sources") catch return mer.internalError("sources render failed");
+        w.print("<div class=\"cp-status-banner cp-status-info\">Filtered source view. <a href=\"{s}\">Clear filters</a></div>\n", .{clear_href}) catch return mer.internalError("sources render failed");
     }
 
     w.writeAll(
@@ -93,14 +89,14 @@ pub fn render(req: mer.Request) mer.Response {
         \\  <fieldset class="cp-filter-row" aria-label="Source filters">
     ) catch return mer.internalError("sources render failed");
 
-    filterChip(w, "All", "/sources", filter_type.len == 0 and filter_status.len == 0) catch return mer.internalError("sources render failed");
-    filterChip(w, "Ready", "/sources?status=ready", std.mem.eql(u8, filter_status, "ready")) catch return mer.internalError("sources render failed");
-    filterChip(w, "Indexing", "/sources?status=indexing", std.mem.eql(u8, filter_status, "indexing")) catch return mer.internalError("sources render failed");
-    filterChip(w, "Pending", "/sources?status=pending", std.mem.eql(u8, filter_status, "pending")) catch return mer.internalError("sources render failed");
-    filterChip(w, "Review", "/sources?status=failed", std.mem.eql(u8, filter_status, "failed")) catch return mer.internalError("sources render failed");
-    filterChip(w, "Markdown", "/sources?type=markdown", std.mem.eql(u8, filter_type, "markdown")) catch return mer.internalError("sources render failed");
-    filterChip(w, "Assignment", "/sources?type=assignment", std.mem.eql(u8, filter_type, "assignment")) catch return mer.internalError("sources render failed");
-    filterChip(w, "Announcement", "/sources?type=announcement", std.mem.eql(u8, filter_type, "announcement")) catch return mer.internalError("sources render failed");
+    filterChip(req, w, "All", "/sources", filter_type.len == 0 and filter_status.len == 0) catch return mer.internalError("sources render failed");
+    filterChip(req, w, "Ready", "/sources?status=ready", std.mem.eql(u8, filter_status, "ready")) catch return mer.internalError("sources render failed");
+    filterChip(req, w, "Indexing", "/sources?status=indexing", std.mem.eql(u8, filter_status, "indexing")) catch return mer.internalError("sources render failed");
+    filterChip(req, w, "Pending", "/sources?status=pending", std.mem.eql(u8, filter_status, "pending")) catch return mer.internalError("sources render failed");
+    filterChip(req, w, "Review", "/sources?status=failed", std.mem.eql(u8, filter_status, "failed")) catch return mer.internalError("sources render failed");
+    filterChip(req, w, "Markdown", "/sources?type=markdown", std.mem.eql(u8, filter_type, "markdown")) catch return mer.internalError("sources render failed");
+    filterChip(req, w, "Assignment", "/sources?type=assignment", std.mem.eql(u8, filter_type, "assignment")) catch return mer.internalError("sources render failed");
+    filterChip(req, w, "Announcement", "/sources?type=announcement", std.mem.eql(u8, filter_type, "announcement")) catch return mer.internalError("sources render failed");
 
     w.writeAll(
         \\  </fieldset>
@@ -125,7 +121,8 @@ pub fn render(req: mer.Request) mer.Response {
     }
 
     if (shown == 0) {
-        w.writeAll("    <div class=\"cp-empty\">No sources match this filter yet.</div>\n") catch return mer.internalError("sources render failed");
+        const empty_copy: []const u8 = if (filter_type.len > 0 or filter_status.len > 0) "No sources match this filter yet." else "No sources have been imported yet.";
+        w.print("    <div class=\"cp-empty\">{s}</div>\n", .{empty_copy}) catch return mer.internalError("sources render failed");
     }
 
     w.writeAll(
@@ -133,7 +130,7 @@ pub fn render(req: mer.Request) mer.Response {
         \\</section>
     ) catch return mer.internalError("sources render failed");
 
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
 fn metricCard(w: *std.Io.Writer, label: []const u8, value: usize, helper: []const u8) !void {
@@ -146,8 +143,9 @@ fn metricCard(w: *std.Io.Writer, label: []const u8, value: usize, helper: []cons
     , .{ label, value, helper });
 }
 
-fn filterChip(w: *std.Io.Writer, label: []const u8, href: []const u8, active: bool) !void {
+fn filterChip(req: mer.Request, w: *std.Io.Writer, label: []const u8, path: []const u8, active: bool) !void {
     const cls: []const u8 = if (active) "cp-chip cp-chip-active" else "cp-chip";
+    const href = try lib.m3.demoHref(req.allocator, req, path);
     try w.print("    <a class=\"{s}\" href=\"{s}\">{s}</a>\n", .{ cls, href, label });
 }
 
@@ -156,13 +154,6 @@ fn sourceStatusClass(status: []const u8) []const u8 {
     if (std.mem.eql(u8, status, "failed") or std.mem.eql(u8, status, "archived") or std.mem.eql(u8, status, "needs review")) return "cp-source-status cp-source-status-review";
     if (std.mem.eql(u8, status, "pending") or std.mem.eql(u8, status, "indexing") or std.mem.eql(u8, status, "processing")) return "cp-source-status cp-source-status-processing";
     return "cp-source-status";
-}
-
-fn safeHref(raw: []const u8, fallback: []const u8) []const u8 {
-    if (std.mem.startsWith(u8, raw, "https://")) return raw;
-    if (std.mem.startsWith(u8, raw, "http://")) return raw;
-    if (std.mem.startsWith(u8, raw, "/")) return raw;
-    return fallback;
 }
 
 fn matchesStatus(actual: []const u8, selected: []const u8) bool {
@@ -186,9 +177,9 @@ fn renderBackendSource(
     const safe_summary = lib.ui.escapeSafe(req.allocator, summary);
     const when = lib.time.formatRelative(req.allocator, source.updated_at, now_secs) catch "—";
     const action_href_raw = if (source.source_url.len > 0) source.source_url else "/chat";
-    const action_href = safeHref(action_href_raw, "/sources");
+    const action_href = lib.m3.safeSourceHref(action_href_raw, "/sources");
     const safe_action_href = lib.ui.escape(req.allocator, action_href) catch "/sources";
-    const action_copy: []const u8 = if (std.mem.startsWith(u8, action_href, "http")) "Open source" else "Ask with source";
+    const action_copy: []const u8 = if (std.mem.startsWith(u8, action_href, "/")) "Ask with source" else "Open source";
     const status_cls = sourceStatusClass(source.status);
 
     try w.print(
@@ -227,8 +218,9 @@ fn renderMockSource(
     const safe_summary = lib.ui.escapeSafe(req.allocator, source.summary);
     const when = lib.time.formatRelative(req.allocator, source.updated_at, now_secs) catch "—";
     const action_href_raw = if (source.url.len > 0) source.url else "/chat";
-    const action_href = safeHref(action_href_raw, "/sources");
-    const safe_action_href = lib.ui.escape(req.allocator, action_href) catch "/sources";
+    const action_href = lib.m3.safeSourceHref(action_href_raw, "/sources");
+    const demo_href = if (std.mem.startsWith(u8, action_href, "/")) try lib.m3.demoHref(req.allocator, req, action_href) else action_href;
+    const safe_action_href = lib.ui.escape(req.allocator, demo_href) catch "/sources?mock=1";
     const action_copy: []const u8 = if (std.mem.startsWith(u8, action_href, "/wiki/")) "Open wiki" else if (std.mem.startsWith(u8, action_href, "http")) "Open source" else "Open source";
     const status_cls = sourceStatusClass(source.status);
 

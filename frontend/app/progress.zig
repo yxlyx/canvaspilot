@@ -58,7 +58,7 @@ pub fn render(req: mer.Request) mer.Response {
         w.writeAll("</div></article>") catch return mer.internalError("progress render failed");
     }
     w.writeAll("</section>") catch return mer.internalError("progress render failed");
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
 fn renderLive(req: mer.Request) mer.Response {
@@ -76,5 +76,5 @@ fn renderLive(req: mer.Request) mer.Response {
     }
     if (meters.len == 0) w.writeAll("<div class=\"cp-empty\"><h2>No measured topics</h2><p>Add reviewed evidence before expecting knowledge estimates or recommendations.</p></div>") catch return mer.internalError("meter render failed");
     w.writeAll("</section>") catch return mer.internalError("meter render failed");
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
