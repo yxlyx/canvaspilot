@@ -52,12 +52,15 @@ async def m3_client() -> AsyncGenerator[tuple[AsyncClient, AsyncSession, User, U
         await session.execute(delete(User).where(User.email.in_(emails)))
         owner = User(id=uuid.uuid4(), name="M3 Owner", email=emails[0])
         other = User(id=uuid.uuid4(), name="M3 Other", email=emails[1])
+        owner_ids = [owner.id, other.id]
         session.add_all([owner, other])
         await session.commit()
         principal = {"user": owner}
 
         async def override_user():
-            return principal["user"]
+            user = principal["user"]
+            await session.refresh(user)
+            return user
 
         async def override_db():
             yield session
@@ -75,7 +78,7 @@ async def m3_client() -> AsyncGenerator[tuple[AsyncClient, AsyncSession, User, U
         finally:
             app.dependency_overrides.clear()
             await session.rollback()
-            await session.execute(delete(User).where(User.id.in_([owner.id, other.id])))
+            await session.execute(delete(User).where(User.id.in_(owner_ids)))
             await session.commit()
     await engine.dispose()
 
@@ -343,6 +346,7 @@ async def test_idempotency_locks_same_key_without_serializing_different_keys(
 @pytest.mark.asyncio
 async def test_transient_failure_does_not_complete_idempotency_record(m3_client):
     _, session, owner, _, _ = m3_client
+    owner_id = owner.id
     key = str(uuid.uuid4())
 
     async def fail():
@@ -362,12 +366,13 @@ async def test_transient_failure_does_not_complete_idempotency_record(m3_client)
     assert (
         await session.scalar(
             select(func.count(IdempotencyRecord.id)).where(
-                IdempotencyRecord.user_id == owner.id,
+                IdempotencyRecord.user_id == owner_id,
                 IdempotencyRecord.idempotency_key == key,
             )
         )
         == 0
     )
+    await session.refresh(owner)
 
     async def succeed():
         return {"created": True}
@@ -505,7 +510,7 @@ async def test_m3_migration_tables_and_durable_audit_columns_exist(m3_client):
         row[0]: row[1]
         for row in await session.execute(
             text(
-                "SELECT conname, confdeltype FROM pg_constraint "
+                "SELECT conname, confdeltype::text FROM pg_constraint "
                 "WHERE conname IN ('ck_marked_question_marks', "
                 "'fk_learning_evidence_marked_question')"
             )
@@ -673,7 +678,10 @@ async def test_m3_grounded_output_wiki_history_health_export_and_two_user_isolat
     )
     assert page_generated.status_code == 201
     assert page_generated.json()["status"] == "grounded"
-    assert page_generated.json()["content"] == "Overview. [1]"
+    page_content = page_generated.json()["content"]
+    assert page_content.splitlines()[0] == "Overview. [1]"
+    assert "intentionally short first sentence" not in page_content
+    assert len(page_generated.json()["citations"]) == 4
     output_first_page = (await client.get("/api/outputs/page?limit=1")).json()
     inserted_output = await client.post(
         "/api/outputs", json={"output_type": "outline", "source_ids": [str(first.id)]}

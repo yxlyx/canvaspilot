@@ -78,14 +78,23 @@ async def create_or_update_source(
 
     if existing:
         before = source_snapshot(existing)
+        metadata_was_edited = await db.scalar(
+            select(SourceChange.id)
+            .where(
+                SourceChange.source_id == existing.id,
+                SourceChange.change_type == "source_metadata_edited",
+            )
+            .limit(1)
+        )
         existing.source_type = payload.source_type
         existing.title = payload.title
         existing.source_url = payload.source_url
-        existing.citation_label = payload.citation_label or payload.title
-        existing.topic_tags = payload.topic_tags
+        if metadata_was_edited is None:
+            existing.citation_label = payload.citation_label or payload.title
+            existing.topic_tags = payload.topic_tags
+            existing.course_context = payload.course_context
+            existing.project_context = payload.project_context
         existing.status = payload.status
-        existing.course_context = payload.course_context
-        existing.project_context = payload.project_context
         existing.import_error = payload.import_error
         existing.last_imported_at = datetime.now(UTC)
         record_source_change(existing, before, db, "source_updated")
@@ -132,7 +141,7 @@ async def update_source(source: Source, payload: SourceUpdate, db: AsyncSession)
     for field, value in update_data.items():
         setattr(source, field, value)
 
-    record_source_change(source, before, db, "source_updated")
+    record_source_change(source, before, db, "source_metadata_edited")
     await db.commit()
     await db.refresh(source)
     return source
