@@ -58,8 +58,9 @@ async def m3_client() -> AsyncGenerator[tuple[AsyncClient, AsyncSession, User, U
         principal = {"user": owner}
 
         async def override_user():
-            await session.refresh(principal["user"])
-            return principal["user"]
+            user = principal["user"]
+            await session.refresh(user)
+            return user
 
         async def override_db():
             yield session
@@ -345,6 +346,7 @@ async def test_idempotency_locks_same_key_without_serializing_different_keys(
 @pytest.mark.asyncio
 async def test_transient_failure_does_not_complete_idempotency_record(m3_client):
     _, session, owner, _, _ = m3_client
+    owner_id = owner.id
     key = str(uuid.uuid4())
 
     async def fail():
@@ -365,12 +367,13 @@ async def test_transient_failure_does_not_complete_idempotency_record(m3_client)
     assert (
         await session.scalar(
             select(func.count(IdempotencyRecord.id)).where(
-                IdempotencyRecord.user_id == owner.id,
+                IdempotencyRecord.user_id == owner_id,
                 IdempotencyRecord.idempotency_key == key,
             )
         )
         == 0
     )
+    await session.refresh(owner)
 
     async def succeed():
         return {"created": True}
@@ -633,6 +636,77 @@ async def _ready_source(session: AsyncSession, user: User, title: str, url: str)
 
 
 @pytest.mark.asyncio
+async def test_workspace_health_empty_healthy_and_issue_states(m3_client):
+    client, session, owner, _, _ = m3_client
+
+    assert (await client.post("/api/workspace/health")).status_code == 200
+    empty_findings = (await client.get("/api/workspace/health")).json()
+    assert len(empty_findings) == 1
+    assert empty_findings[0]["code"] == "workspace_not_evaluated"
+    assert empty_findings[0]["severity"] == "info"
+    assert empty_findings[0]["state"] == "unknown"
+    assert empty_findings[0]["resource_type"] == "workspace"
+    assert "finish indexing a source" in empty_findings[0]["recommendation"]
+    assert all(finding["code"] != "workspace_healthy" for finding in empty_findings)
+
+    source = await create_or_update_source(
+        owner,
+        SourceCreate(
+            source_type="markdown",
+            origin="health-test",
+            external_id=str(uuid.uuid4()),
+            title="Healthy source",
+            source_url="https://example.test/healthy",
+            topic_tags=[],
+        ),
+        session,
+    )
+    await session.commit()
+
+    assert (await client.post("/api/workspace/health")).status_code == 200
+    pending_findings = (await client.get("/api/workspace/health")).json()
+    assert [(finding["code"], finding["state"]) for finding in pending_findings] == [
+        ("workspace_not_evaluated", "unknown")
+    ]
+
+    source.status = SourceStatus.INDEXING
+    await session.commit()
+    assert (await client.post("/api/workspace/health")).status_code == 200
+    indexing_findings = (await client.get("/api/workspace/health")).json()
+    assert [(finding["code"], finding["state"]) for finding in indexing_findings] == [
+        ("workspace_not_evaluated", "unknown")
+    ]
+
+    source.status = SourceStatus.ARCHIVED
+    await session.commit()
+    assert (await client.post("/api/workspace/health")).status_code == 200
+    archived_findings = (await client.get("/api/workspace/health")).json()
+    assert [(finding["code"], finding["state"]) for finding in archived_findings] == [
+        ("workspace_not_evaluated", "unknown")
+    ]
+
+    source.status = SourceStatus.READY
+    await session.commit()
+    assert (await client.post("/api/workspace/health")).status_code == 200
+    healthy_findings = (await client.get("/api/workspace/health")).json()
+    assert len(healthy_findings) == 1
+    assert healthy_findings[0]["code"] == "workspace_healthy"
+    assert healthy_findings[0]["severity"] == "info"
+    assert healthy_findings[0]["state"] == "healthy"
+
+    source.status = SourceStatus.FAILED
+    await session.commit()
+
+    assert (await client.post("/api/workspace/health")).status_code == 200
+    issue_findings = (await client.get("/api/workspace/health")).json()
+    assert len(issue_findings) == 1
+    assert issue_findings[0]["code"] == "unsupported_or_failed_source"
+    assert issue_findings[0]["severity"] == "error"
+    assert issue_findings[0]["state"] == "failed"
+    assert all(finding["code"] != "workspace_healthy" for finding in issue_findings)
+
+
+@pytest.mark.asyncio
 async def test_m3_grounded_output_wiki_history_health_export_and_two_user_isolation(m3_client):
     client, session, owner, other, principal = m3_client
     first = await _ready_source(session, owner, "Alpha", "https://example.test/shared")
@@ -677,8 +751,10 @@ async def test_m3_grounded_output_wiki_history_health_export_and_two_user_isolat
     assert page_generated.status_code == 201
     page_output = page_generated.json()
     assert page_output["status"] == "grounded"
-    assert page_output["content"].startswith("Overview. [1]")
-    assert "Alpha evidence section 4" in page_output["content"]
+    page_content = page_output["content"]
+    assert page_content.splitlines()[0] == "Overview. [1]"
+    assert "intentionally short first sentence" not in page_content
+    assert "Alpha evidence section 4" in page_content
     assert len(page_output["citations"]) == 4
     output_first_page = (await client.get("/api/outputs/page?limit=1")).json()
     inserted_output = await client.post(

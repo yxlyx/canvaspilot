@@ -35,7 +35,7 @@ pub fn render(req: mer.Request) mer.Response {
     }
     if (shown == 0) w.writeAll("<li class=\"cp-empty\">No history entries match this filter.</li>") catch return mer.internalError("history render failed");
     w.writeAll("</ol>") catch return mer.internalError("history render failed");
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
 fn renderLive(req: mer.Request) mer.Response {
@@ -56,7 +56,7 @@ fn renderLive(req: mer.Request) mer.Response {
     if (shown == 0) w.writeAll("<li class=\"cp-empty\">No recorded changes match this filter.</li>") catch return mer.internalError("history render failed");
     w.writeAll("</ol>") catch return mer.internalError("history render failed");
     if (req.queryParam("page")) |page_id| if (std.mem.eql(u8, page_id, lib.m3.safeId(page_id, ""))) renderRevisions(req, w, page_id) catch return mer.internalError("revision render failed");
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
 fn renderRevisions(req: mer.Request, w: *std.Io.Writer, page_id: []const u8) !void {

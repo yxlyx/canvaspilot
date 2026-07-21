@@ -37,7 +37,7 @@ pub fn render(req: mer.Request) mer.Response {
     }
     if (shown == 0) w.writeAll("<div class=\"cp-empty\">No findings match this severity.</div>") catch return mer.internalError("health render failed");
     w.writeAll("</section>") catch return mer.internalError("health render failed");
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
 fn renderLive(req: mer.Request) mer.Response {
@@ -54,8 +54,8 @@ fn renderLive(req: mer.Request) mer.Response {
         w.print("<article class=\"cp-card cp-finding\"><span class=\"cp-state cp-state-{s}\">{s} · {s}</span><h2>{s}</h2><p>{s}</p><p><strong>Remediation:</strong> {s}</p><a class=\"cp-btn cp-btn-ghost\" href=\"/health/{s}\">Finding detail</a></article>", .{ lib.ui.escapeSafe(req.allocator, finding.state), lib.ui.escapeSafe(req.allocator, finding.state), lib.ui.escapeSafe(req.allocator, finding.severity), lib.ui.escapeSafe(req.allocator, finding.code), lib.ui.escapeSafe(req.allocator, finding.message), lib.ui.escapeSafe(req.allocator, finding.recommendation), lib.ui.escapeSafe(req.allocator, finding.id) }) catch return mer.internalError("health render failed");
     }
     if (shown == 0) w.writeAll(if (findings.len == 0) "<div class=\"cp-empty\"><h2>No current findings</h2><p>Run health checks to establish the current workspace state.</p></div>" else "<div class=\"cp-empty\">No findings match this filter.</div>") catch return mer.internalError("health render failed");
-    w.writeAll("</section><script src=\"/m3.js\" defer></script>") catch return mer.internalError("health render failed");
-    return lib.ui.htmlResponse(&buf);
+    w.writeAll("</section><script src=\"/m3.js?v=20260721\" defer></script>") catch return mer.internalError("health render failed");
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
 fn filterLink(req: mer.Request, w: *std.Io.Writer, label: []const u8, path: []const u8, active: bool) !void {

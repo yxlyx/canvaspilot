@@ -20,7 +20,7 @@ pub fn render(req: mer.Request) mer.Response {
         w.print("<p>{d} proposed evidence items</p><a class=\"cp-btn cp-btn-ghost\" href=\"/marked-papers/{s}?mock=1\">Review proposals</a></article>", .{ paper.evidence.len, id }) catch return mer.internalError("marked papers render failed");
     }
     w.writeAll("</section>") catch return mer.internalError("marked papers render failed");
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
 fn renderLive(req: mer.Request) mer.Response {
@@ -36,6 +36,6 @@ fn renderLive(req: mer.Request) mer.Response {
     if (papers.len == 0) w.writeAll("<div class=\"cp-empty\"><h2>No marked papers</h2><p>Upload a supported file to begin private review.</p></div>") catch return mer.internalError("papers render failed");
     w.writeAll("</section><nav class=\"cp-filter-row\" aria-label=\"Marked paper pages\">") catch return mer.internalError("papers render failed");
     if (page.next_cursor) |next| w.print("<a href=\"/marked-papers?cursor={s}\">Next</a>", .{lib.ui.escapeSafe(req.allocator, next)}) catch return mer.internalError("papers render failed");
-    w.writeAll("</nav><script src=\"/m3.js\" defer></script>") catch return mer.internalError("papers render failed");
-    return lib.ui.htmlResponse(&buf);
+    w.writeAll("</nav><script src=\"/m3.js?v=20260721\" defer></script>") catch return mer.internalError("papers render failed");
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }

@@ -20,26 +20,23 @@ pub const meta: mer.Meta = .{
 
 pub fn render(req: mer.Request) mer.Response {
     const session = lib.session.fromRequest(req);
+    if (lib.m3.access(req) == .login) return mer.redirect("/login", .see_other);
     const explicit_demo = lib.m3.isExplicitDemo(req);
-    const use_mock = explicit_demo or !session.isAuthenticated();
+    const use_mock = explicit_demo;
     const chat_endpoint: []const u8 = if (explicit_demo) "/api/chat?mock=1" else "/api/chat";
     const selected_module = req.queryParam("module") orelse "";
     const wiki_href = lib.m3.demoHref(req.allocator, req, "/wiki") catch return mer.internalError("chat render failed");
     const flashcards_href = lib.m3.demoHref(req.allocator, req, "/flashcards") catch return mer.internalError("chat render failed");
 
-    var modules_slice: []const lib.types.Module = lib.mock.modules;
+    var modules_slice: []const lib.types.Module = if (use_mock) lib.mock.modules else &.{};
     if (!use_mock) {
-        const m = lib.backend.listModules(req.allocator, session.token);
-        if (m.value) |v| modules_slice = v.value;
+        const result = lib.backend.listModules(req.allocator, session.token);
+        if (result.value) |modules| modules_slice = modules.value else return lib.m3.liveError(req, "Chat", result.status);
     }
 
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
-    lib.m3.demoMarker(req, w) catch return mer.internalError("chat render failed");
-
-    if (!session.isAuthenticated()) {
-        w.writeAll("<span hidden data-cp-auth=\"anonymous\"></span>\n") catch return mer.internalError("chat render failed");
-    }
+    lib.m3.demoBanner(req, w) catch return mer.internalError("chat render failed");
 
     w.writeAll(
         \\<header class="cp-page-header">
@@ -51,28 +48,31 @@ pub fn render(req: mer.Request) mer.Response {
         \\
     ) catch return mer.internalError("chat render failed");
 
-    if (use_mock) {
-        w.writeAll("<div class=\"cp-status-banner cp-status-info\">Showing prototype chat — sign in to connect live modules.</div>\n") catch return mer.internalError("chat render failed");
+    if (!use_mock and modules_slice.len == 0) {
+        w.writeAll("<div class=\"cp-status-banner cp-status-info\">No modules have been synced yet. You can still ask about imported sources.</div>\n") catch return mer.internalError("chat render failed");
     }
 
+    const system_prompt: []const u8 = if (use_mock) "Try: &quot;What's due this week in CS2030S?&quot; or &quot;Summarise today's announcements&quot;." else "Ask a question about your synced modules or imported sources. Citations will appear with grounded answers.";
+    const due_prompt: []const u8 = if (use_mock) "What's due this week in CS2030S?" else "What's due this week?";
+    const topic_prompt: []const u8 = if (use_mock) "Explain immutable lists" else "Explain a key topic from my sources";
     w.print(
         \\<section class="cp-chat-shell" id="cp-chat">
         \\  <noscript><div class="cp-status-banner cp-status-warn">Chat needs JavaScript. Browse the <a href="{s}">wiki</a> or <a href="{s}">flashcards</a> in the meantime.</div></noscript>
         \\  <div class="cp-chat-log" id="cp-chat-log" role="log" aria-live="polite">
         \\    <div class="cp-chat-msg cp-chat-msg-system">
-        \\      Try: "What's due this week in CS2030S?" or "Summarise today's announcements".
+        \\      {s}
         \\    </div>
         \\  </div>
         \\  <div class="cp-chat-suggestions">
-        \\    <button type="button" class="cp-chip" data-prompt="What's due this week in CS2030S?">Due this week</button>
+        \\    <button type="button" class="cp-chip" data-prompt="{s}">Due this week</button>
         \\    <button type="button" class="cp-chip" data-prompt="Summarise today's announcements">Announcements</button>
-        \\    <button type="button" class="cp-chip" data-prompt="Explain immutable lists">Immutable lists</button>
+        \\    <button type="button" class="cp-chip" data-prompt="{s}">{s}</button>
         \\  </div>
         \\  <form class="cp-chat-form" id="cp-chat-form" autocomplete="off" data-endpoint="{s}">
         \\    <select class="cp-chat-module" id="cp-chat-module" name="module" aria-label="Module filter">
         \\      <option value="">All modules</option>
         \\
-    , .{ wiki_href, flashcards_href, chat_endpoint }) catch return mer.internalError("chat render failed");
+    , .{ wiki_href, flashcards_href, system_prompt, due_prompt, topic_prompt, if (use_mock) "Immutable lists" else "Key topic", chat_endpoint }) catch return mer.internalError("chat render failed");
 
     for (modules_slice) |m| {
         const safe_id = lib.ui.escapeSafe(req.allocator, m.id);
@@ -98,5 +98,5 @@ pub fn render(req: mer.Request) mer.Response {
         \\
     ) catch return mer.internalError("chat render failed");
 
-    return lib.ui.htmlResponse(&buf);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }

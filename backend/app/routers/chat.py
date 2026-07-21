@@ -15,6 +15,18 @@ from app.services.retrieval import build_context, retrieve
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
+async def _encode_sse(events: AsyncGenerator[dict[str, str], None]) -> AsyncGenerator[bytes, None]:
+    async for event in events:
+        yield f"event: {event['event']}\r\ndata: {event['data']}\r\n\r\n".encode()
+
+
+def _event_stream(events: AsyncGenerator[dict[str, str], None]) -> EventSourceResponse:
+    # Yield pre-framed bytes so the browser-facing proxy keeps the exact event
+    # format, while EventSourceResponse supplies idle heartbeats and the SSE
+    # cache, connection, and proxy-buffering headers.
+    return EventSourceResponse(_encode_sse(events), media_type="text/event-stream")
+
+
 @router.post("")
 async def chat(
     chat_request: ChatRequest,
@@ -43,16 +55,15 @@ async def chat(
                 ),
             }
 
-        return EventSourceResponse(no_results(), media_type="text/event-stream")
+        return _event_stream(no_results())
 
     context = build_context(chunks)
 
-    return EventSourceResponse(
+    return _event_stream(
         stream_rag_response(
             query=chat_request.message,
             context=context,
             chunks=chunks,
             history=chat_request.history,
-        ),
-        media_type="text/event-stream",
+        )
     )

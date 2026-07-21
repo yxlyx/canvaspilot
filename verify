@@ -111,8 +111,8 @@ printf '%s\n' '==> Backend'
     if ((RUN_AUDIT)); then
         "$PYTHON" -m pip_audit --no-deps --disable-pip -r requirements-dev.lock
     fi
-    if ((USE_DATABASE)); then "$PYTHON" -m alembic upgrade head; fi
     if ((USE_DATABASE)); then
+        "$PYTHON" -m alembic upgrade head
         "$PYTHON" -m pytest --cov=app --cov-report=term-missing --cov-fail-under=60
     else
         "$PYTHON" -m pytest "${PYTEST_MODE_ARGS[@]}" --cov=app --cov-report=term-missing --cov-fail-under=60
@@ -127,6 +127,7 @@ printf '%s\n' '==> Frontend'
     zig build test --summary all
     ./tests/chat-boundary-smoke.sh
     ./tests/m3-live-smoke.sh
+    ./tests/m3-live-smoke-safety.sh
 
     if ((RUN_E2E || RUN_AUDIT)); then
         cd e2e

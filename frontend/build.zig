@@ -77,6 +77,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    module_test_mod.addImport("mer", mer_mod);
     const run_module_tests = b.addRunArtifact(b.addTest(.{ .root_module = module_test_mod }));
 
     const test_step = b.step("test", "Run the WikiBase frontend tests");

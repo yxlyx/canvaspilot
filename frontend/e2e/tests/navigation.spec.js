@@ -1,5 +1,8 @@
 const { expect, test } = require("@playwright/test");
 
+const playwrightPort = process.env.PLAYWRIGHT_PORT || "3101";
+const cookieURL = new URL("/", process.env.PLAYWRIGHT_BASE_URL || `http://127.0.0.1:${playwrightPort}`).toString();
+
 test("explicit demo chat keeps demo context through a cited source link", async ({ page }) => {
   await page.goto("/chat?mock=1");
 
@@ -34,12 +37,87 @@ test("demo mutations are unavailable and anonymous live mutations require auth",
   expect(new URL(authResult.url).pathname).toBe("/login");
 });
 
+test("legacy workspace pages keep fixtures behind exact explicit demo mode", async ({ context, page }) => {
+  await context.addCookies([
+    { name: "cp_session", value: "browser-boundary", url: cookieURL },
+  ]);
+
+  await page.goto("/dashboard");
+  await expect(page.getByRole("heading", { name: "Workspace" })).toBeVisible();
+  await expect(page.getByText("Unavailable", { exact: true })).toHaveCount(4);
+  await expect(page.getByText(/temporarily unavailable/).first()).toBeVisible();
+  await expect(page.locator("body")).not.toContainText("CS2030S");
+  await expect(page.locator("body")).not.toContainText("Immutable lists");
+
+  for (const path of ["/sources", "/flashcards", "/chat"]) {
+    await page.goto(path);
+    await expect(page.getByRole("heading", { name: "Service unavailable" })).toBeVisible();
+    await expect(page.locator("body")).not.toContainText("CS2030S");
+    await expect(page.locator("body")).not.toContainText("Immutable lists");
+  }
+
+  await page.goto("/sources?mock=true");
+  await expect(page.getByRole("heading", { name: "Service unavailable" })).toBeVisible();
+  await expect(page.locator('[data-cp-demo="true"]')).toHaveCount(0);
+
+  await page.goto("/sources?mock=1");
+  await expect(page.locator('[data-cp-demo="true"]')).toHaveCount(1);
+  await expect(page.getByText(/synthetic fixtures, not live workspace data/i)).toBeVisible();
+  await page.getByRole("link", { name: "Ready", exact: true }).click();
+  await expect(page).toHaveURL(/\/sources\?status=ready&mock=1$/);
+});
+
+test("demo flashcards require reveal and show balanced disabled ratings", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/flashcards?mock=1");
+
+  await expect(page.locator(".cp-deck-row[aria-current=true]")).toHaveCount(1);
+  await expect(page.getByText("Due now", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("scheduled review", { exact: true })).toHaveCount(0);
+
+  const firstCard = page.locator(".cp-flashcard").first();
+  const details = firstCard.locator("details");
+  const ratings = details.locator("button");
+  await expect(ratings).toHaveCount(4);
+  await expect(ratings.first()).toBeHidden();
+  const closedRatings = await details.locator(".cp-review-actions").evaluate((actions) => ({
+    display: getComputedStyle(actions).display,
+    height: actions.getBoundingClientRect().height,
+  }));
+  expect(closedRatings).toEqual({ display: "none", height: 0 });
+  await details.getByText("Reveal answer", { exact: true }).click();
+  await expect(details.getByText(/ratings are disabled and are not saved/i)).toBeVisible();
+  for (const label of ["Again", "Hard", "Good", "Easy"]) {
+    await expect(details.getByRole("button", { name: label, exact: true })).toBeDisabled();
+  }
+
+  const boxes = await ratings.evaluateAll((buttons) =>
+    buttons.map((button) => {
+      const box = button.getBoundingClientRect();
+      return { width: box.width, top: box.top };
+    }),
+  );
+  expect(Math.abs(boxes[0].width - boxes[1].width)).toBeLessThan(1);
+  expect(Math.abs(boxes[0].width - boxes[2].width)).toBeLessThan(1);
+  expect(Math.abs(boxes[0].top - boxes[1].top)).toBeLessThan(1);
+  expect(boxes[2].top).toBeGreaterThan(boxes[0].top);
+  expect(Math.abs(boxes[2].top - boxes[3].top)).toBeLessThan(1);
+
+  const questionTop = await firstCard.locator("h3").evaluate((heading) => heading.getBoundingClientRect().top);
+  expect(questionTop).toBeLessThan(700);
+});
+
+test("landing workflow numbers are visibly illustrative", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText("Illustrative example · not live workspace data")).toBeVisible();
+});
+
 test("authenticated live chat reports backend unavailability without demo fallback", async ({
   context,
   page,
 }) => {
   await context.addCookies([
-    { name: "cp_session", value: "browser-boundary", url: "http://127.0.0.1:3101" },
+    { name: "cp_session", value: "browser-boundary", url: cookieURL },
   ]);
   await page.goto("/chat");
 
