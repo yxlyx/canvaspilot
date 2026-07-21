@@ -4,9 +4,39 @@ from datetime import UTC, datetime
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.m3 import SourceChange
 from app.models.source import Source, SourceKind, SourceStatus
 from app.models.user import User
 from app.schemas.sources import SourceCreate, SourceUpdate, normalize_topic_tags
+
+
+def source_snapshot(source: Source) -> dict:
+    return {
+        "source_type": source.source_type.value,
+        "title": source.title,
+        "source_url": source.source_url,
+        "citation_label": source.citation_label,
+        "topic_tags": list(source.topic_tags or []),
+        "status": source.status.value,
+        "course_context": source.course_context,
+        "project_context": source.project_context,
+        "import_error": source.import_error,
+    }
+
+
+def record_source_change(source: Source, before: dict, db: AsyncSession, change_type: str) -> None:
+    after = source_snapshot(source)
+    if before != after:
+        db.add(
+            SourceChange(
+                user_id=source.user_id,
+                source_id=source.id,
+                source_title=source.title,
+                change_type=change_type,
+                before_snapshot=before,
+                after_snapshot=after,
+            )
+        )
 
 
 def build_source_list_statement(
@@ -14,6 +44,7 @@ def build_source_list_statement(
     source_type: SourceKind | None = None,
     status: SourceStatus | None = None,
     topic_tag: str | None = None,
+    limit: int = 100,
 ) -> Select[tuple[Source]]:
     statement = select(Source).where(Source.user_id == user_id)
 
@@ -26,7 +57,7 @@ def build_source_list_statement(
         if tag:
             statement = statement.where(Source.topic_tags.contains(tag))
 
-    return statement.order_by(Source.updated_at.desc(), Source.title.asc())
+    return statement.order_by(Source.updated_at.desc(), Source.title.asc()).limit(limit)
 
 
 async def create_or_update_source(
@@ -46,12 +77,18 @@ async def create_or_update_source(
         existing = result.scalar_one_or_none()
 
     if existing:
+        before = source_snapshot(existing)
         existing.source_type = payload.source_type
         existing.title = payload.title
         existing.source_url = payload.source_url
+        existing.citation_label = payload.citation_label or payload.title
+        existing.topic_tags = payload.topic_tags
         existing.status = payload.status
+        existing.course_context = payload.course_context
+        existing.project_context = payload.project_context
         existing.import_error = payload.import_error
         existing.last_imported_at = datetime.now(UTC)
+        record_source_change(existing, before, db, "source_updated")
         await db.commit()
         await db.refresh(existing)
         return existing
@@ -72,6 +109,17 @@ async def create_or_update_source(
         last_imported_at=datetime.now(UTC),
     )
     db.add(source)
+    await db.flush()
+    db.add(
+        SourceChange(
+            user_id=user.id,
+            source_id=source.id,
+            source_title=source.title,
+            change_type="source_created",
+            before_snapshot={},
+            after_snapshot=source_snapshot(source),
+        )
+    )
     await db.commit()
     await db.refresh(source)
     return source
@@ -79,10 +127,12 @@ async def create_or_update_source(
 
 async def update_source(source: Source, payload: SourceUpdate, db: AsyncSession) -> Source:
     update_data = payload.model_dump(exclude_unset=True)
+    before = source_snapshot(source)
 
     for field, value in update_data.items():
         setattr(source, field, value)
 
+    record_source_change(source, before, db, "source_updated")
     await db.commit()
     await db.refresh(source)
     return source

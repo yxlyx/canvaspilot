@@ -20,6 +20,7 @@ async def list_sources(
     source_type: SourceKind | None = None,
     source_status: SourceStatus | None = Query(None, alias="status"),
     topic_tag: str | None = None,
+    limit: int = Query(default=100, ge=1, le=100),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -29,6 +30,7 @@ async def list_sources(
             source_type=source_type,
             status=source_status,
             topic_tag=topic_tag,
+            limit=limit,
         )
     )
     return result.scalars().all()
@@ -40,7 +42,8 @@ async def create_source(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await create_or_update_source(user, payload, db)
+    safe_payload = payload.model_copy(update={"status": SourceStatus.PENDING, "import_error": None})
+    return await create_or_update_source(user, safe_payload, db)
 
 
 @router.get("/{source_id}", response_model=SourceResponse)

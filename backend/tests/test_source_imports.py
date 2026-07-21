@@ -134,7 +134,7 @@ async def _create_typed_source(
 async def _fake_embed_chunks(chunks: list[SourceChunk], db: AsyncSession) -> None:
     for chunk in chunks:
         chunk.embedding = [0.1] * 1536
-    await db.commit()
+    await db.flush()
 
 
 @pytest.mark.asyncio
@@ -256,7 +256,7 @@ async def test_parse_run_imports_plain_text(source_import_client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_parse_run_link_and_repository_metadata_only(source_import_client):
+async def test_parse_run_does_not_publish_metadata_only_sources(source_import_client):
     client, session, user, _ = source_import_client
     link = await _create_typed_source(
         session,
@@ -286,14 +286,15 @@ async def test_parse_run_link_and_repository_metadata_only(source_import_client)
 
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "completed"
-    assert data["imported_source_count"] == 2
+    assert data["status"] == "failed"
+    assert data["imported_source_count"] == 0
     assert data["chunk_count"] == 0
+    assert "Metadata-only sources cannot be published" in data["error_message"]
 
     await session.refresh(link)
     await session.refresh(repository)
-    assert link.status == SourceStatus.READY
-    assert repository.status == SourceStatus.READY
+    assert link.status == SourceStatus.FAILED
+    assert repository.status == SourceStatus.FAILED
     assert (
         await session.execute(
             select(SourceChunk).where(SourceChunk.source_id.in_([link.id, repository.id]))
