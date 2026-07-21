@@ -81,7 +81,7 @@ pub fn render(req: mer.Request) mer.Response {
     w.writeAll("</section>\n") catch return mer.internalError("sources render failed");
 
     if (backend_message) |message| {
-        const safe_message = lib.ui.escape(req.allocator, message) catch message;
+        const safe_message = lib.ui.escapeSafe(req.allocator, message);
         w.print("<div class=\"cp-status-banner cp-status-info\">{s}</div>\n", .{safe_message}) catch return mer.internalError("sources render failed");
     } else if (filter_type.len > 0 or filter_status.len > 0) {
         w.writeAll("<div class=\"cp-status-banner cp-status-info\">Filtered source view. <a href=\"/sources\">Clear filters</a></div>\n") catch return mer.internalError("sources render failed");
@@ -181,9 +181,9 @@ fn renderBackendSource(
     source: lib.types.SourceResponse,
     now_secs: i64,
 ) !void {
-    const safe_title = lib.ui.escape(req.allocator, source.title) catch source.title;
+    const safe_title = lib.ui.escapeSafe(req.allocator, source.title);
     const summary = if (source.import_error) |err| err else source.citation_label;
-    const safe_summary = lib.ui.escape(req.allocator, summary) catch summary;
+    const safe_summary = lib.ui.escapeSafe(req.allocator, summary);
     const when = lib.time.formatRelative(req.allocator, source.updated_at, now_secs) catch "—";
     const action_href_raw = if (source.source_url.len > 0) source.source_url else "/chat";
     const action_href = safeHref(action_href_raw, "/sources");
@@ -203,7 +203,7 @@ fn renderBackendSource(
     , .{ source.source_type, status_cls, source.status, safe_title, safe_summary });
 
     for (source.topic_tags) |topic| {
-        const safe_topic = lib.ui.escape(req.allocator, topic) catch topic;
+        const safe_topic = lib.ui.escapeSafe(req.allocator, topic);
         try w.print("        <span class=\"cp-topic-pill\">{s}</span>\n", .{safe_topic});
     }
 
@@ -223,8 +223,8 @@ fn renderMockSource(
     source: lib.types.WorkspaceSource,
     now_secs: i64,
 ) !void {
-    const safe_title = lib.ui.escape(req.allocator, source.title) catch source.title;
-    const safe_summary = lib.ui.escape(req.allocator, source.summary) catch source.summary;
+    const safe_title = lib.ui.escapeSafe(req.allocator, source.title);
+    const safe_summary = lib.ui.escapeSafe(req.allocator, source.summary);
     const when = lib.time.formatRelative(req.allocator, source.updated_at, now_secs) catch "—";
     const action_href_raw = if (source.url.len > 0) source.url else "/chat";
     const action_href = safeHref(action_href_raw, "/sources");
@@ -244,7 +244,7 @@ fn renderMockSource(
     , .{ source.source_type, status_cls, source.status, safe_title, safe_summary });
 
     for (source.topics) |topic| {
-        const safe_topic = lib.ui.escape(req.allocator, topic) catch topic;
+        const safe_topic = lib.ui.escapeSafe(req.allocator, topic);
         try w.print("        <span class=\"cp-topic-pill\">{s}</span>\n", .{safe_topic});
     }
 

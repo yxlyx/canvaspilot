@@ -4,6 +4,7 @@ from app.models.flashcard import Flashcard, FlashcardAttempt, FlashcardDeck, Lea
 from app.models.ingestion_job import IngestionJob
 from app.models.m3 import (
     HealthFinding,
+    IdempotencyRecord,
     MarkedPaper,
     MarkedPaperQuestion,
     ProviderSetting,
@@ -41,6 +42,7 @@ __all__ = [
     "WikiRevision",
     "SourceChange",
     "HealthFinding",
+    "IdempotencyRecord",
     "MarkedPaper",
     "MarkedPaperQuestion",
     "ProviderSetting",

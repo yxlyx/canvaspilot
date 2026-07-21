@@ -10,6 +10,7 @@ fn redirectError(req: mer.Request, code: []const u8) mer.Response {
 
 pub fn render(req: mer.Request) mer.Response {
     if (req.method != .POST) return mer.redirect("/login?mode=signin", .see_other);
+    if (!lib.mutation.allowedForOrigin(req, lib.config.load().public_origin)) return .{ .status = .forbidden, .content_type = .text, .body = "cross-site sign-in rejected" };
 
     const email = lib.form.value(req.allocator, req.body, "email") catch return redirectError(req, "missing_fields");
     const password = lib.form.value(req.allocator, req.body, "password") catch return redirectError(req, "missing_fields");

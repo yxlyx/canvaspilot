@@ -4,6 +4,11 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON=${PYTHON:-python}
 export PYTHON
+export ENVIRONMENT=test
+export SESSION_SECRET=test-session-secret-with-at-least-32-bytes
+export CANVAS_TOKEN_SECRET=eE-4RX-m39GFpdZXEDBtsaKZoOlMC7EpNlV9XiFrOO8=
+export PROVIDER_ENCRYPTION_SECRET=XRoe-9icgC8y3-AtmJVDwhbrRraWTUXCsSu013nHztY=
+export SECURE_COOKIES=false
 USE_DATABASE=1
 RUN_E2E=1
 RUN_AUDIT=1
@@ -112,6 +117,7 @@ printf '%s\n' '==> Frontend'
     zig build -Doptimize=ReleaseSafe
     zig build test --summary all
     ./tests/chat-boundary-smoke.sh
+    ./tests/m3-live-smoke.sh
 
     if ((RUN_E2E || RUN_AUDIT)); then
         cd e2e

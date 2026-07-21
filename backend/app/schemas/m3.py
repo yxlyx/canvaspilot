@@ -165,6 +165,16 @@ class TopicMeterResponse(BaseModel):
     recommendation: str
 
 
+class MutationAck(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+
+
+class MutationResult(BaseModel):
+    ok: bool = True
+
+
 class MarkedPaperUploadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -268,6 +278,16 @@ class MarkedPaperResponse(BaseModel):
     questions: list[MarkedPaperQuestionResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+
+class StudyOutputPageResponse(BaseModel):
+    items: list[StudyOutputResponse]
+    next_cursor: str | None
+
+
+class MarkedPaperPageResponse(BaseModel):
+    items: list[MarkedPaperResponse]
+    next_cursor: str | None
 
 
 class ProviderDescriptor(BaseModel):

@@ -14,8 +14,8 @@
 // The proposal only requires "returns a grounded response with source links",
 // not token-by-token streaming — that's Milestone 2 polish.
 //
-// Explicit demo and signed-out prototype requests use a canned reply. An
-// authenticated live request never falls back to plausible fixture content.
+// Only explicit demo requests use a canned reply. Live requests never fall
+// back to plausible fixture content.
 
 const std = @import("std");
 const mer = @import("mer");
@@ -66,8 +66,11 @@ pub fn render(req: mer.Request) mer.Response {
 
     const session = lib.session.fromRequest(req);
     if (!session.isAuthenticated()) {
-        // Signed-out M2 prototype chat remains usable without a live workspace.
-        return mockReply(req.allocator, body.message, false);
+        return .{
+            .status = .unauthorized,
+            .content_type = .json,
+            .body = "{\"error\":\"authentication required\"}",
+        };
     }
 
     // Forward to FastAPI; aggregate SSE frames into a single reply.

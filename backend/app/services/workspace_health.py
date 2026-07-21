@@ -230,7 +230,7 @@ async def run_health_checks(user: User, db: AsyncSession) -> list[HealthFinding]
         )
     await db.execute(delete(HealthFinding).where(HealthFinding.user_id == user.id))
     db.add_all(findings)
-    await db.commit()
+    await db.flush()
     return findings
 
 

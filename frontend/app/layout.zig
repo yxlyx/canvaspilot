@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const mer = @import("mer");
+const lib = @import("lib");
 
 const log = std.log.scoped(.layout);
 
@@ -21,6 +22,12 @@ const NAV_ITEMS = [_]NavItem{
     .{ .href = "/wiki", .label = "Wiki", .match = "/wiki" },
     .{ .href = "/flashcards", .label = "Flashcards", .match = "/flashcards" },
     .{ .href = "/chat", .label = "Chat", .match = "/chat" },
+    .{ .href = "/outputs", .label = "Outputs", .match = "/outputs" },
+    .{ .href = "/progress", .label = "Knowledge", .match = "/progress" },
+    .{ .href = "/health", .label = "Health", .match = "/health" },
+    .{ .href = "/history", .label = "History", .match = "/history" },
+    .{ .href = "/marked-papers", .label = "Papers", .match = "/marked-papers" },
+    .{ .href = "/settings/providers", .label = "Providers", .match = "/settings/providers" },
 };
 
 pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, meta: mer.Meta) []const u8 {
@@ -33,6 +40,7 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     else
         "A student workspace for sources, wiki notes, cited Q&A, and flashcards.";
     const anonymous_page = std.mem.indexOf(u8, body, "data-cp-auth=\"anonymous\"") != null;
+    const explicit_demo = std.mem.indexOf(u8, body, "data-cp-demo=\"true\"") != null;
     const signed_in = std.mem.indexOf(u8, path, "/login") == null and !std.mem.eql(u8, path, "/") and !anonymous_page;
 
     w.writeAll(
@@ -82,9 +90,10 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         const active = std.mem.startsWith(u8, path, item.match);
         const cls: []const u8 = if (active) "cp-tab cp-tab-active" else "cp-tab";
         const current: []const u8 = if (active) " aria-current=\"page\"" else "";
+        const href = lib.m3.demoHrefFor(allocator, explicit_demo, item.href) catch return body;
         w.print(
             "      <a class=\"{s}\" href=\"{s}\"{s}>{s}</a>\n",
-            .{ cls, item.href, current, item.label },
+            .{ cls, href, current, item.label },
         ) catch return body;
     }
 
@@ -118,7 +127,7 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         \\        <span class="cp-brand-name">WikiBase</span>
         \\      </a>
         \\    </header>
-        \\    <main class="cp-main" id="main">
+        \\    <main class="cp-main" id="main" tabindex="-1">
         \\
     ) catch return body;
 
@@ -140,9 +149,10 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         const active = std.mem.startsWith(u8, path, item.match);
         const cls: []const u8 = if (active) "cp-bottom-item cp-bottom-active" else "cp-bottom-item";
         const current: []const u8 = if (active) " aria-current=\"page\"" else "";
+        const href = lib.m3.demoHrefFor(allocator, explicit_demo, item.href) catch return body;
         w.print(
             "  <a class=\"{s}\" href=\"{s}\"{s}>{s}</a>\n",
-            .{ cls, item.href, current, item.label },
+            .{ cls, href, current, item.label },
         ) catch return body;
     }
 

@@ -207,3 +207,208 @@ pub const Flashcard = struct {
     topic: []const u8,
     citation: Citation,
 };
+
+// Synthetic Milestone 3 demo-only presentation models. Live response models
+// that mirror the backend contracts are declared below.
+pub const ProviderStatus = enum { configured, disconnected, invalid, pending };
+
+pub const ProviderCapability = struct {
+    label: []const u8,
+    available: bool,
+};
+
+pub const ProviderFieldKind = enum { text, url, secret };
+
+pub const ProviderField = struct {
+    id: []const u8,
+    label: []const u8,
+    placeholder: []const u8,
+    kind: ProviderFieldKind,
+    required: bool,
+};
+
+pub const Provider = struct {
+    id: []const u8,
+    name: []const u8,
+    status: ProviderStatus,
+    status_detail: []const u8,
+    capabilities: []const ProviderCapability,
+    fields: []const ProviderField,
+};
+
+pub const OutputBoundaryState = enum { grounded, insufficient_context, unavailable };
+
+pub const OutputCitation = struct {
+    id: []const u8,
+    source_id: []const u8,
+    source_title: []const u8,
+    location: []const u8,
+    snippet: []const u8,
+};
+
+pub const CitedOutput = struct {
+    id: []const u8,
+    title: []const u8,
+    summary: []const u8,
+    boundary: OutputBoundaryState,
+    citations: []const OutputCitation,
+};
+
+pub const HealthState = enum { healthy, warning, failed, stale, unknown };
+pub const HealthSeverity = enum { info, warning, critical };
+
+pub const HealthSummary = struct {
+    healthy: usize,
+    warning: usize,
+    failed: usize,
+    stale: usize,
+    unknown: usize,
+};
+
+pub const HealthFinding = struct {
+    id: []const u8,
+    severity: HealthSeverity,
+    state: HealthState,
+    title: []const u8,
+    detail: []const u8,
+    subject: []const u8,
+    recommendation: []const u8,
+    action_label: []const u8,
+    action_href: []const u8,
+};
+
+pub const DiffKind = enum { context, addition, deletion };
+
+pub const DiffLine = struct {
+    kind: DiffKind,
+    text: []const u8,
+};
+
+pub const HistoryChange = struct {
+    id: []const u8,
+    change_type: []const u8,
+    subject_id: []const u8,
+    subject_title: []const u8,
+    version_from: u32,
+    version_to: u32,
+    changed_at: []const u8,
+    summary: []const u8,
+    citation_change: []const u8,
+    diff: []const DiffLine,
+};
+
+pub const KnowledgeSignal = struct {
+    id: []const u8,
+    label: []const u8,
+    evidence: []const u8,
+    trend: []const u8,
+    observed_at: []const u8,
+};
+
+pub const KnowledgeMeter = struct {
+    id: []const u8,
+    topic: []const u8,
+    estimate_percent: ?u8,
+    confidence: []const u8,
+    evidence_count: usize,
+    recency: []const u8,
+    trend: []const u8,
+    signals: []const KnowledgeSignal,
+};
+
+pub const KnowledgeOverview = struct {
+    estimate_percent: ?u8,
+    confidence: []const u8,
+    evidence_count: usize,
+    recency: []const u8,
+    known_topic_count: usize,
+    unknown_topic_count: usize,
+};
+
+pub const KnowledgeAction = struct {
+    label: []const u8,
+    href: []const u8,
+};
+
+pub const KnowledgeRecommendation = struct {
+    id: []const u8,
+    topic_id: []const u8,
+    title: []const u8,
+    why: []const u8,
+    evidence: []const u8,
+    next_action: []const u8,
+    actions: []const KnowledgeAction,
+};
+
+pub const EvidenceScore = struct {
+    earned: ?f32,
+    possible: ?f32,
+};
+
+pub const MarkedEvidence = struct {
+    id: []const u8,
+    question: []const u8,
+    topic: []const u8,
+    score: EvidenceScore,
+    extraction_confidence: []const u8,
+    feedback: []const u8,
+    proposal: []const u8,
+};
+
+pub const MarkedPaper = struct {
+    id: []const u8,
+    title: []const u8,
+    imported_at: []const u8,
+    privacy_note: []const u8,
+    score: EvidenceScore,
+    extraction_confidence: []const u8,
+    evidence: []const MarkedEvidence,
+};
+
+// Live Milestone 3 contracts mirror backend/app/schemas/m3.py. Unknown fields
+// are ignored by the backend client, while required evidence fields fail closed.
+pub const StudyOutputCitationResponse = struct {
+    id: []const u8,
+    source_id: []const u8,
+    source_chunk_id: ?[]const u8 = null,
+    citation_key: []const u8,
+    citation_ref: []const u8,
+    source_title: []const u8,
+    snippet: []const u8,
+};
+pub const StudyOutputResponse = struct {
+    id: []const u8,
+    output_type: []const u8,
+    title: []const u8,
+    status: []const u8,
+    content: []const u8,
+    source_ids: []const []const u8,
+    wiki_page_id: ?[]const u8,
+    message: []const u8,
+    citations: []const StudyOutputCitationResponse = &.{},
+    created_at: []const u8,
+    updated_at: []const u8,
+};
+pub const HealthFindingResponse = struct {
+    id: []const u8,
+    code: []const u8,
+    severity: []const u8,
+    state: []const u8,
+    resource_type: []const u8,
+    resource_id: ?[]const u8,
+    topic: ?[]const u8 = null,
+    message: []const u8,
+    recommendation: []const u8,
+    created_at: []const u8,
+};
+pub const HistoryEntryResponse = struct { id: []const u8, entry_type: []const u8, resource_id: []const u8, summary: []const u8, created_at: []const u8 };
+pub const WikiRevisionResponse = struct { id: []const u8, page_id: []const u8, revision_number: usize, title: []const u8, markdown: []const u8, source_ids: []const []const u8, citation_count: usize, change_summary: []const u8, created_at: []const u8 };
+pub const RevisionDiffResponse = struct { page_id: []const u8, from_revision: usize, to_revision: usize, diff: []const u8 };
+pub const MeterSignalResponse = struct { name: []const u8, value: ?f64, evidence_count: usize };
+pub const TopicMeterResponse = struct { topic: []const u8, estimated_completion: ?f64, evidence_confidence: f64, evidence_count: usize, state: []const u8, stale: bool, signals: []const MeterSignalResponse, recommendation: []const u8 };
+pub const MarkedPaperQuestionResponse = struct { id: []const u8, question_number: usize, question_text: []const u8, awarded_marks: ?f64, available_marks: ?f64, feedback: []const u8, topic_tag: []const u8, confidence: f64, reviewed: bool, reviewed_at: ?[]const u8 };
+pub const MarkedPaperResponse = struct { id: []const u8, filename: []const u8, content_type: []const u8, extraction_status: []const u8, extraction_message: []const u8, questions: []const MarkedPaperQuestionResponse = &.{}, created_at: []const u8, updated_at: []const u8 };
+pub const StudyOutputPageResponse = struct { items: []const StudyOutputResponse, next_cursor: ?[]const u8 };
+pub const MarkedPaperPageResponse = struct { items: []const MarkedPaperResponse, next_cursor: ?[]const u8 };
+pub const ProviderDescriptor = struct { id: []const u8, name: []const u8, models: []const []const u8, endpoint: []const u8 };
+pub const ProviderStatusResponse = struct { provider: []const u8, model: []const u8, endpoint: []const u8, status: []const u8, credential: []const u8 = "********", last_tested_at: ?[]const u8, updated_at: []const u8 };
