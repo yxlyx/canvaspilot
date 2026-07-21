@@ -25,6 +25,13 @@ test("explicit demo renders grounded and insufficient evidence states", async ({
   await expect(page.locator("main")).toHaveAttribute("id", "main");
 });
 
+test("anonymous explicit demo shell shows sign in and never sign out", async ({ page }) => {
+  await page.goto("/dashboard?mock=1");
+  await expect(page.locator('[data-cp-auth="anonymous"][data-cp-demo="true"]')).toHaveCount(1);
+  await expect(page.locator(".cp-sidebar").getByRole("link", { name: "Sign in" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
+});
+
 test("live backend failure is unavailable and never falls back", async ({ context, page }) => {
   await context.addCookies([{ name: "cp_session", value: "browser-token", url: "http://127.0.0.1:3101", httpOnly: true, sameSite: "Lax" }]);
   await page.goto("/outputs");
@@ -40,13 +47,35 @@ test("navigation is keyboard reachable at narrow viewport and preserves demo mod
   await expect(page.getByRole("link", { name: "Skip to content" })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page.locator("#main")).toBeFocused();
-  const mobile = page.getByRole("navigation", { name: "Primary mobile" });
-  await expect(mobile).toBeVisible();
-  await mobile.getByRole("link", { name: "Knowledge" }).click();
+  const primary = page.getByRole("navigation", { name: "Primary mobile" });
+  await expect(primary).toBeVisible();
+  await expect(primary.getByRole("link")).toHaveCount(4);
+  const menu = page.locator(".cp-mobile-more");
+  await menu.locator("summary").focus();
+  await page.keyboard.press("Enter");
+  await expect(menu.getByRole("navigation", { name: "Mobile menu" })).toBeVisible();
+  await expect(menu.getByRole("link", { name: "Outputs" })).toHaveAttribute("aria-current", "page");
+  await menu.getByRole("link", { name: "Knowledge" }).click();
   await expect(page).toHaveURL(/\/progress\?mock=1$/);
   await expect(page.getByText(/synthetic fixtures/i)).toBeVisible();
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
-  expect(overflow).toBeTruthy();
+  const layout = await page.evaluate(() => ({
+    pageFits: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+    barFits: document.querySelector(".cp-bottomnav").scrollWidth <= document.querySelector(".cp-bottomnav").clientWidth,
+  }));
+  expect(layout).toEqual({ pageFits: true, barFits: true });
+});
+
+test("mobile Menu works without JavaScript and exposes POST sign-out", async ({ browser }) => {
+  const context = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 360, height: 640 } });
+  await context.addCookies([{ name: "cp_session", value: "browser-token", url: "http://127.0.0.1:3101" }]);
+  const page = await context.newPage();
+  await page.goto("/outputs?mock=1");
+  const menu = page.locator(".cp-mobile-more");
+  await menu.locator("summary").click();
+  await expect(menu.getByRole("link", { name: "Providers" })).toHaveAttribute("href", "/settings/providers?mock=1");
+  await expect(menu.locator('form[action="/logout"][method="post"]')).toHaveCount(1);
+  await expect(menu.getByRole("button", { name: "Sign out" })).toBeVisible();
+  await context.close();
 });
 
 test("live mutation payload and canonical download work without secret URLs", async ({ page }) => {
@@ -75,6 +104,58 @@ test("live mutation payload and canonical download work without secret URLs", as
   expect(requests[1]).toMatchObject({ action: "page.download", slug: "safe-page" });
   expect(requests[1].idempotency_key).toBeUndefined();
   expect(requests.every((request) => !JSON.stringify(request).includes("api_key"))).toBeTruthy();
+});
+
+test("signup mode has matching title, heading, active tab, and focused server errors", async ({ page }) => {
+  await page.goto("/login?mode=signup&error=email_taken");
+  await expect(page).toHaveTitle("Create account — WikiBase");
+  await expect(page.locator("h1", { hasText: "Create your account" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Create account" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("alert")).toHaveText("An account already exists for that email.");
+  await expect(page.getByRole("alert")).toBeFocused();
+});
+
+test("output scope enables one input and rejects whitespace topics before requesting", async ({ page }) => {
+  await page.goto("/login");
+  let calls = 0;
+  await page.route("**/api/m3", async (route) => { calls += 1; await route.fulfill({ status: 201, contentType: "application/json", body: "{}" }); });
+  await page.setContent(`<main><form data-m3-form><input name="action" value="output.create">
+    <select name="scope_type" data-scope-select><option value="source_ids">Sources</option><option value="topic">Topic</option></select>
+    <label data-scope-field="source_ids"><select name="source_ids"><option value="source-1">Source</option></select></label>
+    <label data-scope-field="topic"><input name="topic"></label><button>Generate</button><p class="cp-form-status"></p></form><script src="/m3.js"></script></main>`);
+  const scope = page.locator('[name="scope_type"]');
+  await scope.selectOption("topic");
+  await expect(page.locator('[name="source_ids"]')).toBeDisabled();
+  await expect(page.locator('[name="topic"]')).toBeEnabled();
+  await page.locator('[name="topic"]').fill("   ");
+  await page.getByRole("button", { name: "Generate" }).click();
+  await expect(page.getByText("Enter a topic that is not blank.")).toHaveAttribute("role", "alert");
+  await expect(page.locator('[name="topic"]')).toBeFocused();
+  expect(calls).toBe(0);
+});
+
+test("structured FastAPI errors are readable, announced, and focused", async ({ page }) => {
+  await page.goto("/login");
+  await page.route("**/api/m3", (route) => route.fulfill({
+    status: 422,
+    contentType: "application/json",
+    body: JSON.stringify({ detail: [{ type: "string_too_short", loc: ["body", "topic"], msg: "Topic must not be blank", input: "" }] }),
+  }));
+  await page.setContent(`<main><form data-m3-form><input name="action" value="health.run"><button>Run</button><p class="cp-form-status"></p></form><script src="/m3.js"></script></main>`);
+  await page.getByRole("button", { name: "Run" }).click();
+  const alert = page.getByRole("alert");
+  await expect(alert).toHaveText("topic: Topic must not be blank");
+  await expect(alert).not.toContainText("[object Object]");
+  await expect(alert).toBeFocused();
+});
+
+test("malformed health IDs render a health-specific client error", async ({ context, page }) => {
+  await context.addCookies([{ name: "cp_session", value: "browser-token", url: "http://127.0.0.1:3101" }]);
+  const response = await page.goto("/health/not%20valid");
+  expect(response.status()).toBe(400);
+  await expect(page.getByRole("heading", { name: "Invalid health finding" })).toBeVisible();
+  await expect(page.getByText(/No health service request was made/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Service unavailable" })).toHaveCount(0);
 });
 
 test("forms lock before async work, reject duplicate submits, and focus errors", async ({ page }) => {

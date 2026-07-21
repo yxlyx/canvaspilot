@@ -122,6 +122,7 @@ printf '%s\n' '==> Frontend'
     zig build test --summary all
     ./tests/chat-boundary-smoke.sh
     ./tests/m3-live-smoke.sh
+    ./tests/m3-live-smoke-safety.sh
 
     if ((RUN_E2E || RUN_AUDIT)); then
         cd e2e

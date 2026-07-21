@@ -22,11 +22,11 @@ pub fn render(req: mer.Request) mer.Response {
     if (!use_mock) {
         const result = lib.backend.getWikiPage(req.allocator, session.token, slug);
         if (result.value) |page| return renderLivePage(req, page.value, now_secs, null);
-        if (result.status == 404) return renderMissing(req, slug);
+        if (result.status == 404) return renderMissing(req, slug, false);
         return lib.m3.liveError(req, "Wiki page", result.status);
     }
 
-    const page = findPage(slug) orelse return renderMissing(req, slug);
+    const page = findPage(slug) orelse return renderMissing(req, slug, true);
     return renderMockPage(req, page, now_secs, null);
 }
 
@@ -38,12 +38,13 @@ fn renderLivePage(
 ) mer.Response {
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
+    lib.m3.demoBanner(req, w) catch return mer.internalError("wiki render failed");
     const safe_title = lib.ui.escapeSafe(req.allocator, page.title);
     const safe_summary = lib.ui.escapeSafe(req.allocator, page.summary);
     const when = lib.time.formatRelative(req.allocator, page.updated_at, now_secs) catch "—";
 
-    renderHeader(w, safe_title, safe_summary) catch return mer.internalError("wiki render failed");
-    w.print("<section class=\"cp-card cp-export-bar\"><form method=\"post\" action=\"/api/m3\" data-page-download data-slug=\"{s}\"><button class=\"cp-btn cp-btn-ghost\" type=\"submit\">Download canonical Markdown</button><span class=\"cp-form-status\" role=\"status\" aria-live=\"polite\"></span></form></section><script src=\"/m3.js\" defer></script>", .{lib.ui.escapeSafe(req.allocator, page.slug)}) catch return mer.internalError("wiki export render failed");
+    renderHeader(req, w, safe_title, safe_summary) catch return mer.internalError("wiki render failed");
+    w.print("<section class=\"cp-card cp-export-bar\"><form method=\"post\" action=\"/api/m3\" data-page-download data-slug=\"{s}\"><button class=\"cp-btn cp-btn-ghost\" type=\"submit\">Download canonical Markdown</button><span class=\"cp-form-status\" role=\"status\" aria-live=\"polite\"></span></form></section><script src=\"/m3.js?v=20260721\" defer></script>", .{lib.ui.escapeSafe(req.allocator, page.slug)}) catch return mer.internalError("wiki export render failed");
     if (message) |copy| {
         const safe_message = lib.ui.escapeSafe(req.allocator, copy);
         w.print("<div class=\"cp-status-banner cp-status-info\">{s}</div>\n", .{safe_message}) catch return mer.internalError("wiki render failed");
@@ -71,7 +72,7 @@ fn renderLivePage(
             \\        </a>
         , .{ safe_citation_title, safe_ref, safe_snippet }) catch return mer.internalError("wiki render failed");
     }
-    renderPageEnd(w) catch return mer.internalError("wiki render failed");
+    renderPageEnd(req, w) catch return mer.internalError("wiki render failed");
     return lib.ui.htmlResponse(&buf);
 }
 
@@ -83,11 +84,12 @@ fn renderMockPage(
 ) mer.Response {
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
+    lib.m3.demoBanner(req, w) catch return mer.internalError("wiki render failed");
     const safe_title = lib.ui.escapeSafe(req.allocator, page.title);
     const safe_summary = lib.ui.escapeSafe(req.allocator, page.summary);
     const when = lib.time.formatRelative(req.allocator, page.updated_at, now_secs) catch "—";
 
-    renderHeader(w, safe_title, safe_summary) catch return mer.internalError("wiki render failed");
+    renderHeader(req, w, safe_title, safe_summary) catch return mer.internalError("wiki render failed");
     w.writeAll("<section class=\"cp-card cp-export-bar\"><button class=\"cp-btn cp-btn-ghost\" type=\"button\" disabled>Download canonical Markdown</button><span class=\"cp-muted-copy\">Export is unavailable in synthetic demo mode.</span></section>") catch return mer.internalError("wiki export render failed");
     if (message) |copy| {
         const safe_message = lib.ui.escapeSafe(req.allocator, copy);
@@ -106,18 +108,21 @@ fn renderMockPage(
     for (page.citations) |citation| {
         const safe_citation_title = lib.ui.escapeSafe(req.allocator, citation.title);
         const safe_snippet = lib.ui.escapeSafe(req.allocator, citation.snippet);
+        const citation_href = if (std.mem.startsWith(u8, citation.url, "/")) lib.m3.demoHref(req.allocator, req, citation.url) catch return mer.internalError("wiki render failed") else citation.url;
         w.print(
             \\        <a class="cp-citation-card" href="{s}">
             \\          <span>{s}</span>
             \\          <small>{s}</small>
             \\        </a>
-        , .{ citation.url, safe_citation_title, safe_snippet }) catch return mer.internalError("wiki render failed");
+        , .{ citation_href, safe_citation_title, safe_snippet }) catch return mer.internalError("wiki render failed");
     }
-    renderPageEnd(w) catch return mer.internalError("wiki render failed");
+    renderPageEnd(req, w) catch return mer.internalError("wiki render failed");
     return lib.ui.htmlResponse(&buf);
 }
 
-fn renderHeader(w: *std.Io.Writer, title: []const u8, summary: []const u8) !void {
+fn renderHeader(req: mer.Request, w: *std.Io.Writer, title: []const u8, summary: []const u8) !void {
+    const sources_href = try lib.m3.demoHref(req.allocator, req, "/sources");
+    const flashcards_href = try lib.m3.demoHref(req.allocator, req, "/flashcards");
     try w.print(
         \\<header class="cp-page-header">
         \\  <div>
@@ -125,11 +130,11 @@ fn renderHeader(w: *std.Io.Writer, title: []const u8, summary: []const u8) !void
         \\    <div class="cp-page-sub">{s}</div>
         \\  </div>
         \\  <div class="cp-page-actions">
-        \\    <a class="cp-btn cp-btn-ghost" href="/sources">Sources</a>
-        \\    <a class="cp-btn cp-btn-primary" href="/flashcards">Practice cards</a>
+        \\    <a class="cp-btn cp-btn-ghost" href="{s}">Sources</a>
+        \\    <a class="cp-btn cp-btn-primary" href="{s}">Practice cards</a>
         \\  </div>
         \\</header>
-    , .{ title, summary });
+    , .{ title, summary, sources_href, flashcards_href });
 }
 
 fn renderArticleStart(w: *std.Io.Writer) !void {
@@ -160,18 +165,19 @@ fn renderCitationsStart(w: *std.Io.Writer) !void {
     );
 }
 
-fn renderPageEnd(w: *std.Io.Writer) !void {
-    try w.writeAll(
+fn renderPageEnd(req: mer.Request, w: *std.Io.Writer) !void {
+    const chat_href = try lib.m3.demoHref(req.allocator, req, "/chat");
+    try w.print(
         \\      </div>
         \\    </section>
         \\    <section class="cp-card">
         \\      <div class="cp-card-title"><span>Ask about this page</span></div>
         \\      <p class="cp-muted-copy">Continue into Q&A with the same source context and cited snippets.</p>
-        \\      <a class="cp-btn cp-btn-ghost" href="/chat">Open Q&A</a>
+        \\      <a class="cp-btn cp-btn-ghost" href="{s}">Open Q&A</a>
         \\    </section>
         \\  </aside>
         \\</div>
-    );
+    , .{chat_href});
 }
 
 fn findPage(slug: []const u8) ?lib.types.WikiPage {
@@ -181,21 +187,25 @@ fn findPage(slug: []const u8) ?lib.types.WikiPage {
     return null;
 }
 
-fn renderMissing(req: mer.Request, slug: []const u8) mer.Response {
+fn renderMissing(req: mer.Request, slug: []const u8, demo: bool) mer.Response {
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
+    lib.m3.demoBanner(req, w) catch return mer.internalError("wiki render failed");
     const safe_slug = lib.ui.escapeSafe(req.allocator, slug);
+    const wiki_href = lib.m3.demoHref(req.allocator, req, "/wiki") catch return mer.internalError("wiki render failed");
+    const dashboard_href = lib.m3.demoHref(req.allocator, req, "/dashboard") catch return mer.internalError("wiki render failed");
+    const missing_copy: []const u8 = if (demo) "No synthetic demo page exists for" else "No live wiki page has been generated for";
 
     w.print(
         \\<section class="cp-landing">
         \\  <h1 class="cp-landing-title">Wiki page not generated yet</h1>
-        \\  <p class="cp-landing-sub">No prototype wiki page exists for <strong>{s}</strong>. Choose an available generated page from the workspace.</p>
+        \\  <p class="cp-landing-sub">{s} <strong>{s}</strong>. Choose an available generated page from the workspace.</p>
         \\  <div class="cp-landing-actions">
-        \\    <a class="cp-btn cp-btn-primary" href="/wiki/immutable-lists">Open demo wiki</a>
-        \\    <a class="cp-btn cp-btn-ghost" href="/dashboard">Workspace</a>
+        \\    <a class="cp-btn cp-btn-primary" href="{s}">Browse wiki pages</a>
+        \\    <a class="cp-btn cp-btn-ghost" href="{s}">Workspace</a>
         \\  </div>
         \\</section>
-    , .{safe_slug}) catch return mer.internalError("wiki render failed");
+    , .{ missing_copy, safe_slug, wiki_href, dashboard_href }) catch return mer.internalError("wiki render failed");
 
     return .{ .status = .not_found, .content_type = .html, .body = buf.written() };
 }

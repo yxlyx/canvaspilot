@@ -22,6 +22,7 @@ from app.services.marked_papers import MAX_QUESTIONS, extract_supported_text
 from app.services.meters import TopicEvidence, calculate_topic_meter
 from app.services.providers import decrypt_provider_key, encrypt_provider_key, endpoint_for
 from app.services.study_outputs import Evidence, build_grounded_markdown
+from app.services.workspace_health import _workspace_status_finding
 
 
 @pytest.mark.parametrize("environment", ["production", "staging", "development"])
@@ -125,6 +126,25 @@ def test_grounded_markdown_is_extractive_and_cited():
         )
     ]
     assert build_grounded_markdown("summary", evidence) == "Known evidence sentence. [1]"
+
+
+@pytest.mark.parametrize(
+    ("resource_count", "code", "state"),
+    [
+        (0, "workspace_not_evaluated", "unknown"),
+        (1, "workspace_healthy", "healthy"),
+    ],
+)
+def test_workspace_status_requires_resources_for_healthy_state(resource_count, code, state):
+    finding = _workspace_status_finding(uuid.uuid4(), resource_count)
+
+    assert finding.code == code
+    assert finding.severity == "info"
+    assert finding.state == state
+    assert finding.resource_type == "workspace"
+    assert finding.resource_id is None
+    if resource_count == 0:
+        assert "finish indexing a source" in finding.recommendation
 
 
 def test_meter_states_are_deterministic_for_uncertain_stale_and_weak_topics():

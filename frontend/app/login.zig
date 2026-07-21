@@ -48,28 +48,32 @@ pub fn render(req: mer.Request) mer.Response {
         \\
     ) catch return mer.internalError("login render failed");
 
+    if (signup_active) w.writeAll("<span hidden data-auth-mode=\"signup\"></span>\n") catch return mer.internalError("login render failed");
     if (req.queryParam("error")) |err| {
         const safe = lib.ui.escapeSafe(req.allocator, errorText(err));
-        w.print("<div class=\"cp-status-banner cp-status-error\">{s}</div>\n", .{safe}) catch return mer.internalError("login render failed");
+        w.print("<div class=\"cp-status-banner cp-status-error\" role=\"alert\" tabindex=\"-1\" autofocus>{s}</div>\n", .{safe}) catch return mer.internalError("login render failed");
     } else if (req.queryParam("signed_out") != null) {
-        w.writeAll("<div class=\"cp-status-banner cp-status-info\">You have been signed out.</div>\n") catch return mer.internalError("login render failed");
+        w.writeAll("<div class=\"cp-status-banner cp-status-info\" role=\"status\">You have been signed out.</div>\n") catch return mer.internalError("login render failed");
     }
 
     const signin_cls: []const u8 = if (signup_active) "cp-auth-tab" else "cp-auth-tab cp-auth-tab-active";
     const signup_cls: []const u8 = if (signup_active) "cp-auth-tab cp-auth-tab-active" else "cp-auth-tab";
+    const signin_current: []const u8 = if (signup_active) "" else " aria-current=\"page\"";
+    const signup_current: []const u8 = if (signup_active) " aria-current=\"page\"" else "";
     w.print(
         \\  <nav class="cp-auth-tabs" aria-label="Account">
-        \\    <a class="{s}" href="/login?mode=signin">Sign in</a>
-        \\    <a class="{s}" href="/login?mode=signup">Create account</a>
+        \\    <a class="{s}" href="/login?mode=signin"{s}>Sign in</a>
+        \\    <a class="{s}" href="/login?mode=signup"{s}>Create account</a>
         \\  </nav>
         \\
-    , .{ signin_cls, signup_cls }) catch return mer.internalError("login render failed");
+    , .{ signin_cls, signin_current, signup_cls, signup_current }) catch return mer.internalError("login render failed");
 
     if (signup_active) {
         const name_value = signupValue(req, "name");
         const email_value = signupValue(req, "email");
         w.print(
-            \\  <form class="cp-auth-form" method="post" action="/api/auth/register">
+            \\  <h1 id="auth-form-title">Create your account</h1>
+            \\  <form class="cp-auth-form" method="post" action="/api/auth/register" aria-labelledby="auth-form-title">
             \\    <label class="cp-field">
             \\      <span>Name</span>
             \\      <input name="name" autocomplete="name" value="{s}" required>
@@ -92,7 +96,8 @@ pub fn render(req: mer.Request) mer.Response {
         , .{ name_value, email_value }) catch return mer.internalError("login render failed");
     } else {
         w.writeAll(
-            \\  <form class="cp-auth-form" method="post" action="/api/auth/signin">
+            \\  <h2 id="auth-form-title">Sign in to your account</h2>
+            \\  <form class="cp-auth-form" method="post" action="/api/auth/signin" aria-labelledby="auth-form-title">
             \\    <label class="cp-field">
             \\      <span>Email</span>
             \\      <input name="email" type="email" autocomplete="email" required>

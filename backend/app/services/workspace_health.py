@@ -89,6 +89,36 @@ def _finding(user_id: uuid.UUID, **values) -> HealthFinding:
     return HealthFinding(user_id=user_id, **values)
 
 
+def _workspace_status_finding(user_id: uuid.UUID, evaluated_resource_count: int) -> HealthFinding:
+    if evaluated_resource_count == 0:
+        return _finding(
+            user_id,
+            code="workspace_not_evaluated",
+            severity="info",
+            state="unknown",
+            resource_type="workspace",
+            resource_id=None,
+            topic=None,
+            message=(
+                "Workspace health cannot be evaluated without ready sources or current wiki pages."
+            ),
+            recommendation=(
+                "Add or finish indexing a source, then run workspace health checks again."
+            ),
+        )
+    return _finding(
+        user_id,
+        code="workspace_healthy",
+        severity="info",
+        state="healthy",
+        resource_type="workspace",
+        resource_id=None,
+        topic=None,
+        message="No workspace health problems were found.",
+        recommendation="Continue reviewing sources regularly.",
+    )
+
+
 async def run_health_checks(user: User, db: AsyncSession) -> list[HealthFinding]:
     await db.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
@@ -215,19 +245,10 @@ async def run_health_checks(user: User, db: AsyncSession) -> list[HealthFinding]
             )
 
     if not findings:
-        findings.append(
-            _finding(
-                user.id,
-                code="workspace_healthy",
-                severity="info",
-                state="healthy",
-                resource_type="workspace",
-                resource_id=None,
-                topic=None,
-                message="No workspace health problems were found.",
-                recommendation="Continue reviewing sources regularly.",
-            )
-        )
+        evaluated_resource_count = sum(
+            source.status == SourceStatus.READY for source in sources
+        ) + len(pages)
+        findings.append(_workspace_status_finding(user.id, evaluated_resource_count))
     await db.execute(delete(HealthFinding).where(HealthFinding.user_id == user.id))
     db.add_all(findings)
     await db.flush()

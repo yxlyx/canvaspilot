@@ -325,6 +325,29 @@ PY
 assert_status 400
 assert_backend_count 0
 
+# Authenticated live reads contact the backend and never substitute fixture identity or pages.
+request "$BASE_URL/api/me" --header 'Cookie: cp_session=chat-boundary'
+assert_status 502
+assert_json_field error 'identity service unavailable'
+assert_json_absent email
+assert_backend_count 1
+
+request "$BASE_URL/dashboard" --header 'Cookie: cp_session=chat-boundary'
+assert_status 200
+assert_contains 'temporarily unavailable'
+if grep -Fq 'CS2030S' "$BODY" || grep -Fq 'Immutable lists' "$BODY"; then
+    fail '/dashboard: live failure rendered fixture sentinels'
+fi
+for route in /sources /flashcards /chat; do
+    request "$BASE_URL$route" --header 'Cookie: cp_session=chat-boundary'
+    assert_status 503
+    assert_contains 'Service unavailable'
+    if grep -Fq 'CS2030S' "$BODY" || grep -Fq 'Immutable lists' "$BODY"; then
+        fail "$route: live failure rendered fixture sentinels"
+    fi
+done
+assert_backend_count 9
+
 # Authenticated live requests contact the backend and never substitute demo output.
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
@@ -335,7 +358,7 @@ assert_json_field error 'live chat is unavailable; no demo answer was substitute
 assert_json_absent source
 assert_json_absent message
 assert_json_absent citations
-assert_backend_count 1
+assert_backend_count 10
 
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
@@ -344,7 +367,7 @@ request "$BASE_URL/api/chat" \
 assert_status 200
 assert_json_field source backend
 assert_json_field message 'Grounded live reply'
-assert_backend_count 2
+assert_backend_count 11
 
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
@@ -354,7 +377,7 @@ assert_status 502
 assert_json_field error 'live chat is unavailable; no demo answer was substituted'
 assert_json_absent message
 assert_contains 'no demo answer was substituted'
-assert_backend_count 3
+assert_backend_count 12
 
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
@@ -362,12 +385,12 @@ request "$BASE_URL/api/chat" \
     --data '{"message":"oversized response boundary"}'
 assert_status 502
 assert_json_field error 'live chat is unavailable; no demo answer was substituted'
-assert_backend_count 4
+assert_backend_count 13
 
 request "$BASE_URL/api/sync" --header 'Cookie: cp_session=chat-boundary' --data 'action=sync'
 assert_status 303
 grep -Eiq '^location:[[:space:]]*/dashboard\?synced=1[[:space:]]*\r?$' "$HEADERS" || fail 'authenticated live sync did not return its success redirect'
-assert_backend_count 5
+assert_backend_count 14
 [[ "$(grep -Fxc '/api/chat' "$BACKEND_RECORD")" == "4" ]] || fail 'unexpected live chat backend request count'
 [[ "$(grep -Fxc '/api/modules/sync' "$BACKEND_RECORD")" == "1" ]] || fail 'unexpected live sync backend request count'
 
@@ -398,7 +421,7 @@ request "$BASE_URL/api/sources" \
     --header 'X-Forwarded-Proto: https' \
     --data "$source_payload"
 assert_status 403
-assert_backend_count 5
+assert_backend_count 14
 
 # A configured public origin works behind a proxy without trusting forwarding headers.
 for case in 'unauthorized source:401' 'forbidden source:403' 'invalid source:422' 'oversized source response:502'; do
@@ -428,7 +451,7 @@ request "$BASE_URL/api/sources" \
     --data '{"source_type":"link","origin":"test","title":"created source","source_url":"https://example.com"}'
 assert_status 201
 assert_json_field title 'created source'
-assert_backend_count 10
-[[ "$(grep -Fxc '/api/sources' "$BACKEND_RECORD")" == "5" ]] || fail 'unexpected live source backend request count'
+assert_backend_count 19
+[[ "$(grep -Fxc '/api/sources' "$BACKEND_RECORD")" == "7" ]] || fail 'unexpected live source backend request count'
 
 printf 'chat-boundary-smoke: all assertions passed at %s\n' "$BASE_URL"

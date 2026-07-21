@@ -30,11 +30,14 @@ const NAV_ITEMS = [_]NavItem{
     .{ .href = "/settings/providers", .label = "Providers", .match = "/settings/providers" },
 };
 
+const MOBILE_PRIMARY_ITEMS = NAV_ITEMS[0..4];
+
 pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, meta: mer.Meta) []const u8 {
     var buf: std.Io.Writer.Allocating = .init(allocator);
     const w = &buf.writer;
 
-    const title = if (meta.title.len > 0) meta.title else "WikiBase";
+    const signup_page = std.mem.indexOf(u8, body, "data-auth-mode=\"signup\"") != null;
+    const title = if (signup_page) "Create account" else if (meta.title.len > 0) meta.title else "WikiBase";
     const desc = if (meta.description.len > 0)
         meta.description
     else
@@ -126,6 +129,32 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         \\        <span class="cp-brand-mark"><img src="/icon-512.png?v=wikibase-2" alt="WikiBase" width="36" height="36"></span>
         \\        <span class="cp-brand-name">WikiBase</span>
         \\      </a>
+        \\      <details class="cp-mobile-more">
+        \\        <summary>Menu</summary>
+        \\        <nav aria-label="Mobile menu">
+        \\
+    ) catch return body;
+
+    for (NAV_ITEMS) |item| {
+        const active = std.mem.startsWith(u8, path, item.match);
+        const current: []const u8 = if (active) " aria-current=\"page\"" else "";
+        const href = lib.m3.demoHrefFor(allocator, explicit_demo, item.href) catch return body;
+        w.print("          <a href=\"{s}\"{s}>{s}</a>\n", .{ href, current, item.label }) catch return body;
+    }
+    if (signed_in) {
+        w.writeAll(
+            \\          <form action="/logout" method="post" class="cp-mobile-account">
+            \\            <input type="hidden" name="action" value="logout">
+            \\            <button type="submit">Sign out</button>
+            \\          </form>
+            \\
+        ) catch return body;
+    } else {
+        w.writeAll("          <a class=\"cp-mobile-account\" href=\"/login\">Sign in</a>\n") catch return body;
+    }
+    w.writeAll(
+        \\        </nav>
+        \\      </details>
         \\    </header>
         \\    <main class="cp-main" id="main" tabindex="-1">
         \\
@@ -145,7 +174,7 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         \\
     ) catch return body;
 
-    for (NAV_ITEMS) |item| {
+    for (MOBILE_PRIMARY_ITEMS) |item| {
         const active = std.mem.startsWith(u8, path, item.match);
         const cls: []const u8 = if (active) "cp-bottom-item cp-bottom-active" else "cp-bottom-item";
         const current: []const u8 = if (active) " aria-current=\"page\"" else "";

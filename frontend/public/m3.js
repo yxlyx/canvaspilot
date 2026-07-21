@@ -9,8 +9,22 @@
     if (node) {
       node.textContent = message;
       node.classList.toggle("cp-error", !!error);
+      node.setAttribute("role", error ? "alert" : "status");
+      node.setAttribute("aria-live", error ? "assertive" : "polite");
       if (error) { if (!node.hasAttribute("tabindex")) node.tabIndex = -1; node.focus({ preventScroll: false }); }
     }
+  }
+  function errorMessage(value, fallback) {
+    function text(item) {
+      if (typeof item === "string") return item;
+      if (Array.isArray(item)) return item.map(text).filter(Boolean).join("; ");
+      if (!item || typeof item !== "object") return "";
+      const message = text(item.message) || text(item.msg) || text(item.detail) || text(item.error) || text(item.errors);
+      if (!message) return "";
+      const location = Array.isArray(item.loc) ? item.loc.filter((part) => part !== "body").join(" → ") : "";
+      return location ? location + ": " + message : message;
+    }
+    return text(value?.detail) || text(value?.error) || text(value) || fallback;
   }
   function lock(form) {
     if (form.dataset.inFlight === "true") return null;
@@ -32,7 +46,7 @@
     ["id", "child_id", "slug"].forEach((key) => { const value = data.get(key); if (value) result[key] = String(value); });
     for (const [key, raw] of data.entries()) {
       if (["action", "id", "child_id", "slug"].includes(key) || raw instanceof File) continue;
-      const value = String(raw);
+      const value = key === "topic" ? String(raw).trim() : String(raw);
       if (value === "") continue;
       payload[key] = numeric.has(key) ? Number(value) : value;
     }
@@ -61,19 +75,46 @@
     if (response.status === 401) { release?.(); window.location.assign("/login"); throw new Error("Your session expired. Sign in again."); }
     return response;
   }
+  function updateScope(form) {
+    const select = form.querySelector("[data-scope-select]");
+    if (!select) return;
+    form.querySelectorAll("[data-scope-field]").forEach((field) => {
+      const active = field.dataset.scopeField === select.value;
+      field.hidden = !active;
+      field.querySelectorAll("input,select,textarea").forEach((control) => {
+        control.disabled = !active;
+        control.required = active;
+      });
+    });
+  }
+  function valid(form, body) {
+    if (body.action !== "output.create") return true;
+    const scope = form.querySelector("[data-scope-select]")?.value;
+    if (scope === "topic" && !body.payload?.topic) {
+      status(form, "Enter a topic that is not blank.", true);
+      form.querySelector('[name="topic"]')?.focus();
+      return false;
+    }
+    return true;
+  }
   async function submit(form, body) {
+    if (!valid(form, body)) return;
     const release = lock(form); if (!release) return;
     if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) { release(); return; }
     status(form, "Working…", false);
     try {
       const response = await request(form, body, release);
-      if (!response.ok) { let message = "Request failed (" + response.status + ")."; try { const value = await response.json(); message = value.detail?.message || value.detail || value.error || message; } catch (_) {} throw new Error(String(message)); }
+      if (!response.ok) { let message = "Request failed (" + response.status + ")."; try { message = errorMessage(await response.json(), message); } catch (_) {} throw new Error(message); }
       status(form, "Saved.", false);
       const target = form.dataset.success;
       if (target !== undefined) window.location.assign(target || window.location.href); else release();
     } catch (error) { status(form, error.message || "Request failed.", true); release(); }
   }
-  document.querySelectorAll("[data-m3-form]").forEach((form) => form.addEventListener("submit", (event) => { event.preventDefault(); if (form.dataset.inFlight !== "true") submit(form, envelope(form)); }));
+  document.querySelectorAll("[data-m3-form]").forEach((form) => {
+    const scope = form.querySelector("[data-scope-select]");
+    if (scope) { scope.addEventListener("change", () => updateScope(form)); updateScope(form); }
+    form.addEventListener("submit", (event) => { event.preventDefault(); if (form.dataset.inFlight !== "true") submit(form, envelope(form)); });
+  });
 
   const upload = document.querySelector("[data-paper-upload]");
   if (upload) upload.addEventListener("submit", async (event) => {
@@ -90,7 +131,7 @@
       for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(offset, offset + 0x8000));
       const body = { action: "paper.upload", payload: { filename: file.name, content_type: fallback, content_base64: btoa(binary) } };
       const response = await request(upload, body, release);
-      if (!response.ok) { let message = "Upload failed (" + response.status + ")."; try { const value = await response.json(); message = value.detail?.message || value.detail || value.error || message; } catch (_) {} throw new Error(String(message)); }
+      if (!response.ok) { let message = "Upload failed (" + response.status + ")."; try { message = errorMessage(await response.json(), message); } catch (_) {} throw new Error(message); }
       status(upload, "Saved.", false); window.location.assign(upload.dataset.success || window.location.href);
     } catch (error) { status(upload, error.message || "Upload failed.", true); release(); }
   });

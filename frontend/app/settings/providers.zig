@@ -71,7 +71,7 @@ fn renderLive(req: mer.Request) mer.Response {
         if (current != null) w.print("<div class=\"cp-action-row\"><form method=\"post\" action=\"/api/m3\" data-m3-form data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"provider.test\"><input type=\"hidden\" name=\"id\" value=\"{s}\"><button class=\"cp-btn cp-btn-ghost\" type=\"submit\">Test connection</button></form><form method=\"post\" action=\"/api/m3\" data-m3-form data-confirm=\"Disconnect this provider and delete its stored credential?\" data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"provider.disconnect\"><input type=\"hidden\" name=\"id\" value=\"{s}\"><button class=\"cp-btn cp-btn-danger\" type=\"submit\">Disconnect</button></form></div>", .{ lib.ui.escapeSafe(req.allocator, provider.id), lib.ui.escapeSafe(req.allocator, provider.id) }) catch return mer.internalError("providers render failed");
         w.writeAll("</article>") catch return mer.internalError("providers render failed");
     }
-    w.writeAll("</div><script src=\"/m3.js\" defer></script>") catch return mer.internalError("providers render failed");
+    w.writeAll("</div><script src=\"/m3.js?v=20260721\" defer></script>") catch return mer.internalError("providers render failed");
     return lib.ui.htmlResponse(&buf);
 }
 fn findSetting(settings: []const lib.types.ProviderStatusResponse, id: []const u8) ?lib.types.ProviderStatusResponse {
