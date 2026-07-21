@@ -36,6 +36,6 @@ fn renderLive(req: mer.Request) mer.Response {
     if (papers.len == 0) w.writeAll("<div class=\"cp-empty\"><h2>No marked papers</h2><p>Upload a supported file to begin private review.</p></div>") catch return mer.internalError("papers render failed");
     w.writeAll("</section><nav class=\"cp-filter-row\" aria-label=\"Marked paper pages\">") catch return mer.internalError("papers render failed");
     if (page.next_cursor) |next| w.print("<a href=\"/marked-papers?cursor={s}\">Next</a>", .{lib.ui.escapeSafe(req.allocator, next)}) catch return mer.internalError("papers render failed");
-    w.writeAll("</nav><script src=\"/m3.js\" defer></script>") catch return mer.internalError("papers render failed");
+    w.writeAll("</nav><script src=\"/m3.js?v=20260721\" defer></script>") catch return mer.internalError("papers render failed");
     return lib.ui.htmlResponse(&buf);
 }

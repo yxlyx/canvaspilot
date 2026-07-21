@@ -1,7 +1,28 @@
 #!/bin/sh
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
-BACKEND_PORT=${BACKEND_PORT:-18991}; FRONTEND_PORT=${FRONTEND_PORT:-18992}; TMP=$(mktemp -d); U=11111111-1111-1111-1111-111111111111
+free_port(){ python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'; }
+port_is_free(){ python3 - "$1" <<'PY'
+import socket,sys
+try: port=int(sys.argv[1])
+except ValueError: raise SystemExit(1)
+if not 1 <= port <= 65535: raise SystemExit(1)
+with socket.socket() as sock:
+ try: sock.bind(("127.0.0.1",port))
+ except OSError: raise SystemExit(1)
+PY
+}
+backend_port_set=${BACKEND_PORT+x}; frontend_port_set=${FRONTEND_PORT+x}
+BACKEND_PORT=${BACKEND_PORT:-$(free_port)}
+FRONTEND_PORT=${FRONTEND_PORT:-$(free_port)}
+if [ "$BACKEND_PORT" = "$FRONTEND_PORT" ] && { [ -n "$backend_port_set" ] || [ -n "$frontend_port_set" ]; }; then
+ echo "M3 smoke requires distinct backend and frontend ports" >&2; exit 2
+fi
+while [ "$FRONTEND_PORT" = "$BACKEND_PORT" ]; do FRONTEND_PORT=$(free_port); done
+for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
+ if ! port_is_free "$port"; then echo "M3 smoke refuses invalid or occupied port: $port" >&2; exit 2; fi
+done
+TMP=$(mktemp -d); U=11111111-1111-1111-1111-111111111111
 cleanup(){ code=$?; kill ${FPID:-} ${BPID:-} 2>/dev/null || true; if [ "$code" -ne 0 ]; then echo "smoke artifacts: $TMP" >&2; cat "$TMP/frontend.log" >&2 2>/dev/null || true; else rm -rf "$TMP"; fi; }; trap cleanup EXIT INT TERM
 cat >"$TMP/spy.py" <<'PY'
 import json,sys
@@ -20,10 +41,14 @@ class H(BaseHTTPRequestHandler):
   if p.startswith("/api/outputs/page?"): return self.reply({"items":[output],"next_cursor":None})
   if p=="/api/outputs" or p.startswith("/api/outputs?"): return self.reply([output])
   if p.startswith("/api/outputs/"): return self.reply(output)
-  if p=="/api/sources" and self.headers.get("Authorization")=="Bearer partial-token": return self.reply({"detail":"sources unavailable"},503)
+  if p=="/api/modules": return self.reply([])
+  if p=="/api/tasks/upcoming": return self.reply([])
+  if p=="/api/sources" and self.headers.get("Authorization") in {"Bearer partial-token","Bearer metric-fail-token"}: return self.reply({"detail":"sources unavailable"},503)
   if p=="/api/sources": return self.reply([{"id":U,"user_id":U,"source_type":"pdf","title":"Live notes","status":"ready"}])
   if p=="/api/wiki/pages": return self.reply([{"id":U,"user_id":U,"slug":"live-notes","title":"Live notes","markdown":"# Live","source_ids":[U],"citation_count":1}])
   if p=="/api/wiki/pages/live-notes": return self.reply({"id":U,"user_id":U,"slug":"live-notes","title":"Live notes","markdown":"# Live","source_ids":[U],"citation_count":1})
+  if p=="/api/flashcards/decks" and self.headers.get("Authorization")=="Bearer metric-fail-token": return self.reply({"detail":"decks unavailable"},503)
+  if p=="/api/flashcards/decks": return self.reply([])
   if p.endswith("/download"): return self.reply(b"# canonical\n",ctype="text/markdown",extra=[("Content-Disposition",'attachment; filename="live-notes.md"')])
   if p=="/api/workspace/health": return self.reply([{"id":U,"code":"thin_evidence","severity":"warning","state":"warning","resource_type":"topic","resource_id":None,"topic":"recursion","message":"Only one signal","recommendation":"Review more evidence","created_at":NOW}])
   if p.startswith("/api/workspace/health/"): return self.reply({"id":U,"code":"thin_evidence","severity":"warning","state":"warning","resource_type":"topic","resource_id":None,"topic":"recursion","message":"Only one signal","recommendation":"Review more evidence","created_at":NOW})
@@ -54,20 +79,41 @@ class H(BaseHTTPRequestHandler):
 HTTPServer(("127.0.0.1",int(sys.argv[1])),H).serve_forever()
 PY
 python3 "$TMP/spy.py" "$BACKEND_PORT" "$TMP/requests" & BPID=$!
-for i in $(seq 1 50); do curl -fsS "http://127.0.0.1:$BACKEND_PORT/api/outputs" >/dev/null 2>&1 && break; sleep .1; done
+backend_ready=false
+for i in $(seq 1 50); do
+ kill -0 "$BPID" 2>/dev/null || { echo "M3 backend spy exited before readiness" >&2; exit 1; }
+ if curl -fsS "http://127.0.0.1:$BACKEND_PORT/api/outputs" 2>/dev/null | grep -q 'Grounded summary'; then backend_ready=true; break; fi
+ sleep .1
+done
+[ "$backend_ready" = true ] || { echo "M3 backend spy did not become ready" >&2; exit 1; }
 cd "$ROOT"; WIKIBASE_BACKEND_URL="http://127.0.0.1:$BACKEND_PORT" WIKIBASE_PUBLIC_ORIGIN="http://127.0.0.1:$FRONTEND_PORT" WIKIBASE_MOCK_ENABLED=true ./zig-out/bin/app --host 127.0.0.1 --port "$FRONTEND_PORT" --no-dev --no-dotenv >"$TMP/frontend.log" 2>&1 & FPID=$!
-for i in $(seq 1 80); do curl -fsS "http://127.0.0.1:$FRONTEND_PORT/login" >/dev/null 2>&1 && break; sleep .1; done
+frontend_ready=false
+for i in $(seq 1 80); do
+ kill -0 "$FPID" 2>/dev/null || { echo "M3 frontend exited before readiness" >&2; exit 1; }
+ if curl -fsS "http://127.0.0.1:$FRONTEND_PORT/login" 2>/dev/null | grep -q 'Sign in to your account'; then frontend_ready=true; break; fi
+ sleep .1
+done
+[ "$frontend_ready" = true ] || { echo "M3 frontend did not become ready" >&2; exit 1; }
 base="http://127.0.0.1:$FRONTEND_PORT"; cookie="cp_session=spy-token"
 curl -fsS "http://127.0.0.1:$BACKEND_PORT/api/outputs" | grep -q 'Grounded summary'
 check(){ body=$(curl -fsS -H "Cookie: $cookie" "$base$1"); case "$body" in *"$2"*) :;; *) echo "missing '$2' on $1" >&2; exit 1;; esac; }
-check /outputs "Grounded summary"; body=$(curl -fsS -H "Cookie: $cookie" "$base/settings/providers"); case "$body" in *'readonly aria-label="Fixed official endpoint URL"'*) :;; *) echo "fixed provider endpoint is editable" >&2; exit 1;; esac; check "/outputs/$U" "Evidence snippet"; check /health "Review more evidence"; check "/health/$U" "Remediation"; check /history "No recorded changes"; check /progress "73%"; check /marked-papers "private.pdf"; check "/marked-papers/$U" "Add question manually"; check /settings/providers "Replacement API key"; check /wiki "Export Markdown workspace"; check /wiki/live-notes "Download canonical Markdown"
+check /outputs "Grounded summary"; body=$(curl -fsS -H "Cookie: $cookie" "$base/flashcards?attempt=failed"); case "$body" in *'Your answer was not recorded; try again.'*) :;; *) echo "flashcard failure copy was not truthful" >&2; exit 1;; esac; case "$body" in *'local state'*) echo "flashcard failure claimed local state" >&2; exit 1;; *) :;; esac; check /dashboard "Live notes"; body=$(curl -fsS -H "Cookie: $cookie" "$base/dashboard"); case "$body" in *'No workspace modules have been synced yet.'*) :;; *) echo "dashboard hid live data when modules were empty" >&2; exit 1;; esac; body=$(curl -fsS -H "Cookie: $cookie" "$base/settings/providers"); case "$body" in *'readonly aria-label="Fixed official endpoint URL"'*) :;; *) echo "fixed provider endpoint is editable" >&2; exit 1;; esac; check "/outputs/$U" "Evidence snippet"; check /health "Review more evidence"; check "/health/$U" "Remediation"; check /history "No recorded changes"; check /progress "73%"; check /marked-papers "private.pdf"; check "/marked-papers/$U" "Add question manually"; check /settings/providers "Replacement API key"; check /wiki "Export Markdown workspace"; body=$(curl -fsS -H "Cookie: $cookie" "$base/wiki"); case "$body" in *'<span class="cp-metric-label">Decks</span>'*'<span class="cp-metric-value">0</span>'*) :;; *) echo "live wiki deck metric did not use live empty data" >&2; exit 1;; esac; case "$body" in *CS2030S*|*'Immutable Lists and Lazy Streams'*) echo "live wiki metrics rendered fixture data" >&2; exit 1;; *) :;; esac; check /wiki/live-notes "Download canonical Markdown"; body=$(curl -sS -H "Cookie: $cookie" "$base/wiki/not-generated"); case "$body" in *'No live wiki page has been generated for'*'Browse wiki pages'*) :;; *) echo "live missing wiki state was not truthful" >&2; exit 1;; esac; case "$body" in *'Open demo wiki'*|*'No prototype wiki page'*) echo "live missing wiki state advertised demo content" >&2; exit 1;; *) :;; esac
 # Explicit demo remains explicit; a dead live backend never falls back to its fixture title.
 body=$(curl -fsS "$base/outputs?mock=1"); case "$body" in *"synthetic fixtures"*) :;; *) exit 1;; esac
 kill "$BPID"; wait "$BPID" 2>/dev/null || true; unset BPID
-body=$(curl -fsS -H "Cookie: $cookie" "$base/outputs"); case "$body" in *"Service unavailable"*) :;; *) exit 1;; esac; case "$body" in *"Immutable lists and streams"*) exit 1;; *) :;; esac
+code=$(curl -sS -D "$TMP/live-error-headers" -o "$TMP/live-error-body" -w '%{http_code}' -H "Cookie: $cookie" "$base/outputs"); test "$code" = 502; grep -qi '^cache-control: no-store' "$TMP/live-error-headers"; body=$(cat "$TMP/live-error-body"); case "$body" in *"Service unavailable"*) :;; *) exit 1;; esac; case "$body" in *"Immutable lists and streams"*) exit 1;; *) :;; esac
 # Restart spy and verify origin guard, mutation forwarding/status, and real bounded download headers.
-python3 "$TMP/spy.py" "$BACKEND_PORT" "$TMP/requests" & BPID=$!; sleep .2
+python3 "$TMP/spy.py" "$BACKEND_PORT" "$TMP/requests" & BPID=$!
+backend_ready=false
+for i in $(seq 1 50); do
+ kill -0 "$BPID" 2>/dev/null || { echo "M3 backend spy exited during restart" >&2; exit 1; }
+ if curl -fsS "http://127.0.0.1:$BACKEND_PORT/api/outputs" 2>/dev/null | grep -q 'Grounded summary'; then backend_ready=true; break; fi
+ sleep .1
+done
+[ "$backend_ready" = true ] || { echo "M3 backend spy restart did not become ready" >&2; exit 1; }
 body=$(curl -fsS -H 'Cookie: cp_session=partial-token' "$base/outputs"); case "$body" in *'value="source_ids" disabled'*"Sources are unavailable"*) :;; *) echo "partial dependency state missing" >&2; exit 1;; esac
+body=$(curl -fsS -H 'Cookie: cp_session=partial-token' "$base/dashboard"); case "$body" in *'Source data is temporarily unavailable.'*'Live notes'*) :;; *) echo "dashboard did not preserve wiki data during source failure" >&2; exit 1;; esac
+body=$(curl -fsS -H 'Cookie: cp_session=metric-fail-token' "$base/wiki"); case "$body" in *'<span class="cp-metric-label">Sources</span>'*'<span class="cp-metric-value">Unavailable</span>'*'<span class="cp-metric-label">Decks</span>'*'Live notes'*) :;; *) echo "wiki did not preserve pages with unavailable metrics" >&2; exit 1;; esac; test "$(printf %s "$body" | grep -o '<span class="cp-metric-value">Unavailable</span>' | wc -l | tr -d ' ')" = 2
 code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Cookie: $cookie" -H 'Content-Type: application/json' -d '{"action":"health.run","idempotency_key":"00000000-0000-4000-8000-000000000001"}' "$base/api/m3"); test "$code" = 403
 code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Cookie: $cookie" -H "Origin: $base" -H 'Sec-Fetch-Site: same-origin' -H 'Content-Type: application/json' -d '{"action":"output.create","idempotency_key":"00000000-0000-4000-8000-000000000002","payload":{"output_type":"summary","topic":"recursion"}}' "$base/api/m3"); test "$code" = 201
 code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Cookie: $cookie" -H "Origin: $base" -H 'Sec-Fetch-Site: same-origin' -H 'Content-Type: application/json' -d '{"action":"output.create","idempotency_key":"00000000-0000-4000-8000-000000000002","payload":{"output_type":"summary","topic":"recursion"}}' "$base/api/m3"); test "$code" = 201

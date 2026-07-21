@@ -29,10 +29,14 @@ pub fn gate(req: mer.Request, feature: []const u8) ?mer.Response {
 }
 
 pub fn liveError(req: mer.Request, feature: []const u8, status: u16) mer.Response {
+    const headers = req.allocator.alloc(std.http.Header, 1) catch return mer.internalError("M3 error headers failed");
+    headers[0] = .{ .name = "Cache-Control", .value = "no-store" };
     if (status == 401) {
         const cookies = req.allocator.alloc(mer.SetCookie, 1) catch return mer.internalError("session clear failed");
         cookies[0] = session.clearCookie();
-        return mer.withCookies(mer.redirect("/login", .see_other), cookies);
+        var response = mer.withCookies(mer.redirect("/login", .see_other), cookies);
+        response.headers = headers;
+        return response;
     }
     var buf = ui.buildHtml(req.allocator);
     const safe_feature = ui.escapeSafe(req.allocator, feature);
@@ -40,7 +44,10 @@ pub fn liveError(req: mer.Request, feature: []const u8, status: u16) mer.Respons
         "<header class=\"cp-page-header\"><div><h1 class=\"cp-page-title\">{s}</h1><p class=\"cp-page-sub\">Live workspace</p></div></header><section class=\"cp-card cp-unavailable\" role=\"alert\"><h2>Service unavailable</h2><p>WikiBase could not load this live data (backend status {d}). No demo data has been substituted.</p><a class=\"cp-btn cp-btn-ghost\" href=\"\">Try again</a></section>",
         .{ safe_feature, status },
     ) catch return mer.internalError("M3 error state failed");
-    return ui.htmlResponse(&buf);
+    var response = ui.htmlResponse(&buf);
+    response.status = if (status >= 400 and status <= 599) @enumFromInt(status) else .bad_gateway;
+    response.headers = headers;
+    return response;
 }
 
 pub fn demoMarker(req: mer.Request, w: *std.Io.Writer) !void {
@@ -152,4 +159,24 @@ pub fn meterPercent(estimate: ?f64) ?u8 {
         @intFromFloat(@round(value))
     else
         null;
+}
+
+test "demo access requires both server opt-in and exact request value" {
+    try std.testing.expectEqual(Access.live, accessFor(false, "1", true));
+    try std.testing.expectEqual(Access.live, accessFor(true, "true", true));
+    try std.testing.expectEqual(Access.live, accessFor(true, "", true));
+    try std.testing.expectEqual(Access.demo, accessFor(true, "1", true));
+    try std.testing.expectEqual(Access.demo, accessFor(true, "1", false));
+    try std.testing.expectEqual(Access.login, accessFor(true, null, false));
+}
+
+test "demo links retain one exact mock marker" {
+    const allocator = std.testing.allocator;
+    const href = try demoHrefFor(allocator, true, "/sources?status=ready&mock=other#queue");
+    defer allocator.free(href);
+    try std.testing.expectEqualStrings("/sources?status=ready&mock=1#queue", href);
+
+    const live_href = try demoHrefFor(allocator, false, "/sources?status=ready");
+    defer allocator.free(live_href);
+    try std.testing.expectEqualStrings("/sources?status=ready", live_href);
 }

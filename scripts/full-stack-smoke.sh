@@ -162,10 +162,32 @@ printf '%s' "$me" | "$PYTHON" -c 'import json,sys; data=json.load(sys.stdin); as
 
 dashboard=$(curl --fail --silent --cookie "$COOKIE_JAR" "$FRONTEND_URL/dashboard")
 [[ "$dashboard" == *'<h1 class="cp-page-title">Workspace</h1>'* ]]
+[[ "$dashboard" == *'No workspace modules have been synced yet.'* ]]
 if [[ "$dashboard" == *'data-cp-auth="anonymous"'* ]]; then
     printf '%s\n' 'authenticated frontend route rendered as anonymous' >&2
     exit 1
 fi
+
+for route in dashboard sources flashcards chat wiki; do
+    page=$(curl --fail --silent --cookie "$COOKIE_JAR" "$FRONTEND_URL/$route")
+    for sentinel in 'CS2030S' 'Programming Methodology II' 'Immutable lists and lazy streams' 'Lim Yu Xi' 'yuxi@u.nus.edu'; do
+        if [[ "$page" == *"$sentinel"* ]]; then
+            printf 'new user %s page rendered fixture sentinel: %s\n' "$route" "$sentinel" >&2
+            exit 1
+        fi
+    done
+    if [[ "$page" == *'data-cp-demo="true"'* ]]; then
+        printf 'new user %s page was marked as demo\n' "$route" >&2
+        exit 1
+    fi
+done
+
+sources_empty=$(curl --fail --silent --cookie "$COOKIE_JAR" "$FRONTEND_URL/sources")
+flashcards_empty=$(curl --fail --silent --cookie "$COOKIE_JAR" "$FRONTEND_URL/flashcards")
+wiki_empty=$(curl --fail --silent --cookie "$COOKIE_JAR" "$FRONTEND_URL/wiki")
+[[ "$sources_empty" == *'No sources have been imported yet.'* ]]
+[[ "$flashcards_empty" == *'No flashcard decks have been generated yet.'* ]]
+[[ "$wiki_empty" == *'No wiki pages have been generated yet.'* ]]
 
 source_title="Smoke source $RANDOM $$"
 created=$(curl --fail --silent --cookie "$COOKIE_JAR" \
@@ -178,6 +200,9 @@ printf '%s' "$created" | "$PYTHON" -c 'import json,sys; data=json.load(sys.stdin
 
 sources_page=$(curl --fail --silent --cookie "$COOKIE_JAR" "$FRONTEND_URL/sources")
 [[ "$sources_page" == *"$source_title"* ]]
+dashboard_after_source=$(curl --fail --silent --cookie "$COOKIE_JAR" "$FRONTEND_URL/dashboard")
+[[ "$dashboard_after_source" == *"$source_title"* ]]
+[[ "$dashboard_after_source" == *'No workspace modules have been synced yet.'* ]]
 
 for child in "$backend_pid" "$frontend_pid"; do
     kill -0 "$child" 2>/dev/null
