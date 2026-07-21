@@ -42,7 +42,7 @@ direction is now anchored around the student knowledge-base workflow.
 | Local auth flow | Implemented, awaiting review | PR #31 open |
 | Source ingestion foundation | Basic implementation | ingestion service and database-backed content records |
 | Retrieval pipeline | Basic implementation | chunking, embedding, vector lookup, chat route |
-| Local verification | Done | `./verify` runs backend, frontend, database, browser, and security checks locally |
+| Local verification | Done | `./verify` runs backend, frontend, database, audit, browser, and smoke checks |
 
 ## What We Have Actually Built
 
@@ -56,7 +56,7 @@ The main pieces already implemented are:
 5. Backend scaffold, database models, migration setup, and tests.
 6. A local auth flow with signup, signin, session handling, and backend auth routes.
 7. A README and milestone tracker that reflect the pivoted direction.
-8. GitHub issue tracking, PR history, CI checks, and branch protection evidence.
+8. GitHub issue tracking, PR history, local verification, and branch protection evidence.
 
 The important takeaway is that the project is no longer just a concept writeup. It has
 an actual working base for auth, source records, retrieval, frontend screens, and
@@ -245,16 +245,16 @@ merjs frontend
 | Retrieval | Embeddings and vector lookup | Grounded Q&A and search over workspace chunks. |
 | Document parsing | PyMuPDF, python-docx, BeautifulSoup, Markdown tooling | Support for PDFs, DOCX, links, and Markdown sources. |
 | Testing | pytest, Ruff, Zig format/build tests | Automated checks across backend and frontend. |
-| Verification | Local `./verify` harness | Repeatable lint, test, build, audit, browser, and full-stack checks. |
+| Verification | `./verify` local harness | Repeatable backend, frontend, database, audit, browser, and smoke checks. |
 | Local services | Docker Compose | Repeatable local PostgreSQL and pgvector setup. |
 
 ## Software Engineering Practices
 
 ### Version Control
 
-The repo uses feature branches, pull requests, branch protection, and CI checks. Recent
-history includes frontend scaffold, dashboard, chat, deployment files, submission tracker,
-and the auth flow PR.
+The repo uses feature branches, pull requests, branch protection, and local verification.
+Recent history includes frontend scaffold, dashboard, chat, deployment files, submission
+tracker, and the auth flow PR.
 
 ### GitHub Tracking
 
@@ -270,7 +270,7 @@ review.
 ### Testing
 
 Backend tests cover auth, schema validation, ingestion, retrieval, and exceptions.
-Local frontend checks cover formatting, build, tests, browser flows, and boot smoke.
+The local harness covers frontend formatting, builds, tests, HTTP checks, and browser smoke tests.
 
 ### Documentation
 
@@ -394,8 +394,10 @@ browser-boundary tests. Its database-backed full-stack smoke selects unused loop
 starts both services, registers and signs in through frontend routes with a cookie jar,
 checks frontend session and authenticated rendering, and creates and renders a source
 through the frontend API bridge. Explicit occupied ports are refused and either child
-exiting fails the test. All verification runs locally; database mode starts pgvector,
-validates Compose, and fails if any backend test is skipped.
+exiting fails the test. Local verification passes dynamic frontend and backend URLs to both
+services, starts pgvector, validates Compose, audits locked dependencies, and fails if any
+backend test is skipped. Container builds and Trivy filesystem/image scans are run locally
+as release checks.
 
 ## Risks (generated)
 
@@ -519,7 +521,7 @@ The proof of concept demonstrates that the project has a working base, not just 
 - PostgreSQL and pgvector migrations
 - Frontend scaffold and workspace UI
 - Chat interface and API bridge
-- Local backend, frontend, browser, and full-stack verification harness
+- Local backend and frontend verification harness
 
 ### Auth PR In Review
 
@@ -529,7 +531,7 @@ The proof of concept demonstrates that the project has a working base, not just 
 - Session cookie handling
 - Backend tests for auth behavior
 
-PR #31 contains the current local auth flow and is awaiting review. CI is passing on the PR.
+PR #31 contains the original local auth flow and its historical verification evidence.
 
 ## Architecture
 
@@ -610,19 +612,17 @@ Relational records plus vector similarity search in one database.
 
 ### Quality
 
-**Local verification, pytest, Ruff, Zig, and Playwright**
+**Local verification, pytest, Ruff**
 
-The `./verify` harness runs formatting, linting, tests, builds, dependency audits,
-browser checks, and the full-stack smoke flow on the developer machine.
+`./verify` runs formatting, linting, tests, builds, audits, and smoke checks locally.
 
 ## GitHub Evidence
 
-The project has merged PRs, visible issues, milestones, labels, and review history.
-Verification evidence is produced locally before changes are pushed.
+Historical workflow runs remain part of the Milestone 1 evidence. The project also has merged PRs, visible issues, milestones, labels, and branch protection.
 
 | PR | Status | Evidence |
 | --- | --- | --- |
-| #24 | Merged | merjs scaffold, auth UI, and shared frontend library. |
+| #24 | Merged | merjs scaffold, auth UI, shared library, frontend CI workflow. |
 | #25 | Merged | workspace/dashboard foundation with mock/backend data path. |
 | #26 | Merged | chat UI and frontend API bridge for cited Q&A. |
 | #27 | Merged | frontend Dockerfile and deployment files. |
@@ -638,7 +638,7 @@ Testing is split by layer so failures are easier to diagnose and explain during 
 - Ruff format check
 - Ruff lint check
 - pytest test suite
-- PostgreSQL + pgvector CI service
+- PostgreSQL + pgvector local Compose service
 
 ### Frontend Checks
 
