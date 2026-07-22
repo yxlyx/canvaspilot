@@ -4,7 +4,7 @@ const lib = @import("lib");
 pub const meta: mer.Meta = .{ .title = "Output detail", .description = "Review a grounded cited study output." };
 pub fn render(req: mer.Request) mer.Response {
     if (lib.m3.gate(req, "Output detail")) |response| return response;
-    if (lib.m3.isExplicitDemo(req)) return mer.redirect("/outputs?mock=1", .see_other);
+    if (lib.m3.isExplicitDemo(req)) return renderDemo(req);
     const id = req.param("id") orelse return lib.m3.privateForSession(req, mer.notFound());
     if (!std.mem.eql(u8, id, lib.m3.safeId(id, ""))) return lib.m3.privateForSession(req, mer.notFound());
     const result = lib.backend.getOutput(req.allocator, lib.session.fromRequest(req).token, id);
@@ -24,4 +24,25 @@ pub fn render(req: mer.Request) mer.Response {
     if (output.citations.len == 0) w.writeAll("<li class=\"cp-empty wb-m3-empty\">No citations were returned. This output is not presented as grounded.</li>") catch return mer.internalError("output render failed");
     w.writeAll("</ol></section>") catch return mer.internalError("output render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
+}
+
+fn renderDemo(req: mer.Request) mer.Response {
+    const id = req.param("id") orelse "";
+    if (!std.mem.eql(u8, id, lib.mock.output.id)) return demoNotFound(req, id);
+    const output = lib.mock.output;
+    var buf = lib.ui.buildHtml(req.allocator);
+    const w = &buf.writer;
+    lib.m3.demoMarker(req, w) catch return mer.internalError("output render failed");
+    w.print("<header class=\"cp-page-header wb-m3-output-header\"><div><a class=\"article-breadcrumb wb-m3-backlink\" href=\"/outputs?mock=1\">← All outputs</a><p class=\"cp-page-kicker\">Synthetic demo</p><h1 class=\"cp-page-title\">{s}</h1><p class=\"cp-page-sub\">Grounded cited summary · read-only preview</p></div></header><article class=\"cp-card surface cp-markdown cp-wiki-article wb-m3-output-reader\"><p>{s}</p></article><section class=\"cp-card surface wb-m3-citations\" aria-labelledby=\"citations-title\"><h2 id=\"citations-title\">Grounded citations</h2><ol class=\"cp-citation-list wb-m3-citation-list\">", .{ lib.ui.escapeSafe(req.allocator, output.title), lib.ui.escapeSafe(req.allocator, output.summary) }) catch return mer.internalError("output render failed");
+    for (output.citations) |citation| w.print("<li class=\"cp-citation-card surface wb-m3-citation\"><strong>{s}</strong><small>{s}</small><p>{s}</p><a href=\"/sources?mock=1\">Open source library</a></li>", .{ lib.ui.escapeSafe(req.allocator, citation.source_title), lib.ui.escapeSafe(req.allocator, citation.location), lib.ui.escapeSafe(req.allocator, citation.snippet) }) catch return mer.internalError("output render failed");
+    w.writeAll("</ol></section>") catch return mer.internalError("output render failed");
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
+}
+
+fn demoNotFound(req: mer.Request, id: []const u8) mer.Response {
+    var buf = lib.ui.buildHtml(req.allocator);
+    const w = &buf.writer;
+    lib.m3.demoMarker(req, w) catch return mer.internalError("output render failed");
+    w.print("<section class=\"cp-card surface wb-m3-state-card\"><p class=\"eyebrow\">Study outputs</p><h1>Output not found</h1><p>No synthetic output matches <strong>{s}</strong>.</p><a href=\"/outputs?mock=1\">Return to outputs</a></section>", .{lib.ui.escapeSafe(req.allocator, id)}) catch return mer.internalError("output render failed");
+    return lib.m3.privateForSession(req, .{ .status = .not_found, .content_type = .html, .body = buf.written() });
 }

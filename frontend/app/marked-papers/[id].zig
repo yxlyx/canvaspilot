@@ -12,11 +12,11 @@ pub fn render(req: mer.Request) mer.Response {
     const paper = findPaper(id) orelse return missing(req, raw_id);
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
+    lib.m3.demoMarker(req, w) catch return mer.internalError("paper render failed");
     const title = lib.ui.escapeSafe(req.allocator, paper.title);
     const privacy = lib.ui.escapeSafe(req.allocator, paper.privacy_note);
     const paper_confidence = lib.ui.escapeSafe(req.allocator, paper.extraction_confidence);
-    w.print("<header class=\"cp-page-header wb-m3-header\"><div><p class=\"cp-page-kicker wb-m3-eyebrow\">Evidence review</p><h1 class=\"cp-page-title wb-m3-title\">{s}</h1><p class=\"cp-page-sub wb-m3-deck\">Extraction confidence: {s}. These are proposals, not confirmations.</p></div><a class=\"cp-btn cp-btn-ghost wb-m3-back\" href=\"/marked-papers?mock=1\">All papers</a></header>", .{ title, paper_confidence }) catch return mer.internalError("paper render failed");
-    lib.m3.demoBanner(req, w) catch return mer.internalError("paper render failed");
+    w.print("<header class=\"cp-page-header wb-m3-header\"><div><p class=\"cp-page-kicker wb-m3-eyebrow\">Synthetic demo · evidence review</p><h1 class=\"cp-page-title wb-m3-title\">{s}</h1><p class=\"cp-page-sub wb-m3-deck\">Extraction confidence: {s}. These are proposals, not confirmations.</p></div><a class=\"cp-btn cp-btn-ghost wb-m3-back\" href=\"/marked-papers?mock=1\">All papers</a></header>", .{ title, paper_confidence }) catch return mer.internalError("paper render failed");
     w.print("<section class=\"cp-card cp-privacy-note surface wb-m3-notice\"><p class=\"eyebrow\">Private material</p><h2>Privacy</h2><p>{s}</p></section><section class=\"cp-list-grid wb-m3-evidence-grid\" aria-labelledby=\"evidence-proposals-title\"><h2 class=\"cp-list-heading wb-m3-section-title\" id=\"evidence-proposals-title\">Evidence proposals</h2>", .{privacy}) catch return mer.internalError("paper render failed");
     if (paper.evidence.len == 0) w.writeAll("<div class=\"cp-empty wb-m3-empty\">No evidence could be extracted with useful confidence.</div>") catch return mer.internalError("paper render failed");
     for (paper.evidence) |evidence| {
@@ -25,10 +25,9 @@ pub fn render(req: mer.Request) mer.Response {
         const proposal = lib.ui.escapeSafe(req.allocator, evidence.proposal);
         const confidence = lib.ui.escapeSafe(req.allocator, evidence.extraction_confidence);
         const topic = lib.ui.escapeSafe(req.allocator, evidence.topic);
-        const evidence_id = lib.m3.safeId(evidence.id, "evidence");
         w.print("<article class=\"cp-card surface wb-m3-evidence-card\"><div class=\"cp-card-title wb-m3-card-head\"><h3>{s}</h3><span>{s} confidence</span></div><p><strong>Topic:</strong> {s}</p>", .{ question, confidence, topic }) catch return mer.internalError("paper render failed");
         if (evidence.score.earned != null and evidence.score.possible != null) w.print("<p><strong>Score:</strong> {d:.0}/{d:.0}</p>", .{ evidence.score.earned.?, evidence.score.possible.? }) catch return mer.internalError("paper render failed") else w.writeAll("<p><strong>Score:</strong> unknown</p>") catch return mer.internalError("paper render failed");
-        w.print("<p>{s}</p><p class=\"cp-proposal\"><strong>Unconfirmed proposal:</strong> {s}</p><div class=\"cp-action-row wb-m3-actions\"><button class=\"cp-btn cp-btn-primary\" type=\"button\" aria-disabled=\"true\" aria-describedby=\"evidence-note-{s}\">Accept</button><button class=\"cp-btn cp-btn-ghost\" type=\"button\" aria-disabled=\"true\" aria-describedby=\"evidence-note-{s}\">Edit</button><button class=\"cp-btn cp-btn-danger\" type=\"button\" aria-disabled=\"true\" aria-describedby=\"evidence-note-{s}\">Reject</button></div><small id=\"evidence-note-{s}\">Evidence decisions are unavailable until a backend mutation contract exists.</small></article>", .{ feedback, proposal, evidence_id, evidence_id, evidence_id, evidence_id }) catch return mer.internalError("paper render failed");
+        w.print("<p>{s}</p><p class=\"cp-proposal\"><strong>Unconfirmed proposal:</strong> {s}</p><small>Read-only preview; no evidence decision is recorded.</small></article>", .{ feedback, proposal }) catch return mer.internalError("paper render failed");
     }
     w.writeAll("</section>") catch return mer.internalError("paper render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));

@@ -20,12 +20,12 @@ const NAV_ITEMS = [_]NavItem{
 };
 
 const SECONDARY_NAV_ITEMS = [_]NavItem{
-    .{ .href = "/outputs", .label = "Outputs", .match = "/outputs", .icon = "" },
-    .{ .href = "/progress", .label = "Knowledge", .match = "/progress", .icon = "" },
-    .{ .href = "/health", .label = "Health", .match = "/health", .icon = "" },
-    .{ .href = "/history", .label = "History", .match = "/history", .icon = "" },
-    .{ .href = "/marked-papers", .label = "Papers", .match = "/marked-papers", .icon = "" },
-    .{ .href = "/settings/providers", .label = "Providers", .match = "/settings/providers", .icon = "" },
+    .{ .href = "/outputs", .label = "Outputs", .match = "/outputs", .icon = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M4 4h16v16H4z\"/><path d=\"M8 9h8M8 13h8M8 17h5\"/></svg>" },
+    .{ .href = "/progress", .label = "Knowledge", .match = "/progress", .icon = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M4 19V9M10 19V5M16 19v-7M22 19V3\"/></svg>" },
+    .{ .href = "/health", .label = "Health", .match = "/health", .icon = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3v8Z\"/><path d=\"m9 12 2 2 4-4\"/></svg>" },
+    .{ .href = "/history", .label = "History", .match = "/history", .icon = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M3 12a9 9 0 1 0 3-6.7L3 8\"/><path d=\"M3 3v5h5M12 7v5l3 2\"/></svg>" },
+    .{ .href = "/marked-papers", .label = "Papers", .match = "/marked-papers", .icon = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M6 2h9l3 3v17H6z\"/><path d=\"M14 2v5h5M9 12h6M9 16h6\"/></svg>" },
+    .{ .href = "/settings/providers", .label = "Providers", .match = "/settings/providers", .icon = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z\"/></svg>" },
 };
 
 fn documentTitle(body: []const u8) ?[]const u8 {
@@ -91,18 +91,21 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         const href = lib.m3.demoHrefFor(allocator, explicit_demo, item.href) catch return body;
         w.print("<a class=\"{s}\" href=\"{s}\"{s}>{s}<span>{s}</span></a>\n", .{ cls, href, current, item.icon, item.label }) catch return body;
     }
-    w.writeAll("</nav><details class=\"cp-mobile-more\" style=\"margin-top:8px\"><summary>More</summary><nav aria-label=\"More\">") catch return body;
+    w.writeAll("</nav><div class=\"cp-secondary-nav\"><p>Study tools</p><nav aria-label=\"Study tools\">") catch return body;
     for (SECONDARY_NAV_ITEMS) |item| {
         const active = std.mem.startsWith(u8, path, item.match);
         const current: []const u8 = if (active) " aria-current=\"page\"" else "";
         const href = lib.m3.demoHrefFor(allocator, explicit_demo, item.href) catch return body;
-        w.print("<a href=\"{s}\"{s}>{s}</a>", .{ href, current, item.label }) catch return body;
+        const cls: []const u8 = if (active) "cp-secondary-link cp-secondary-active" else "cp-secondary-link";
+        w.print("<a class=\"{s}\" href=\"{s}\"{s}>{s}<span>{s}</span></a>", .{ cls, href, current, item.icon, item.label }) catch return body;
     }
-    w.writeAll("</nav></details><div class=\"cp-sidebar-foot\">") catch return body;
+    w.writeAll("</nav></div><div class=\"cp-sidebar-foot\">") catch return body;
     if (signed_in) {
         w.writeAll("<span class=\"cp-profile-orb\">A</span><span><strong>Account</strong><small>Signed in</small></span>") catch return body;
-    } else {
+    } else if (explicit_demo) {
         w.writeAll("<span class=\"cp-profile-orb\">D</span><span><strong>Demo</strong><small>Illustrative data</small></span>") catch return body;
+    } else {
+        w.writeAll("<span class=\"cp-profile-orb\">G</span><span><strong>Guest</strong><small>Not signed in</small></span>") catch return body;
     }
     if (signed_in) {
         w.writeAll("<form action=\"/logout\" method=\"post\"><button type=\"submit\" aria-label=\"Sign out\"><svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M10 17l5-5-5-5M15 12H3M15 3h5a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1h-5\"/></svg></button></form>") catch return body;
@@ -116,17 +119,17 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         \\    <div class="cp-shell-tools">
         \\      <button type="button" data-cp-theme-toggle aria-label="Switch to dark mode"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3a6 6 0 1 0 9 9 9 9 0 1 1-9-9Z"/></svg></button>
         \\      <button type="button" aria-label="Notifications"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><i></i></button>
-        \\      <span class="cp-profile-orb">PS</span>
+        \\      <span class="cp-profile-orb cp-profile-neutral" aria-label="Account"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span>
         \\    </div>
         \\    <header class="cp-mobile-header"><a class="cp-brand" href="/"><span class="cp-brand-mark">W</span><span class="cp-brand-name">WikiBase</span></a>
         \\      <button class="cp-mobile-theme" type="button" data-cp-theme-toggle aria-label="Switch to dark mode"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3a6 6 0 1 0 9 9 9 9 0 1 1-9-9Z"/></svg></button>
-        \\      <details class="cp-mobile-more"><summary>Menu</summary><nav aria-label="Mobile menu">
+        \\      <details class="cp-mobile-menu"><summary aria-label="Open navigation menu"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></summary><nav aria-label="Mobile menu">
     ) catch return body;
     for (NAV_ITEMS ++ SECONDARY_NAV_ITEMS) |item| {
         const active = std.mem.startsWith(u8, path, item.match);
         const current: []const u8 = if (active) " aria-current=\"page\"" else "";
         const href = lib.m3.demoHrefFor(allocator, explicit_demo, item.href) catch return body;
-        w.print("<a href=\"{s}\"{s}>{s}</a>", .{ href, current, item.label }) catch return body;
+        w.print("<a href=\"{s}\"{s}>{s}<span>{s}</span></a>", .{ href, current, item.icon, item.label }) catch return body;
     }
     if (signed_in) {
         w.writeAll("<form action=\"/logout\" method=\"post\" class=\"cp-mobile-account\"><input type=\"hidden\" name=\"action\" value=\"logout\"><button type=\"submit\">Sign out</button></form>") catch return body;

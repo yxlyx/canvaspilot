@@ -21,11 +21,11 @@ pub fn render(req: mer.Request) mer.Response {
         "The synthetic lecture notes support the claim that immutable operations return a new value instead of changing the existing list.";
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
+    lib.m3.demoMarker(req, w) catch return mer.internalError("outputs render failed");
     const providers_href = lib.m3.demoHref(req.allocator, req, "/settings/providers") catch return mer.internalError("outputs render failed");
     w.print(
-        \\<header class="cp-page-header wb-m3-output-header"><div><h1 class="cp-page-title">Cited outputs</h1><p class="cp-page-sub">Choose source and wiki context, then inspect the explicit grounding boundary.</p></div><div class="cp-page-actions"><a class="cp-btn cp-btn-ghost button button-secondary" href="{s}">Provider settings</a></div></header>
+        \\<header class="cp-page-header wb-m3-output-header"><div><p class="cp-page-kicker">Synthetic demo</p><h1 class="cp-page-title">Cited outputs</h1><p class="cp-page-sub">Choose source and wiki context, then inspect the explicit grounding boundary.</p></div><div class="cp-page-actions"><a class="cp-btn cp-btn-ghost button button-secondary" href="{s}">Provider settings</a></div></header>
     , .{providers_href}) catch return mer.internalError("outputs render failed");
-    lib.m3.demoBanner(req, w) catch return mer.internalError("outputs render failed");
     w.print(
         \\<section class="cp-card surface wb-m3-composer"><form class="cp-selector-grid wb-m3-selector" method="get"><input type="hidden" name="mock" value="1">
         \\<label class="cp-field"><span>Source</span><select name="source"><option value="demo-source-lecture"{s}>Synthetic lecture notes</option><option value="demo-source-lab"{s}>Synthetic lab brief</option></select></label>
@@ -55,7 +55,6 @@ pub fn render(req: mer.Request) mer.Response {
         const output = lib.mock.output;
         const title = lib.ui.escapeSafe(req.allocator, output.title);
         const summary = lib.ui.escapeSafe(req.allocator, source_summary);
-        const filename = lib.m3.safeExportFilename(req.allocator, output.title) catch "wikibase-export.md";
         w.print("<article class=\"cp-card surface cp-output wb-m3-output-reader\"><div class=\"cp-card-title\"><h2>{s}</h2><span>{s}</span></div><p class=\"cp-muted-copy\">Preview source: {s} · Wiki context: {s}</p><p>{s}</p><h3>Citations</h3><ol class=\"cp-citation-list wb-m3-citation-list\">", .{ title, @tagName(output.boundary), source_name, wiki_name, summary }) catch return mer.internalError("outputs render failed");
         for (output.citations) |citation| {
             if (!std.mem.eql(u8, citation.source_id, source_id)) continue;
@@ -64,7 +63,7 @@ pub fn render(req: mer.Request) mer.Response {
             const snippet = lib.ui.escapeSafe(req.allocator, citation.snippet);
             w.print("<li class=\"cp-citation-card surface wb-m3-citation\"><strong>{s}</strong><small>{s}</small><p>{s}</p></li>", .{ source, location, snippet }) catch return mer.internalError("outputs render failed");
         }
-        w.print("</ol><button class=\"cp-btn cp-btn-ghost button button-secondary\" type=\"button\" aria-disabled=\"true\" aria-describedby=\"export-note\">Export {s}</button><p id=\"export-note\" class=\"cp-muted-copy\">Backend export is unavailable; no download is created.</p></article>", .{filename}) catch return mer.internalError("outputs render failed");
+        w.writeAll("</ol><a class=\"cp-btn cp-btn-ghost button button-secondary\" href=\"/outputs/demo-output-streams-summary?mock=1\">Open full output</a></article>") catch return mer.internalError("outputs render failed");
     }
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }

@@ -8,8 +8,8 @@ pub fn render(req: mer.Request) mer.Response {
     if (!lib.m3.isExplicitDemo(req)) return renderLive(req);
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
-    w.writeAll("<header class=\"cp-page-header wb-m3-header\"><div><p class=\"cp-page-kicker wb-m3-eyebrow\">Private evidence desk</p><h1 class=\"cp-page-title wb-m3-title\">Marked papers</h1><p class=\"cp-page-sub wb-m3-deck\">Privacy-sensitive evidence review. Extraction creates proposals, never confirmed knowledge.</p></div><div class=\"cp-disabled-action wb-m3-header-action\"><button class=\"cp-btn cp-btn-primary\" type=\"button\" aria-disabled=\"true\" aria-describedby=\"paper-upload-note\">Upload paper</button><small id=\"paper-upload-note\">Upload is unavailable. Supported PDF or image formats will be defined with the private backend upload contract; this frontend accepts no files.</small></div></header>") catch return mer.internalError("marked papers render failed");
-    lib.m3.demoBanner(req, w) catch return mer.internalError("marked papers render failed");
+    lib.m3.demoMarker(req, w) catch return mer.internalError("marked papers render failed");
+    w.writeAll("<header class=\"cp-page-header wb-m3-header\"><div><p class=\"cp-page-kicker wb-m3-eyebrow\">Synthetic demo · private evidence desk</p><h1 class=\"cp-page-title wb-m3-title\">Marked papers</h1><p class=\"cp-page-sub wb-m3-deck\">Privacy-sensitive evidence review. Extraction creates proposals, never confirmed knowledge.</p></div></header>") catch return mer.internalError("marked papers render failed");
     w.writeAll("<section class=\"cp-card cp-privacy-note surface wb-m3-notice\"><p class=\"eyebrow\">Before you upload</p><h2>Privacy before upload</h2><p>Marked work may contain names, identifiers, grades, and feedback. No real upload is available in this frontend delivery; future data must be account-scoped and deletable.</p></section><section class=\"cp-list-grid wb-m3-paper-grid\">") catch return mer.internalError("marked papers render failed");
     for (lib.mock.marked_papers) |paper| {
         const title = lib.ui.escapeSafe(req.allocator, paper.title);

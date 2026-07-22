@@ -81,13 +81,13 @@ pub fn render(req: mer.Request) mer.Response {
     var shown: usize = 0;
     if (live_sources) |items| {
         for (items) |source| {
-            if (filter_type.len > 0 and !std.mem.eql(u8, source.source_type, filter_type)) continue;
+            if (!matchesType(source.source_type, filter_type)) continue;
             if (!matchesStatus(source.status, filter_status)) continue;
             shown += 1;
         }
     } else {
         for (lib.mock.sources) |source| {
-            if (filter_type.len > 0 and !std.mem.eql(u8, source.source_type, filter_type)) continue;
+            if (!matchesType(source.source_type, filter_type)) continue;
             if (!matchesStatus(source.status, filter_status)) continue;
             shown += 1;
         }
@@ -95,14 +95,12 @@ pub fn render(req: mer.Request) mer.Response {
 
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
-    lib.m3.demoBanner(req, w) catch return mer.internalError("sources render failed");
-    w.print("<header class=\"cp-page-header\"><div><p class=\"cp-page-kicker\">{d} sources · ", .{library_count}) catch return mer.internalError("sources render failed");
-    if (live_sources != null) {
-        w.writeAll("chunks not reported") catch return mer.internalError("sources render failed");
-    } else {
-        w.print("{d} chunks", .{total_chunks}) catch return mer.internalError("sources render failed");
-    }
-    w.writeAll("</p><h1 class=\"cp-page-title\">Source library</h1></div></header><div class=\"sources-page\"><section class=\"docs-workspace\" aria-label=\"Source documents\"><header class=\"docs-toolbar\"><label class=\"docs-search\">") catch return mer.internalError("sources render failed");
+    lib.m3.demoMarker(req, w) catch return mer.internalError("sources render failed");
+    w.print("<header class=\"cp-page-header\"><div><p class=\"cp-page-kicker\">{s}{d} sources", .{ if (use_mock) "Synthetic demo · " else "", library_count }) catch return mer.internalError("sources render failed");
+    if (live_sources == null) w.print(" · {d} chunks", .{total_chunks}) catch return mer.internalError("sources render failed");
+    w.writeAll("</p><h1 class=\"cp-page-title\">Source library</h1></div></header>") catch return mer.internalError("sources render failed");
+    if (!use_mock) if (req.queryParam("import")) |state| if (std.mem.eql(u8, state, "started")) w.writeAll("<p class=\"docs-import-note\" role=\"status\">Source accepted. Parsing and indexing have started.</p>") catch return mer.internalError("sources render failed");
+    w.writeAll("<div class=\"sources-page\"><section class=\"docs-workspace\" aria-label=\"Source documents\"><header class=\"docs-toolbar\"><label class=\"docs-search\">") catch return mer.internalError("sources render failed");
     w.writeAll(ICON_SEARCH) catch return mer.internalError("sources render failed");
     w.writeAll("<input id=\"cp-source-search\" placeholder=\"Search documents, modules, or topics\" aria-label=\"Search source documents\"></label><button class=\"docs-add-button\" id=\"cp-add-source\" type=\"button\">") catch return mer.internalError("sources render failed");
     w.writeAll(ICON_PLUS) catch return mer.internalError("sources render failed");
@@ -119,16 +117,18 @@ pub fn render(req: mer.Request) mer.Response {
     tryFilterCount(w, "Needs attention", "failed", attention_count, ICON_ALERT, std.mem.eql(u8, filter_status, "failed")) catch return mer.internalError("sources render failed");
     w.writeAll("</div><div class=\"source-filter-selects\">") catch return mer.internalError("sources render failed");
     w.writeAll(ICON_FILTER) catch return mer.internalError("sources render failed");
-    w.print("<label><span class=\"sr-only\">Format</span><select id=\"cp-source-format\" name=\"type\" aria-label=\"Format\"><option value=\"\">All formats</option><option value=\"markdown\"{s}>Markdown</option><option value=\"assignment\"{s}>Assignments</option><option value=\"announcement\"{s}>Announcements</option></select></label><button class=\"button button-secondary button-small\" type=\"submit\">Apply</button></div></form><section class=\"document-grid grid\" id=\"cp-document-grid\" aria-live=\"polite\">", .{ if (std.mem.eql(u8, filter_type, "markdown")) " selected" else "", if (std.mem.eql(u8, filter_type, "assignment")) " selected" else "", if (std.mem.eql(u8, filter_type, "announcement")) " selected" else "" }) catch return mer.internalError("sources render failed");
+    w.print("<label><span class=\"sr-only\">Format</span><select id=\"cp-source-format\" name=\"type\" aria-label=\"Format\"><option value=\"\">All formats</option><option value=\"document\"{s}>PDF and documents</option><option value=\"url\"{s}>Web pages</option></select></label>", .{ if (std.mem.eql(u8, filter_type, "document")) " selected" else "", if (std.mem.eql(u8, filter_type, "url")) " selected" else "" }) catch return mer.internalError("sources render failed");
+    if (use_mock) w.writeAll("<label><span class=\"sr-only\">Module</span><select id=\"cp-source-module\" aria-label=\"Module\"><option>All</option><option>CS2030S</option></select></label>") catch return mer.internalError("sources render failed");
+    w.writeAll("<button class=\"source-filter-submit\" type=\"submit\">Apply filters</button></div></form><section class=\"document-grid grid\" id=\"cp-document-grid\" aria-live=\"polite\">") catch return mer.internalError("sources render failed");
     if (live_sources) |items| {
         for (items) |source| {
-            if (filter_type.len > 0 and !std.mem.eql(u8, source.source_type, filter_type)) continue;
+            if (!matchesType(source.source_type, filter_type)) continue;
             if (!matchesStatus(source.status, filter_status)) continue;
             renderLiveSource(req, w, source, now_secs) catch return mer.internalError("sources render failed");
         }
     } else {
         for (lib.mock.sources) |source| {
-            if (filter_type.len > 0 and !std.mem.eql(u8, source.source_type, filter_type)) continue;
+            if (!matchesType(source.source_type, filter_type)) continue;
             if (!matchesStatus(source.status, filter_status)) continue;
             renderMockSource(req, w, source, now_secs) catch return mer.internalError("sources render failed");
         }
@@ -146,7 +146,7 @@ pub fn render(req: mer.Request) mer.Response {
     w.print("</span><p><strong>Every answer keeps its evidence close.</strong> Imported documents are parsed into topics while preserving links from wiki claims and answers back to the source.</p><a href=\"{s}\">Open generated wiki ", .{wiki_href}) catch return mer.internalError("sources render failed");
     w.writeAll(ICON_ARROW) catch return mer.internalError("sources render failed");
     w.writeAll("</a></div></section></div></section></div>") catch return mer.internalError("sources render failed");
-    renderDialogs(w) catch return mer.internalError("sources render failed");
+    renderDialogs(w, use_mock) catch return mer.internalError("sources render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
@@ -166,6 +166,14 @@ fn matchesStatus(actual: []const u8, selected: []const u8) bool {
     return false;
 }
 
+fn matchesType(actual: []const u8, selected: []const u8) bool {
+    if (selected.len == 0) return true;
+    const is_web = std.ascii.eqlIgnoreCase(actual, "url") or std.ascii.eqlIgnoreCase(actual, "web") or std.ascii.eqlIgnoreCase(actual, "web_page") or std.ascii.eqlIgnoreCase(actual, "link");
+    if (std.mem.eql(u8, selected, "url")) return is_web;
+    if (std.mem.eql(u8, selected, "document")) return !is_web;
+    return std.mem.eql(u8, actual, selected);
+}
+
 fn sourceDisplayStatus(status: []const u8) []const u8 {
     if (std.mem.eql(u8, status, "ready") or std.mem.eql(u8, status, "indexed")) return "Ready";
     if (std.mem.eql(u8, status, "pending") or std.mem.eql(u8, status, "indexing") or std.mem.eql(u8, status, "processing")) return "Importing";
@@ -173,14 +181,13 @@ fn sourceDisplayStatus(status: []const u8) []const u8 {
 }
 
 fn sourceDisplayFormat(source_type: []const u8) []const u8 {
-    if (std.ascii.eqlIgnoreCase(source_type, "url") or std.ascii.eqlIgnoreCase(source_type, "web") or std.ascii.eqlIgnoreCase(source_type, "web_page")) return "URL";
+    if (std.ascii.eqlIgnoreCase(source_type, "url") or std.ascii.eqlIgnoreCase(source_type, "web") or std.ascii.eqlIgnoreCase(source_type, "web_page") or std.ascii.eqlIgnoreCase(source_type, "link")) return "URL";
     return "PDF";
 }
 
 fn renderLiveSource(req: mer.Request, w: *std.Io.Writer, source: lib.types.SourceResponse, now_secs: i64) !void {
     const safe_title = lib.ui.escapeSafe(req.allocator, source.title);
-    const safe_type = lib.ui.escapeSafe(req.allocator, source.source_type);
-    const safe_origin = lib.ui.escapeSafe(req.allocator, source.origin);
+    const display_format = sourceDisplayFormat(source.source_type);
     const safe_status = lib.ui.escapeSafe(req.allocator, source.status);
     const safe_label = lib.ui.escapeSafe(req.allocator, source.citation_label);
     const display_status = sourceDisplayStatus(source.status);
@@ -189,24 +196,19 @@ fn renderLiveSource(req: mer.Request, w: *std.Io.Writer, source: lib.types.Sourc
     const safe_href = lib.ui.escape(req.allocator, href) catch "/sources";
     const module_raw = source.course_context orelse source.project_context orelse "Workspace";
     const safe_module = lib.ui.escapeSafe(req.allocator, module_raw);
-    const safe_course = lib.ui.escapeSafe(req.allocator, source.course_context orelse "None");
-    const safe_project = lib.ui.escapeSafe(req.allocator, source.project_context orelse "None");
-    const safe_user = lib.ui.escapeSafe(req.allocator, source.user_id);
     const error_raw = source.import_error orelse "No import errors";
     const safe_error = lib.ui.escapeSafe(req.allocator, error_raw);
     const imported_raw = source.last_imported_at orelse "Not imported yet";
     const safe_imported = lib.ui.escapeSafe(req.allocator, imported_raw);
-    const external_raw = source.external_id orelse "None";
-    const safe_external = lib.ui.escapeSafe(req.allocator, external_raw);
-    try w.print("<article class=\"document-card\" data-title=\"{s}\" data-module=\"{s}\" data-format=\"{s}\" data-status=\"{s}\" data-tags=\"{s}\"><header><div><h3>{s}</h3><p>{s} · {s} · updated {s}</p></div><button class=\"document-menu\" type=\"button\" aria-label=\"More actions for {s}\">{s}</button></header><button class=\"document-preview-button\" data-source-preview type=\"button\" aria-label=\"Preview {s}\"><div class=\"document-paper\"><div class=\"paper-running-head\"><span>{s}</span><span>{s}</span></div><span class=\"paper-kicker\">{s}</span><h3>{s}</h3><p class=\"paper-lede\">{s}</p><div class=\"paper-rule\"></div><p><strong>Import:</strong> {s}</p><p><strong>Error:</strong> {s}</p><span class=\"paper-page\">chunks not reported</span></div></button><footer><div><span class=\"status-pill status-{s}\">{s}</span><span class=\"document-tags\">", .{ safe_title, safe_module, safe_type, display_status, safe_label, safe_title, safe_module, safe_type, when, safe_title, ICON_MORE, safe_title, safe_module, safe_status, safe_origin, safe_title, safe_label, safe_imported, safe_error, if (std.mem.eql(u8, display_status, "Ready")) "good" else if (std.mem.eql(u8, display_status, "Importing")) "info" else "warn", display_status });
+    try w.print("<article class=\"document-card\" data-title=\"{s}\" data-module=\"{s}\" data-format=\"{s}\" data-status=\"{s}\" data-tags=\"{s}\"><header><div><h3>{s}</h3><p>{s} · {s} · updated {s}</p></div><button class=\"document-menu\" type=\"button\" aria-label=\"More actions for {s}\">{s}</button></header><button class=\"document-preview-button\" data-source-preview type=\"button\" aria-label=\"Preview {s}\"><div class=\"document-paper\"><div class=\"paper-running-head\"><span>{s}</span><span>{s}</span></div><span class=\"paper-kicker\">SOURCE PREVIEW</span><h3>{s}</h3><p class=\"paper-lede\">{s}</p><div class=\"paper-rule\"></div><p><strong>Import:</strong> {s}</p><p><strong>Status:</strong> {s}</p><span class=\"paper-page\">Updated {s}</span></div></button><footer><div><span class=\"status-pill status-{s}\">{s}</span><span class=\"document-tags\">", .{ safe_title, safe_module, display_format, display_status, safe_label, safe_title, safe_module, display_format, when, safe_title, ICON_MORE, safe_title, safe_module, safe_status, safe_title, safe_label, safe_imported, safe_error, when, if (std.mem.eql(u8, display_status, "Ready")) "good" else if (std.mem.eql(u8, display_status, "Importing")) "info" else "warn", display_status });
     for (source.topic_tags) |topic| try w.print("<span>{s}</span> ", .{lib.ui.escapeSafe(req.allocator, topic)});
-    try w.print("</span></div><div class=\"document-metadata\"><small>ID {s} · owner {s} · external {s} · course {s} · project {s} · created {s} · updated {s}</small><a href=\"{s}\">{s} {s}</a></div></footer></article>", .{ lib.ui.escapeSafe(req.allocator, source.id), safe_user, safe_external, safe_course, safe_project, lib.ui.escapeSafe(req.allocator, source.created_at), lib.ui.escapeSafe(req.allocator, source.updated_at), safe_href, if (std.mem.startsWith(u8, href, "/")) "Ask with source" else "Open source", ICON_ARROW });
+    try w.print("</span></div><div><button data-source-preview type=\"button\">Preview</button><a href=\"{s}\">{s} {s}</a></div></footer></article>", .{ safe_href, if (std.mem.startsWith(u8, href, "/")) "Ask with source" else "Open source", ICON_ARROW });
 }
 
 fn renderMockSource(req: mer.Request, w: *std.Io.Writer, source: lib.types.WorkspaceSource, now_secs: i64) !void {
     const safe_title = lib.ui.escapeSafe(req.allocator, source.title);
     const safe_type = lib.ui.escapeSafe(req.allocator, source.source_type);
-    const safe_module = lib.ui.escapeSafe(req.allocator, source.module_id);
+    const safe_module = lib.ui.escapeSafe(req.allocator, mockModuleCode(source.module_id));
     const safe_summary = lib.ui.escapeSafe(req.allocator, source.summary);
     const display_status = sourceDisplayStatus(source.status);
     const when = lib.time.formatRelative(req.allocator, source.updated_at, now_secs) catch "—";
@@ -216,6 +218,11 @@ fn renderMockSource(req: mer.Request, w: *std.Io.Writer, source: lib.types.Works
     try w.print("<article class=\"document-card\" data-title=\"{s}\" data-module=\"{s}\" data-format=\"{s}\" data-status=\"{s}\" data-tags=\"{s}\"><header><div><h3>{s}</h3><p>{s} · {s} · {d} chunks · updated {s}</p></div><button class=\"document-menu\" type=\"button\" aria-label=\"More actions for {s}\">{s}</button></header><button class=\"document-preview-button\" data-source-preview type=\"button\" aria-label=\"Preview {s}\"><div class=\"document-paper\"><div class=\"paper-running-head\"><span>{s}</span><span>{s}</span></div><span class=\"paper-kicker\">SYNTHETIC DEMO SOURCE</span><h3>{s}</h3><p class=\"paper-lede\">{s}</p><div class=\"paper-rule\"></div><div class=\"scan-lines\"><i></i><i></i><i></i><i></i></div><span class=\"paper-page\">{d} chunks</span></div></button><footer><div><span class=\"status-pill status-{s}\">{s}</span><span class=\"document-tags\">", .{ safe_title, safe_module, safe_type, display_status, safe_summary, safe_title, safe_module, safe_type, source.chunk_count, when, safe_title, ICON_MORE, safe_title, safe_module, source.status, safe_title, safe_summary, source.chunk_count, if (std.mem.eql(u8, display_status, "Ready")) "good" else if (std.mem.eql(u8, display_status, "Importing")) "info" else "warn", display_status });
     for (source.topics) |topic| try w.print("<span>{s}</span> ", .{lib.ui.escapeSafe(req.allocator, topic)});
     try w.print("</span></div><div><button data-source-preview type=\"button\">Preview</button><a href=\"{s}\">Open source {s}</a></div></footer></article>", .{ safe_href, ICON_ARROW });
+}
+
+fn mockModuleCode(module_id: []const u8) []const u8 {
+    for (lib.mock.modules) |module| if (std.mem.eql(u8, module.id, module_id)) return module.code;
+    return "Workspace";
 }
 
 fn renderSource(req: mer.Request, w: *std.Io.Writer, source: Source) !void {
@@ -237,9 +244,15 @@ fn renderPaper(w: *std.Io.Writer, id: []const u8) !void {
     }
 }
 
-fn renderDialogs(w: *std.Io.Writer) !void {
+fn renderDialogs(w: *std.Io.Writer, demo: bool) !void {
     try w.writeAll(
         \\<div class="modal-backdrop document-preview-backdrop" id="cp-source-preview-modal" hidden><section class="document-preview-modal" role="dialog" aria-modal="true" aria-labelledby="cp-preview-title"><button class="preview-close" type="button" data-close-source-modal aria-label="Close document preview">×</button><div class="preview-document-stage"><div class="document-paper expanded"><span class="paper-kicker">SOURCE PREVIEW</span><h3 id="cp-preview-paper-title">Balanced Search Trees</h3><p class="paper-lede">Indexed evidence with preserved structure and citation anchors.</p><div class="paper-rule"></div><div class="scan-lines"><i></i><i></i><i></i><i></i></div></div></div><aside><p class="eyebrow">Source preview</p><h2 id="cp-preview-title">Source</h2><p id="cp-preview-detail">Course material</p><span class="status-pill status-good" id="cp-preview-status">Ready</span><dl><div><dt>Evidence</dt><dd>4 linked wiki claims</dd></div><div><dt>Traceability</dt><dd>Preserved</dd></div></dl><a class="button button-dark" href="/wiki">Open connected wiki →</a></aside></section></div>
-        \\<div class="modal-backdrop" id="cp-add-source-modal" hidden><section class="source-modal surface" role="dialog" aria-modal="true" aria-labelledby="cp-add-source-title"><button class="modal-close" type="button" data-close-source-modal aria-label="Close add source dialog">×</button><p class="eyebrow">Add evidence</p><h2 id="cp-add-source-title">Bring in a course source.</h2><p>Add a public course resource and begin parsing it into traceable evidence.</p><form id="cp-add-source-form"><div class="field"><label for="cp-new-source-title">Source title</label><input id="cp-new-source-title" name="title" placeholder="e.g. Lecture 09 — Hash Tables" required></div><div class="field"><label for="cp-new-source-url">Public link</label><input id="cp-new-source-url" name="url" type="url" placeholder="https://..." required></div><div class="field"><label for="cp-new-source-module">Module</label><select id="cp-new-source-module" name="module"><option>CS2040S Data Structures</option><option>CS2103T Software Engineering</option><option>IS1108 Digital Ethics</option></select></div><button class="button button-dark" type="submit">Add and begin parsing</button></form></section></div>
+        \\<div class="modal-backdrop" id="cp-add-source-modal" hidden><section class="source-modal surface" role="dialog" aria-modal="true" aria-labelledby="cp-add-source-title"><button class="modal-close" type="button" data-close-source-modal aria-label="Close add source dialog">×</button><p class="eyebrow">Add evidence</p><h2 id="cp-add-source-title">Bring in a course source.</h2><p>Add a public course resource and begin parsing it into traceable evidence.</p>
     );
+    if (demo) {
+        try w.writeAll("<div class=\"notice notice-info\"><strong>Illustrative demo</strong><span>Source imports are unavailable because no live account or storage is used.</span></div>");
+    } else {
+        try w.writeAll("<form id=\"cp-add-source-form\" method=\"post\" action=\"/api/sources\"><div class=\"field\"><label for=\"cp-new-source-title\">Source title</label><input id=\"cp-new-source-title\" name=\"title\" placeholder=\"e.g. Lecture 09 — Hash Tables\" required></div><div class=\"field\"><label for=\"cp-new-source-url\">Public link</label><input id=\"cp-new-source-url\" name=\"url\" type=\"url\" placeholder=\"https://...\" required></div><div class=\"field\"><label for=\"cp-new-source-module\">Module or context</label><input id=\"cp-new-source-module\" name=\"module\" placeholder=\"e.g. CS2040S\" required></div><button class=\"button button-dark\" type=\"submit\">Add and begin parsing</button><p class=\"cp-form-status\" role=\"status\" aria-live=\"polite\"></p><noscript><p>This secure import action requires JavaScript.</p></noscript></form>");
+    }
+    try w.writeAll("</section></div>");
 }
