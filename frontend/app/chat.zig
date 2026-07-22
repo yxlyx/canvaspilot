@@ -31,12 +31,10 @@ pub fn render(req: mer.Request) mer.Response {
 
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
-    lib.m3.demoBanner(req, w) catch return mer.internalError("ask render failed");
-
-    w.writeAll(
-        \\<header class="cp-page-header">
-        \\  <div><p class="cp-page-kicker">Grounded Q&amp;A</p><h1 class="cp-page-title">Ask your knowledge base</h1></div>
-        \\</header>
+    lib.m3.demoMarker(req, w) catch return mer.internalError("ask render failed");
+    w.print(
+        "<header class=\"cp-page-header\"><div><p class=\"cp-page-kicker\">Grounded Q&amp;A{s}</p><h1 class=\"cp-page-title\">Ask your knowledge base</h1></div></header>",
+        .{if (use_mock) " · synthetic demo" else ""},
     ) catch return mer.internalError("ask render failed");
     if (!use_mock and modules_slice.len == 0) {
         w.writeAll("<div class=\"cp-status-banner cp-status-info\">No modules have been synced yet. You can still ask about imported sources.</div>\n") catch return mer.internalError("ask render failed");

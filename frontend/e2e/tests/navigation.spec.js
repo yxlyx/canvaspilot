@@ -43,9 +43,10 @@ test("legacy workspace pages keep fixtures behind exact explicit demo mode", asy
   ]);
 
   await page.goto("/dashboard");
-  await expect(page.getByRole("heading", { name: "Workspace" })).toBeVisible();
-  await expect(page.getByText("Unavailable", { exact: true })).toHaveCount(4);
-  await expect(page.getByText(/temporarily unavailable/).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Good afternoon." })).toBeVisible();
+  await expect(page.locator(".metric-grid > article")).toHaveCount(4);
+  await expect(page.locator(".metric-grid > article strong")).toHaveText(["—", "—", "—", "—"]);
+  await expect(page.getByText(/temporarily unavailable/i).first()).toBeVisible();
   await expect(page.locator("body")).not.toContainText("CS2030S");
   await expect(page.locator("body")).not.toContainText("Immutable lists");
 
@@ -62,9 +63,11 @@ test("legacy workspace pages keep fixtures behind exact explicit demo mode", asy
 
   await page.goto("/sources?mock=1");
   await expect(page.locator('[data-cp-demo="true"]')).toHaveCount(1);
-  await expect(page.getByText(/synthetic fixtures, not live workspace data/i)).toBeVisible();
-  await page.getByRole("button", { name: /Ready/ }).click();
-  await expect.poll(() => new URL(page.url()).searchParams.get("status")).toBe("ready");
+  await expect(page.getByText(/Synthetic demo · 4 sources/i)).toBeVisible();
+  const ready = page.getByRole("button", { name: /Ready/ });
+  await ready.click();
+  await expect(ready).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".document-card:visible")).toHaveCount(2);
   await expect.poll(() => new URL(page.url()).searchParams.get("mock")).toBe("1");
 });
 
@@ -111,7 +114,7 @@ test("demo flashcards require reveal and show balanced disabled ratings", async 
 
 test("landing workflow numbers are visibly illustrative", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText(/Illustrative product preview · synthetic demo data, not a live workspace/i)).toBeVisible();
+  await expect(page.getByText("Illustrative student workspace", { exact: true })).toBeVisible();
 });
 
 test("authenticated live chat reports backend unavailability without demo fallback", async ({

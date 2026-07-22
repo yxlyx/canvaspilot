@@ -9,8 +9,8 @@ pub fn render(req: mer.Request) mer.Response {
     if (!lib.m3.isExplicitDemo(req)) return renderLive(req);
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
-    w.writeAll("<header class=\"cp-page-header wb-m3-header\"><div><p class=\"cp-page-kicker wb-m3-eyebrow\">AI connections</p><h1 class=\"cp-page-title wb-m3-title\">Provider settings</h1><p class=\"cp-page-sub wb-m3-deck\">Connection status and capabilities. Credentials are write-only and are never rendered back.</p></div></header>") catch return mer.internalError("providers render failed");
-    lib.m3.demoBanner(req, w) catch return mer.internalError("providers render failed");
+    lib.m3.demoMarker(req, w) catch return mer.internalError("providers render failed");
+    w.writeAll("<header class=\"cp-page-header wb-m3-header\"><div><p class=\"cp-page-kicker wb-m3-eyebrow\">Synthetic demo · AI connections</p><h1 class=\"cp-page-title wb-m3-title\">Provider settings</h1><p class=\"cp-page-sub wb-m3-deck\">Connection status and capabilities. Credentials are write-only and are never rendered back.</p></div></header>") catch return mer.internalError("providers render failed");
     w.writeAll("<div class=\"cp-provider-grid wb-m3-provider-grid\">\n") catch return mer.internalError("providers render failed");
     for (lib.mock.providers) |provider| {
         const name = lib.ui.escapeSafe(req.allocator, provider.name);
@@ -21,30 +21,13 @@ pub fn render(req: mer.Request) mer.Response {
             const label = lib.ui.escapeSafe(req.allocator, capability.label);
             w.print("<li>{s}: <strong>{s}</strong></li>", .{ label, if (capability.available) "available" else "unavailable" }) catch return mer.internalError("providers render failed");
         }
-        w.print("</ul><div class=\"cp-provider-form wb-m3-form\" role=\"group\" aria-labelledby=\"provider-title-{s}\" aria-describedby=\"provider-actions-{s}\">", .{ id, id }) catch return mer.internalError("providers render failed");
+        w.print("</ul><div class=\"cp-provider-form wb-m3-provider-spec\" role=\"group\" aria-labelledby=\"provider-title-{s}\"><p class=\"eyebrow\">Required configuration</p><dl>", .{id}) catch return mer.internalError("providers render failed");
         for (provider.fields) |field| {
-            const field_id = lib.m3.safeId(field.id, "field");
-            const input_id = std.fmt.allocPrint(req.allocator, "provider-{s}-{s}", .{ id, field_id }) catch return mer.internalError("providers render failed");
             const label = lib.ui.escapeSafe(req.allocator, field.label);
-            const placeholder = lib.ui.escapeSafe(req.allocator, field.placeholder);
-            const input_type = fieldInputType(field.kind);
-            const autocomplete: []const u8 = if (field.kind == .secret) "new-password" else "off";
-            const required: []const u8 = if (field.required) " aria-required=\"true\"" else "";
-            const write_only: []const u8 = if (field.kind == .secret) " (write-only)" else "";
-            w.print("<label class=\"cp-field wb-m3-field\" for=\"{s}\"><span>{s}{s}</span><input id=\"{s}\" name=\"{s}\" type=\"{s}\" autocomplete=\"{s}\" placeholder=\"{s}\" aria-describedby=\"provider-actions-{s}\" aria-disabled=\"true\" readonly{s}></label>", .{ input_id, label, write_only, input_id, field_id, input_type, autocomplete, placeholder, id, required }) catch return mer.internalError("providers render failed");
+            const kind: []const u8 = if (field.kind == .secret) "Write-only" else "Configuration value";
+            w.print("<div><dt>{s}</dt><dd>{s}{s}</dd></div>", .{ label, kind, if (field.required) " · required" else "" }) catch return mer.internalError("providers render failed");
         }
-        w.print(
-            \\<div class="cp-action-row wb-m3-actions">
-            \\  <button class="cp-btn cp-btn-ghost" type="button" aria-disabled="true" aria-describedby="provider-actions-{s}">Test connection</button>
-            \\  <button class="cp-btn cp-btn-primary" type="button" aria-disabled="true" aria-describedby="provider-actions-{s}">{s}</button>
-            \\  <button class="cp-btn cp-btn-danger" type="button" aria-disabled="true" aria-describedby="provider-actions-{s}">Disconnect</button>
-            \\</div>
-            \\<ul class="cp-action-notes wb-m3-action-notes" id="provider-actions-{s}">
-            \\  <li>Test is unavailable until a backend connectivity probe exists.</li>
-            \\  <li>{s} is unavailable; this demo submits and stores no field values.</li>
-            \\  <li>Disconnect is unavailable until an authenticated mutation contract exists.</li>
-            \\</ul></div></article>
-        , .{ id, id, saveButtonLabel(provider.status), id, id, saveButtonLabel(provider.status) }) catch return mer.internalError("providers render failed");
+        w.writeAll("</dl><p class=\"cp-muted-copy\">Read-only preview. No credential is accepted or stored in demo mode.</p></div></article>") catch return mer.internalError("providers render failed");
     }
     w.writeAll("</div>") catch return mer.internalError("providers render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));

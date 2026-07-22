@@ -111,8 +111,9 @@
 
     function normalizeFormat(value) {
       const normalized = (value || "").trim().toLowerCase();
-      if (normalized === "web" || normalized === "web_page") return "url";
-      return normalized;
+      if (!normalized) return "";
+      if (normalized === "url" || normalized === "web" || normalized === "web_page" || normalized === "link") return "url";
+      return "document";
     }
 
     function cards() {
@@ -158,7 +159,8 @@
       const initiallySelected = button.dataset.sourceStatus === status;
       button.classList.toggle("active", initiallySelected);
       button.setAttribute("aria-pressed", String(initiallySelected));
-      button.addEventListener("click", function () {
+      button.addEventListener("click", function (event) {
+        event.preventDefault();
         status = normalizeStatus(button.dataset.sourceStatus);
         document.querySelectorAll("[data-source-status]").forEach(function (item) {
           const selected = item === button;
@@ -169,7 +171,8 @@
       });
     });
     document.querySelectorAll("[data-source-view]").forEach(function (button) {
-      button.addEventListener("click", function () {
+      button.addEventListener("click", function (event) {
+        event.preventDefault();
         const view = button.dataset.sourceView || "grid";
         grid.classList.toggle("grid", view === "grid");
         grid.classList.toggle("list", view === "list");
@@ -227,9 +230,49 @@
       });
     });
     document.addEventListener("keydown", function (event) {
-      if (event.key !== "Escape") return;
-      if (addModal && !addModal.hidden) closeModal(addModal);
-      if (previewModal && !previewModal.hidden) closeModal(previewModal);
+      const activeModal = addModal && !addModal.hidden ? addModal : previewModal && !previewModal.hidden ? previewModal : null;
+      if (!activeModal) return;
+      if (event.key === "Escape") {
+        closeModal(activeModal);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(activeModal.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'));
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+
+    const addForm = document.getElementById("cp-add-source-form");
+    if (addForm) addForm.addEventListener("submit", async function (event) {
+      event.preventDefault();
+      const statusNode = addForm.querySelector(".cp-form-status");
+      const submit = addForm.querySelector('button[type="submit"]');
+      const title = (document.getElementById("cp-new-source-title") || {}).value || "";
+      const url = (document.getElementById("cp-new-source-url") || {}).value || "";
+      const origin = (document.getElementById("cp-new-source-module") || {}).value || "Workspace";
+      if (submit) submit.disabled = true;
+      if (statusNode) statusNode.textContent = "Adding source…";
+      try {
+        const response = await fetch(addForm.action, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ source_type: "link", origin: origin.trim(), title: title.trim(), source_url: url.trim() }),
+        });
+        if (!response.ok) throw new Error(response.status === 401 ? "Your session has expired. Sign in and try again." : "The source could not be added. Check the link and try again.");
+        if (statusNode) statusNode.textContent = "Source added. Indexing has started.";
+        window.setTimeout(function () { window.location.assign("/sources?import=started"); }, 450);
+      } catch (error) {
+        if (statusNode) statusNode.textContent = error && error.message ? error.message : "The source could not be added.";
+        if (submit) submit.disabled = false;
+      }
     });
 
     applyFilters();
@@ -259,7 +302,8 @@
       const selected = button.dataset.wikiModule === module;
       button.classList.toggle("active", selected);
       button.setAttribute("aria-pressed", String(selected));
-      button.addEventListener("click", function () {
+      button.addEventListener("click", function (event) {
+        event.preventDefault();
         module = button.dataset.wikiModule || "All";
         document.querySelectorAll("[data-wiki-module]").forEach(function (item) {
           const active = item === button;
@@ -278,18 +322,19 @@
       if (all) all.click();
       search.focus();
     });
+    const exportTrigger = document.getElementById("cp-open-wiki-export");
+    const exportDialog = document.getElementById("cp-wiki-export-dialog");
+    if (exportTrigger && exportDialog && typeof exportDialog.showModal === "function") {
+      exportTrigger.addEventListener("click", function () { exportDialog.showModal(); });
+      exportDialog.addEventListener("click", function (event) {
+        if (event.target === exportDialog) exportDialog.close();
+      });
+    }
     filter();
   }
 
   function setupArticle() {
-    const save = document.getElementById("cp-save-article");
     const copy = document.getElementById("cp-copy-article");
-    if (save) save.addEventListener("click", function () {
-      const active = save.getAttribute("aria-pressed") !== "true";
-      save.setAttribute("aria-pressed", String(active));
-      const label = save.querySelector("span");
-      if (label) label.textContent = active ? "Saved" : "Save article";
-    });
     if (copy) copy.addEventListener("click", function () {
       const label = copy.querySelector("span");
       const reset = function () { if (label) label.textContent = "Copy link"; };
@@ -357,7 +402,7 @@
       article.className = "student-turn chat-dynamic";
       const profile = document.createElement("div");
       profile.className = "cp-profile-orb";
-      profile.textContent = "PS";
+      profile.textContent = "You";
       const content = document.createElement("div");
       const label = document.createElement("small");
       label.textContent = "You";
@@ -537,14 +582,6 @@
       });
     }
 
-    window.addEventListener("beforeunload", function () {
-      if (lastFailedMessage) sessionStorage.setItem("cp:last-failed", lastFailedMessage);
-    });
-    const queued = sessionStorage.getItem("cp:last-failed");
-    if (queued) {
-      input.value = queued;
-      sessionStorage.removeItem("cp:last-failed");
-    }
     syncModule();
     syncSend();
   }

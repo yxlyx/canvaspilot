@@ -9,8 +9,8 @@ pub fn render(req: mer.Request) mer.Response {
     if (!lib.m3.isExplicitDemo(req)) return renderLive(req);
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
-    w.writeAll("<div class=\"wb-m3-page wb-m3-progress page-grid\"><header class=\"cp-page-header wb-m3-header\"><div><h1 class=\"cp-page-title\">Knowledge progress</h1><p class=\"cp-page-sub\">Evidence-based estimates, not mastery claims. Confidence and uncertainty stay visible.</p></div></header>") catch return mer.internalError("progress render failed");
-    lib.m3.demoBanner(req, w) catch return mer.internalError("progress render failed");
+    lib.m3.demoMarker(req, w) catch return mer.internalError("progress render failed");
+    w.writeAll("<div class=\"wb-m3-page wb-m3-progress page-grid\"><header class=\"cp-page-header wb-m3-header\"><div><p class=\"cp-page-kicker\">Synthetic demo</p><h1 class=\"cp-page-title\">Knowledge progress</h1><p class=\"cp-page-sub\">Evidence-based estimates, not mastery claims. Confidence and uncertainty stay visible.</p></div></header>") catch return mer.internalError("progress render failed");
     const overview = lib.mock.knowledge_overview;
     const overview_confidence = lib.ui.escapeSafe(req.allocator, overview.confidence);
     const overview_recency = lib.ui.escapeSafe(req.allocator, overview.recency);

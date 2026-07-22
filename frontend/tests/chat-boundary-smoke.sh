@@ -334,7 +334,7 @@ assert_backend_count 1
 
 request "$BASE_URL/dashboard" --header 'Cookie: cp_session=chat-boundary'
 assert_status 200
-assert_contains 'temporarily unavailable'
+assert_contains 'Temporarily unavailable'
 if grep -Fq 'CS2030S' "$BODY" || grep -Fq 'Immutable lists' "$BODY"; then
     fail '/dashboard: live failure rendered fixture sentinels'
 fi

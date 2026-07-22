@@ -41,8 +41,8 @@ pub fn render(req: mer.Request) mer.Response {
 
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
-    lib.m3.demoBanner(req, w) catch return mer.internalError("flashcards render failed");
-    w.print("<header class=\"cp-page-header\"><div><p class=\"cp-page-kicker\">{d} cards due</p><h1 class=\"cp-page-title\">Evidence-backed review</h1></div></header>\n", .{due}) catch return mer.internalError("flashcards render failed");
+    lib.m3.demoMarker(req, w) catch return mer.internalError("flashcards render failed");
+    w.print("<header class=\"cp-page-header\"><div><p class=\"cp-page-kicker\">{s}{d} cards due</p><h1 class=\"cp-page-title\">Evidence-backed review</h1></div></header>\n", .{ if (use_mock) "Synthetic demo · " else "", due }) catch return mer.internalError("flashcards render failed");
 
     if (!use_mock) {
         if (req.queryParam("attempt")) |attempt| {
@@ -164,9 +164,9 @@ fn renderDeckButton(req: mer.Request, w: *std.Io.Writer, id: []const u8, title: 
     const href = try lib.m3.demoHref(req.allocator, req, path);
     const cls: []const u8 = if (active) "cp-deck-row active" else "cp-deck-row";
     const current: []const u8 = if (active) " aria-current=\"true\"" else "";
-    try w.print("<button class=\"{s}\" type=\"button\" data-deck-url=\"{s}\" data-description=\"{s}\" data-generation-scope=\"{s}\" data-updated-at=\"{s}\" data-source-count=\"{d}\"{s}><span class=\"deck-glyph\">", .{ cls, href, safe_description, safe_scope, safe_updated, source_count, current });
+    try w.print("<a class=\"{s}\" href=\"{s}\" data-deck-url=\"{s}\" data-description=\"{s}\" data-generation-scope=\"{s}\" data-updated-at=\"{s}\" data-source-count=\"{d}\"{s}><span class=\"deck-glyph\">", .{ cls, href, href, safe_description, safe_scope, safe_updated, source_count, current });
     try w.writeAll(ICON_LAYERS);
-    try w.print("</span><span><strong>{s}</strong><small>{s} · {d} cards</small></span><b>{d}</b></button>", .{ safe_title, safe_module, total, due });
+    try w.print("</span><span><strong>{s}</strong><small>{s} · {d} cards</small></span><b>{d}</b></a>", .{ safe_title, safe_module, total, due });
 }
 
 fn renderDeckFooter(w: *std.Io.Writer, wiki_href: []const u8) !void {

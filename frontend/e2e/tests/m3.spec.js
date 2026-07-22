@@ -20,7 +20,7 @@ test("private mutation forms fail closed as POST when JavaScript is unavailable"
 test("explicit demo renders grounded and insufficient evidence states", async ({ page }) => {
   await page.goto("/outputs?mock=1");
   await expect(page.getByRole("heading", { name: "Cited outputs" })).toBeVisible();
-  await expect(page.getByText(/synthetic fixtures/i)).toBeVisible();
+  await expect(page.getByText("Synthetic demo", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: /Immutable lists and streams/ })).toBeVisible();
   await page.getByLabel("Preview state").selectOption("insufficient");
   await page.getByRole("button", { name: "Preview synthetic state" }).click();
@@ -53,14 +53,14 @@ test("navigation is keyboard reachable at narrow viewport and preserves demo mod
   const primary = page.getByRole("navigation", { name: "Primary mobile" });
   await expect(primary).toBeVisible();
   await expect(primary.getByRole("link")).toHaveCount(5);
-  const menu = page.locator(".cp-mobile-header .cp-mobile-more");
+  const menu = page.locator(".cp-mobile-header .cp-mobile-menu");
   await menu.locator("summary").focus();
   await page.keyboard.press("Enter");
   await expect(menu.getByRole("navigation", { name: "Mobile menu" })).toBeVisible();
   await expect(menu.getByRole("link", { name: "Outputs" })).toHaveAttribute("aria-current", "page");
   await menu.getByRole("link", { name: "Knowledge" }).click();
   await expect(page).toHaveURL(/\/progress\?mock=1$/);
-  await expect(page.getByText(/synthetic fixtures/i)).toBeVisible();
+  await expect(page.getByText("Synthetic demo", { exact: true })).toBeVisible();
   const layout = await page.evaluate(() => ({
     pageFits: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
     barFits: document.querySelector(".cp-bottomnav").scrollWidth <= document.querySelector(".cp-bottomnav").clientWidth,
@@ -73,7 +73,7 @@ test("mobile Menu works without JavaScript and exposes POST sign-out", async ({ 
   await context.addCookies([{ name: "cp_session", value: "browser-token", url: cookieURL }]);
   const page = await context.newPage();
   await page.goto("/outputs?mock=1");
-  const menu = page.locator(".cp-mobile-header .cp-mobile-more");
+  const menu = page.locator(".cp-mobile-header .cp-mobile-menu");
   await menu.locator("summary").click();
   await expect(menu.getByRole("link", { name: "Providers" })).toHaveAttribute("href", "/settings/providers?mock=1");
   await expect(menu.locator('form[action="/logout"][method="post"]')).toHaveCount(1);
@@ -204,13 +204,14 @@ test("marked-paper upload and destructive confirmations are guarded", async ({ p
   page.once("dialog", (dialog) => dialog.accept()); await page.getByRole("button", { name: "Delete paper" }).click(); await expect.poll(() => requests.length).toBe(2);
 });
 
-test("provider demo has empty non-interactive secret fields and demo export controls", async ({ page }) => {
+test("demo settings and wiki expose no mutation controls", async ({ page }) => {
   await page.goto("/settings/providers?mock=1");
-  const secrets = page.locator('input[type="password"]');
-  await expect(secrets.first()).toHaveValue("");
-  await expect(secrets.first()).toHaveAttribute("readonly", "");
+  await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  await expect(page.locator("form[data-m3-form]")).toHaveCount(0);
+  await expect(page.getByText(/Read-only preview/).first()).toBeVisible();
   await expect(page.locator("html")).not.toContainText(/sk-[A-Za-z0-9]/);
   await page.goto("/wiki?mock=1");
-  await expect(page.getByRole("button", { name: "Download selected pages" })).toBeDisabled();
-  await expect(page.getByText(/Export is unavailable in synthetic demo mode/)).toBeVisible();
+  await expect(page.getByRole("button", { name: /Export|Download/ })).toHaveCount(0);
+  await expect(page.locator("[data-page-download]")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /Read article/ }).first()).toBeVisible();
 });
