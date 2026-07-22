@@ -122,6 +122,12 @@ class LearningEvidence(Base):
             unique=True,
             postgresql_where=text("flashcard_attempt_id IS NOT NULL"),
         ),
+        Index(
+            "uq_learning_evidence_marked_question",
+            "marked_paper_question_id",
+            unique=True,
+            postgresql_where=text("marked_paper_question_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=gen_uuid)
@@ -142,6 +148,9 @@ class LearningEvidence(Base):
     )
     flashcard_attempt_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("flashcard_attempts.id", ondelete="CASCADE")
+    )
+    marked_paper_question_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("marked_paper_questions.id", ondelete="CASCADE")
     )
     is_correct: Mapped[bool | None] = mapped_column(Boolean)
     confidence: Mapped[int | None] = mapped_column(Integer)

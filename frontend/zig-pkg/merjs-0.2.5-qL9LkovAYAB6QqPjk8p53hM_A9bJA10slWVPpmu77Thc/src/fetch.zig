@@ -10,15 +10,21 @@ pub const FetchRequest = struct {
     method: std.http.Method = .GET,
     body: ?[]const u8 = null,
     headers: []const std.http.Header = &.{},
+    /// Reject response bodies larger than this many bytes. Null is unlimited.
+    max_response_bytes: ?usize = null,
 };
 
 /// Response from an HTTP fetch. Owns the body — call `deinit()` when done.
 pub const FetchResponse = struct {
     status: std.http.Status,
     body: []u8,
+    content_type: ?[]u8 = null,
+    content_disposition: ?[]u8 = null,
 
     pub fn deinit(self: FetchResponse, allocator: std.mem.Allocator) void {
         allocator.free(self.body);
+        if (self.content_type) |value| allocator.free(value);
+        if (self.content_disposition) |value| allocator.free(value);
     }
 };
 
@@ -72,24 +78,47 @@ pub fn fetch(allocator: std.mem.Allocator, opts: FetchRequest) !FetchResponse {
     var client = std.http.Client{ .allocator = allocator, .io = runtime.io };
     defer client.deinit();
 
-    var collecting: std.Io.Writer.Allocating = .init(allocator);
-    defer collecting.deinit();
+    const uri = try std.Uri.parse(opts.url);
+    var req = try client.request(opts.method, uri, .{ .extra_headers = opts.headers, .redirect_behavior = .unhandled });
+    defer req.deinit();
+    if (opts.body) |payload| {
+        req.transfer_encoding = .{ .content_length = payload.len };
+        var request_body = try req.sendBodyUnflushed(&.{});
+        try request_body.writer.writeAll(payload);
+        try request_body.end();
+        try req.connection.?.flush();
+    } else {
+        try req.sendBodiless();
+    }
 
-    const result = try client.fetch(.{
-        .location = .{ .url = opts.url },
-        .method = opts.method,
-        .payload = opts.body,
-        .extra_headers = opts.headers,
-        .response_writer = &collecting.writer,
-    });
-
-    const raw = collecting.writer.buffer[0..collecting.writer.end];
-    const owned = try allocator.dupe(u8, raw);
-    return .{ .status = result.status, .body = owned };
+    var redirect_buffer: [16 * 1024]u8 = undefined;
+    var response = try req.receiveHead(&redirect_buffer);
+    const content_type = if (response.head.content_type) |value| try allocator.dupe(u8, value) else null;
+    errdefer if (content_type) |value| allocator.free(value);
+    const content_disposition = if (response.head.content_disposition) |value| try allocator.dupe(u8, value) else null;
+    errdefer if (content_disposition) |value| allocator.free(value);
+    var transfer_buffer: [4096]u8 = undefined;
+    const reader = response.reader(&transfer_buffer);
+    const owned = if (opts.max_response_bytes) |max_bytes|
+        try reader.allocRemaining(allocator, .limited(max_bytes))
+    else
+        try reader.allocRemaining(allocator, .unlimited);
+    return .{ .status = response.head.status, .body = owned, .content_type = content_type, .content_disposition = content_disposition };
 }
 
 fn fetchWorker(allocator: std.mem.Allocator, opts: FetchRequest, out: *?FetchResponse) void {
     out.* = fetch(allocator, opts) catch null;
+}
+
+fn joinSpawned(threads: []?std.Thread) void {
+    for (threads) |thread| if (thread) |spawned| spawned.join();
+}
+
+fn noopWorker() void {}
+
+test "partial thread spawn joins only initialized handles" {
+    var threads = [_]?std.Thread{ null, try std.Thread.spawn(.{}, noopWorker, .{}), null };
+    joinSpawned(&threads);
 }
 
 /// Fetch multiple URLs in parallel. Returns results in the same order as inputs.
@@ -125,8 +154,9 @@ pub fn fetchAll(allocator: std.mem.Allocator, requests: []const FetchRequest) []
         return results;
     }
 
-    const threads = allocator.alloc(std.Thread, requests.len) catch return results;
+    const threads = allocator.alloc(?std.Thread, requests.len) catch return results;
     defer allocator.free(threads);
+    @memset(threads, null);
 
     const gpas = allocator.alloc(std.heap.DebugAllocator(.{}), requests.len) catch return results;
     defer allocator.free(gpas);
@@ -139,16 +169,19 @@ pub fn fetchAll(allocator: std.mem.Allocator, requests: []const FetchRequest) []
         };
     }
 
-    for (threads[0..requests.len]) |t| t.join();
+    joinSpawned(threads);
 
     for (results, 0..) |*r, i| {
         if (r.*) |resp| {
             const owned = allocator.dupe(u8, resp.body) catch {
+                resp.deinit(gpas[i].allocator());
                 r.* = null;
                 continue;
             };
-            r.* = .{ .status = resp.status, .body = owned };
-            gpas[i].allocator().free(resp.body);
+            const content_type = if (resp.content_type) |value| allocator.dupe(u8, value) catch null else null;
+            const content_disposition = if (resp.content_disposition) |value| allocator.dupe(u8, value) catch null else null;
+            r.* = .{ .status = resp.status, .body = owned, .content_type = content_type, .content_disposition = content_disposition };
+            resp.deinit(gpas[i].allocator());
         }
         _ = gpas[i].deinit();
     }

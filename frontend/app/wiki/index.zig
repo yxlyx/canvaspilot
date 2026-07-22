@@ -15,49 +15,102 @@ const ICON_ALERT = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><circle cx=\
 
 pub fn render(req: mer.Request) mer.Response {
     const session = lib.session.fromRequest(req);
-    const use_mock = req.queryParam("mock") != null or !session.isAuthenticated();
+    if (lib.m3.access(req) == .login) return mer.redirect("/login", .see_other);
+    const use_mock = lib.m3.isExplicitDemo(req);
+    const raw_query = req.queryParam("q") orelse "";
+    const raw_module = req.queryParam("module") orelse "";
+    const query = lib.form.decode(req.allocator, raw_query) catch raw_query;
+    const filter_module = lib.form.decode(req.allocator, raw_module) catch raw_module;
     var live_pages: ?[]const lib.types.WikiPageResponse = null;
+    var source_count: ?usize = null;
+    var deck_count: ?usize = null;
+
     if (!use_mock) {
-        const result = lib.backend.listWikiPages(req.allocator, session.token);
-        if (result.value) |parsed| {
-            if (parsed.value.len > 0) live_pages = parsed.value;
-        }
+        const pages_result = lib.backend.listWikiPages(req.allocator, session.token);
+        if (pages_result.value) |pages| live_pages = pages.value else return lib.m3.liveError(req, "Wiki", pages_result.status);
+        const sources_result = lib.backend.listSources(req.allocator, session.token);
+        if (sources_result.value) |sources_result_value| source_count = sources_result_value.value.len else if (sources_result.status == 401) return lib.m3.liveError(req, "Wiki", 401);
+        const decks_result = lib.backend.listFlashcardDecks(req.allocator, session.token);
+        if (decks_result.value) |decks| deck_count = decks.value.len else if (decks_result.status == 401) return lib.m3.liveError(req, "Wiki", 401);
+    } else {
+        source_count = lib.mock.sources.len;
+        deck_count = lib.mock.decks.len;
     }
-    var topic_count: usize = 28;
+
+    var topic_count: usize = 0;
+    var total_citations: usize = 0;
+    var shown_count: usize = 0;
     if (live_pages) |pages| {
-        topic_count = 0;
-        for (pages) |page| if (!std.mem.eql(u8, page.page_type, "index")) {
+        for (pages) |page| {
+            if (std.mem.eql(u8, page.page_type, "index")) continue;
             topic_count += 1;
-        };
+            total_citations += page.citation_count;
+            if (matchesLivePage(page, query, filter_module)) shown_count += 1;
+        }
+    } else {
+        topic_count = lib.mock.wiki_pages.len;
+        for (lib.mock.wiki_pages) |page| {
+            total_citations += page.citations.len;
+            if (matchesMockPage(page, query, filter_module)) shown_count += 1;
+        }
     }
 
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
+    lib.m3.demoBanner(req, w) catch return mer.internalError("wiki index render failed");
     w.print(
         \\<header class="cp-page-header"><div><p class="cp-page-kicker">{d} connected topics</p><h1 class="cp-page-title">Knowledge wiki</h1></div></header>
-        \\<div class="wiki-page page-grid"><section class="wiki-overview surface"><div><p class="eyebrow">Your connected course map</p><h2>Follow an idea from source to understanding.</h2><p>Every topic shows its evidence, neighbours, and missing links.</p></div><div class="wiki-map" aria-label="{d} connected topics"><span class="map-core">{d}<small>topics</small></span><i class="map-orbit orbit-0"><b>Strong 21</b></i><i class="map-orbit orbit-1"><b>Growing 5</b></i><i class="map-orbit orbit-2"><b>Need sources 2</b></i></div></section>
-        \\<section class="wiki-controls"><label class="source-search">
-    , .{ topic_count, topic_count, topic_count }) catch return mer.internalError("wiki index render failed");
+        \\<div class="wiki-page page-grid"><section class="wiki-overview surface"><div><p class="eyebrow">Your connected course map</p><h2>Follow an idea from source to understanding.</h2><p>Every topic shows its evidence, neighbours, and missing links.</p></div><div class="wiki-map" aria-label="{d} connected topics"><span class="map-core">{d}<small>topics</small></span><i class="map-orbit orbit-0"><b>{d} citations</b></i>
+    , .{ topic_count, topic_count, topic_count, total_citations }) catch return mer.internalError("wiki index render failed");
+    optionalMapCount(w, "orbit-1", source_count, "sources") catch return mer.internalError("wiki index render failed");
+    optionalMapCount(w, "orbit-2", deck_count, "decks") catch return mer.internalError("wiki index render failed");
+    w.writeAll("</div></section>") catch return mer.internalError("wiki index render failed");
+    w.writeAll("<section class=\"cp-metric-grid\">") catch return mer.internalError("wiki index render failed");
+    metricCard(w, "Pages", topic_count, "generated notes") catch return mer.internalError("wiki index render failed");
+    metricCard(w, "Citations", total_citations, "source links") catch return mer.internalError("wiki index render failed");
+    optionalMetricCard(w, "Sources", source_count) catch return mer.internalError("wiki index render failed");
+    optionalMetricCard(w, "Decks", deck_count) catch return mer.internalError("wiki index render failed");
+    const safe_query = lib.ui.escapeSafe(req.allocator, query);
+    const safe_module = lib.ui.escapeSafe(req.allocator, filter_module);
+    w.writeAll("</section><form class=\"wiki-controls\" method=\"get\" action=\"/wiki\"><label class=\"source-search\">") catch return mer.internalError("wiki index render failed");
     w.writeAll(ICON_SEARCH) catch return mer.internalError("wiki index render failed");
-    w.writeAll("<input class=\"search-field\" id=\"cp-wiki-search\" placeholder=\"Search concepts, citations, or source titles\" aria-label=\"Search wiki\"></label><div class=\"filter-row\">") catch return mer.internalError("wiki index render failed");
-    const labels = [_][]const u8{ "All", "CS2040S", "CS2103T", "IS1108" };
-    for (labels, 0..) |label, index| w.print("<button class=\"filter-button{s}\" type=\"button\" data-wiki-module=\"{s}\">{s}</button>", .{ if (index == 0) " active" else "", label, if (index == 0) "All modules" else label }) catch return mer.internalError("wiki index render failed");
-    w.writeAll("</div></section><section class=\"article-grid\" id=\"cp-wiki-grid\" aria-live=\"polite\">") catch return mer.internalError("wiki index render failed");
+    w.print("<input class=\"search-field\" id=\"cp-wiki-search\" name=\"q\" value=\"{s}\" placeholder=\"Search concepts, citations, or source titles\" aria-label=\"Search wiki\"></label>", .{safe_query}) catch return mer.internalError("wiki index render failed");
+    if (use_mock) w.writeAll("<input type=\"hidden\" name=\"mock\" value=\"1\">") catch return mer.internalError("wiki index render failed");
+    w.print("<div class=\"filter-row\"><button class=\"filter-button{s}\" type=\"button\" data-wiki-module=\"All\" aria-pressed=\"{s}\">All modules</button><button class=\"filter-button{s}\" type=\"button\" data-wiki-module=\"Workspace\" aria-pressed=\"{s}\">Workspace</button><button class=\"filter-button\" type=\"submit\" name=\"module\" value=\"{s}\">Search</button><noscript><button class=\"filter-button\" type=\"submit\" name=\"module\" value=\"\">All modules</button><button class=\"filter-button\" type=\"submit\" name=\"module\" value=\"Workspace\">Workspace</button></noscript></div></form><section class=\"article-grid\" id=\"cp-wiki-grid\" aria-live=\"polite\">", .{ if (filter_module.len == 0) " active" else "", if (filter_module.len == 0) "true" else "false", if (std.mem.eql(u8, filter_module, "Workspace")) " active" else "", if (std.mem.eql(u8, filter_module, "Workspace")) "true" else "false", safe_module }) catch return mer.internalError("wiki index render failed");
     if (live_pages) |pages| {
         for (pages) |page| {
-            if (std.mem.eql(u8, page.page_type, "index")) continue;
+            if (std.mem.eql(u8, page.page_type, "index") or !matchesLivePage(page, query, filter_module)) continue;
             renderLiveArticle(req, w, page) catch return mer.internalError("wiki index render failed");
         }
     } else {
-        renderArticle(w, "balanced-search-trees", "CS2040S", "3", "Balanced search trees", "How rotations keep ordered operations logarithmic, with AVL and red-black trees compared.", "AVL trees · Rotations · Invariants", "Strong", "18 min ago", ICON_BOOK) catch return mer.internalError("wiki index render failed");
-        renderArticle(w, "graph-traversal", "CS2040S", "4", "Graph traversal", "Breadth-first and depth-first search as systematic strategies for exploring graphs.", "BFS · DFS · Reachability", "Strong", "Yesterday", ICON_NETWORK) catch return mer.internalError("wiki index render failed");
-        renderArticle(w, "software-project-quality", "CS2103T", "2", "Software project quality", "A practical map of architecture decisions, testing evidence, and maintainable teamwork.", "Architecture · Testing · Review", "Growing", "2 days ago", ICON_BOOK) catch return mer.internalError("wiki index render failed");
-        renderArticle(w, "digital-consent", "IS1108", "2", "Digital consent", "Meaningful consent under information asymmetry, defaults, and platform power.", "Consent · Agency · Platforms", "Growing", "3 days ago", ICON_NETWORK) catch return mer.internalError("wiki index render failed");
+        for (lib.mock.wiki_pages) |page| {
+            if (!matchesMockPage(page, query, filter_module)) continue;
+            renderMockArticle(req, w, page) catch return mer.internalError("wiki index render failed");
+        }
     }
-    w.writeAll("</section><div class=\"empty-state surface\" id=\"cp-wiki-empty\" hidden><h2>No connected topics found</h2><p>Try another module or search term.</p><button class=\"button button-secondary\" id=\"cp-clear-wiki-search\" type=\"button\">Clear search</button></div><section class=\"wiki-gap surface\"><span class=\"gap-icon\">") catch return mer.internalError("wiki index render failed");
-    w.writeAll(ICON_ALERT) catch return mer.internalError("wiki index render failed");
-    w.writeAll("</span><div><strong>Two ideas need stronger evidence.</strong><p>Amortised analysis and platform accountability each rely on a single source.</p></div><a class=\"button button-secondary button-small\" href=\"/sources\">Add supporting sources</a></section></div>") catch return mer.internalError("wiki index render failed");
-    return lib.ui.htmlResponse(&buf);
+    if (shown_count == 0) {
+        const clear_href = lib.m3.demoHref(req.allocator, req, "/wiki") catch return mer.internalError("wiki index render failed");
+        if (topic_count == 0 and query.len == 0 and filter_module.len == 0) {
+            w.writeAll("<div class=\"empty-state surface\"><h2>No wiki pages have been generated yet.</h2><p>Import sources, then generate a source-grounded page.</p></div>") catch return mer.internalError("wiki index render failed");
+        } else {
+            w.print("<div class=\"empty-state surface\"><h2>No connected topics found</h2><p>Try another module or search term.</p><a class=\"button button-secondary\" href=\"{s}\">Clear search</a></div>", .{clear_href}) catch return mer.internalError("wiki index render failed");
+        }
+    }
+    w.writeAll("</section><div class=\"empty-state surface\" id=\"cp-wiki-empty\" hidden><h2>No connected topics found</h2><p>Try another module or search term.</p><button class=\"button button-secondary\" id=\"cp-clear-wiki-search\" type=\"button\">Clear search</button></div>") catch return mer.internalError("wiki index render failed");
+    const sources_href = lib.m3.demoHref(req.allocator, req, "/sources") catch return mer.internalError("wiki index render failed");
+    w.print("<section class=\"wiki-gap surface\"><span class=\"gap-icon\">{s}</span><div><strong>Strengthen the evidence graph.</strong><p>Add sources for topics with sparse citation coverage.</p></div><a class=\"button button-secondary button-small\" href=\"{s}\">Add supporting sources</a></section></div>", .{ ICON_ALERT, sources_href }) catch return mer.internalError("wiki index render failed");
+
+    if (live_pages) |pages| {
+        w.writeAll("<section class=\"cp-card\" aria-labelledby=\"export-title\"><h2 id=\"export-title\">Export Markdown workspace</h2><p>Select current pages. The backend creates the canonical ZIP; no browser-derived Markdown is used.</p><form method=\"post\" action=\"/api/m3\" data-wiki-export><fieldset><legend>Pages to include</legend>") catch return mer.internalError("wiki export render failed");
+        for (pages) |page| {
+            if (std.mem.eql(u8, page.page_type, "index")) continue;
+            w.print("<label class=\"cp-check-row\"><input type=\"checkbox\" name=\"page_ids\" value=\"{s}\"> {s}</label>", .{ lib.ui.escapeSafe(req.allocator, page.id), lib.ui.escapeSafe(req.allocator, page.title) }) catch return mer.internalError("wiki export render failed");
+        }
+        w.writeAll("</fieldset><div class=\"cp-action-row\"><button class=\"cp-btn cp-btn-primary\" name=\"selection\" value=\"selected\" type=\"submit\">Download selected pages</button><button class=\"cp-btn cp-btn-ghost\" name=\"selection\" value=\"all\" type=\"submit\">Download full workspace</button></div><p class=\"cp-form-status\" role=\"status\" aria-live=\"polite\"></p></form></section><script src=\"/m3.js?v=20260721\" defer></script>") catch return mer.internalError("wiki export render failed");
+    } else {
+        w.writeAll("<section class=\"cp-card\" aria-labelledby=\"export-title\"><h2 id=\"export-title\">Export Markdown workspace</h2><p>This synthetic preview cannot create a canonical backend export.</p><div class=\"cp-action-row\"><button class=\"cp-btn cp-btn-primary\" type=\"button\" disabled>Download selected pages</button><button class=\"cp-btn cp-btn-ghost\" type=\"button\" disabled>Download full workspace</button></div><p class=\"cp-muted-copy\">Export is unavailable in synthetic demo mode.</p></section>") catch return mer.internalError("wiki export render failed");
+    }
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
 fn renderArticle(w: *std.Io.Writer, slug: []const u8, module: []const u8, sources: []const u8, title: []const u8, summary: []const u8, topics: []const u8, coverage: []const u8, updated: []const u8, icon: []const u8) !void {
@@ -65,6 +118,56 @@ fn renderArticle(w: *std.Io.Writer, slug: []const u8, module: []const u8, source
     var iterator = std.mem.splitSequence(u8, topics, " · ");
     while (iterator.next()) |topic| try w.print("<span>{s}</span>", .{topic});
     try w.print("</div><footer><span>Updated {s}</span><b>Read article {s}</b></footer></a>", .{ updated, ICON_ARROW });
+}
+
+fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len == 0) return true;
+    if (needle.len > haystack.len) return false;
+    var index: usize = 0;
+    while (index + needle.len <= haystack.len) : (index += 1) {
+        if (std.ascii.eqlIgnoreCase(haystack[index .. index + needle.len], needle)) return true;
+    }
+    return false;
+}
+
+fn matchesModule(selected: []const u8) bool {
+    return selected.len == 0 or std.mem.eql(u8, selected, "Workspace");
+}
+
+fn matchesLivePage(page: lib.types.WikiPageResponse, query: []const u8, module: []const u8) bool {
+    if (!matchesModule(module)) return false;
+    if (containsIgnoreCase(page.title, query) or containsIgnoreCase(page.summary, query) or containsIgnoreCase(page.markdown, query) or containsIgnoreCase(page.page_type, query)) return true;
+    for (page.citations) |citation| {
+        if (containsIgnoreCase(citation.source_title, query) or containsIgnoreCase(citation.snippet, query) or containsIgnoreCase(citation.citation_ref, query)) return true;
+    }
+    return false;
+}
+
+fn matchesMockPage(page: lib.types.WikiPage, query: []const u8, module: []const u8) bool {
+    if (!matchesModule(module)) return false;
+    if (containsIgnoreCase(page.title, query) or containsIgnoreCase(page.summary, query) or containsIgnoreCase(page.markdown, query)) return true;
+    for (page.topics) |topic| if (containsIgnoreCase(topic, query)) return true;
+    for (page.citations) |citation| {
+        if (containsIgnoreCase(citation.title, query) or containsIgnoreCase(citation.snippet, query)) return true;
+    }
+    return false;
+}
+
+fn optionalMapCount(w: *std.Io.Writer, orbit: []const u8, value: ?usize, label: []const u8) !void {
+    if (value) |available| {
+        try w.print("<i class=\"map-orbit {s}\"><b>{d} {s}</b></i>", .{ orbit, available, label });
+    } else {
+        try w.print("<i class=\"map-orbit {s}\"><b>{s} not reported</b></i>", .{ orbit, label });
+    }
+}
+
+fn metricCard(w: *std.Io.Writer, label: []const u8, value: usize, helper: []const u8) !void {
+    try w.print("<div class=\"cp-metric-card cp-metric-static\"><span class=\"cp-metric-label\">{s}</span><span class=\"cp-metric-value\">{d}</span><span class=\"cp-metric-sub\">{s}</span></div>", .{ label, value, helper });
+}
+
+fn optionalMetricCard(w: *std.Io.Writer, label: []const u8, value: ?usize) !void {
+    if (value) |available| return metricCard(w, label, available, "workspace records");
+    try w.print("<div class=\"cp-metric-card cp-metric-static\"><span class=\"cp-metric-label\">{s}</span><span class=\"cp-metric-value\">Unavailable</span><span class=\"cp-metric-sub\">metric temporarily unavailable</span></div>", .{label});
 }
 
 fn safeSlug(raw: []const u8) []const u8 {
@@ -77,9 +180,25 @@ fn safeSlug(raw: []const u8) []const u8 {
 }
 
 fn renderLiveArticle(req: mer.Request, w: *std.Io.Writer, page: lib.types.WikiPageResponse) !void {
-    const safe_slug = safeSlug(page.slug);
-    const safe_title = lib.ui.escape(req.allocator, page.title) catch page.title;
-    const safe_summary = lib.ui.escape(req.allocator, page.summary) catch page.summary;
+    const slug = safeSlug(page.slug);
+    const href = if (slug.len > 0) try std.fmt.allocPrint(req.allocator, "/wiki/{s}", .{slug}) else "/wiki";
+    const safe_title = lib.ui.escapeSafe(req.allocator, page.title);
+    const safe_summary = lib.ui.escapeSafe(req.allocator, page.summary);
+    const safe_type = lib.ui.escapeSafe(req.allocator, page.page_type);
     const coverage: []const u8 = if (page.citation_count > 1) "Strong" else "Growing";
-    try w.print("<a class=\"article-card surface\" href=\"/wiki/{s}\" data-module=\"Workspace\" data-search=\"{s} {s}\"><div class=\"article-card-top\"><span class=\"article-glyph\">{s}</span><span class=\"status-pill status-{s}\">{s}</span></div><div><small>Workspace · {d} citations</small><h2>{s}</h2><p>{s}</p></div><div class=\"topic-row\"><span>Source grounded</span><span>{d} references</span></div><footer><span>Recently updated</span><b>Read article {s}</b></footer></a>", .{ safe_slug, safe_title, safe_summary, ICON_BOOK, if (page.citation_count > 1) "good" else "info", coverage, page.citation_count, safe_title, safe_summary, page.citation_count, ICON_ARROW });
+    const when = lib.time.formatRelative(req.allocator, page.updated_at, lib.time.nowSecs()) catch "—";
+    try w.print("<a class=\"article-card surface\" href=\"{s}\" data-module=\"Workspace\" data-search=\"{s} {s}\"><div class=\"article-card-top\"><span class=\"article-glyph\">{s}</span><span class=\"status-pill status-{s}\">{s}</span></div><div><small>{s} · {d} sources · {d} citations</small><h2>{s}</h2><p>{s}</p></div><div class=\"topic-row\"><span>{d} backlinks</span><span>Created {s}</span></div><footer><span>Updated {s}</span><b>Read article {s}</b></footer></a>", .{ href, safe_title, safe_summary, ICON_BOOK, if (page.citation_count > 1) "good" else "info", coverage, safe_type, page.source_ids.len, page.citation_count, safe_title, safe_summary, page.backlinks.len, lib.ui.escapeSafe(req.allocator, page.created_at), when, ICON_ARROW });
+}
+
+fn renderMockArticle(req: mer.Request, w: *std.Io.Writer, page: lib.types.WikiPage) !void {
+    const slug = safeSlug(page.slug);
+    const path = if (slug.len > 0) try std.fmt.allocPrint(req.allocator, "/wiki/{s}", .{slug}) else "/wiki";
+    const href = try lib.m3.demoHref(req.allocator, req, path);
+    const safe_title = lib.ui.escapeSafe(req.allocator, page.title);
+    const safe_summary = lib.ui.escapeSafe(req.allocator, page.summary);
+    const coverage: []const u8 = if (page.citations.len > 1) "Strong" else "Growing";
+    const when = lib.time.formatRelative(req.allocator, page.updated_at, lib.time.nowSecs()) catch "—";
+    try w.print("<a class=\"article-card surface\" href=\"{s}\" data-module=\"Workspace\" data-search=\"{s} {s}\"><div class=\"article-card-top\"><span class=\"article-glyph\">{s}</span><span class=\"status-pill status-{s}\">{s}</span></div><div><small>Synthetic demo · {d} citations</small><h2>{s}</h2><p>{s}</p></div><div class=\"topic-row\">", .{ href, safe_title, safe_summary, ICON_NETWORK, if (page.citations.len > 1) "good" else "info", coverage, page.citations.len, safe_title, safe_summary });
+    for (page.topics) |topic| try w.print("<span>{s}</span>", .{lib.ui.escapeSafe(req.allocator, topic)});
+    try w.print("</div><footer><span>Updated {s}</span><b>Read article {s}</b></footer></a>", .{ when, ICON_ARROW });
 }

@@ -3,6 +3,7 @@
 //   zig build serve               (dev server on :3001, hot reload)
 //   zig build serve -- --port 8080
 //   zig build serve -- --no-dev   (disable hot reload)
+//   zig build serve -- --no-dotenv (ignore local .env values)
 
 const std = @import("std");
 const mer = @import("mer");
@@ -22,14 +23,22 @@ pub fn main(init: std.process.Init.Minimal) !void {
     defer arena_state.deinit();
     const args = try init.args.toSlice(arena_state.allocator());
 
-    // Load .env before threads start.
-    mer.loadDotenv(alloc);
+    // Load .env before threads start unless an isolated test/deployment asks
+    // to rely exclusively on inherited environment variables.
+    var load_dotenv = true;
+    for (args[1..]) |arg| {
+        if (std.mem.eql(u8, arg, "--no-dotenv")) load_dotenv = false;
+    }
+    if (load_dotenv) mer.loadDotenv(alloc);
 
     var config = mer.Config{
         .host = "127.0.0.1",
         .port = 3001,
         .dev = true,
     };
+    if (mer.env("PORT")) |port| {
+        config.port = try std.fmt.parseInt(u16, port, 10);
+    }
 
     var do_prerender = false;
 
@@ -85,7 +94,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
-const markdown = @import("lib").markdown;
+const lib = @import("lib");
+const markdown = lib.markdown;
 
 test "markdown slugify mirrors backend normalization" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -151,6 +161,131 @@ test "markdown renderInline escapes code and title contents" {
         "use <code>a &lt; b</code> and <a href=\"/wiki/a-b\">A &amp; B</a>",
         out.written(),
     );
+}
+
+test "M3 demo requires server and query opt-in" {
+    try testing.expectEqual(lib.m3.Access.demo, lib.m3.accessFor(true, "1", false));
+    try testing.expectEqual(lib.m3.Access.login, lib.m3.accessFor(false, "1", false));
+    try testing.expectEqual(lib.m3.Access.login, lib.m3.accessFor(true, null, false));
+    try testing.expectEqual(lib.m3.Access.login, lib.m3.accessFor(true, "true", false));
+    try testing.expectEqual(lib.m3.Access.live, lib.m3.accessFor(true, "0", true));
+    try testing.expect(lib.config.parseEnabled("true"));
+    try testing.expect(lib.config.parseEnabled("TRUE"));
+    try testing.expect(lib.config.parseEnabled("1"));
+    try testing.expect(!lib.config.parseEnabled(null));
+    try testing.expect(!lib.config.parseEnabled("yes"));
+}
+
+test "M3 demo links preserve explicit mode" {
+    const plain = try lib.m3.demoHrefFor(testing.allocator, false, "/outputs");
+    defer testing.allocator.free(plain);
+    try testing.expectEqualStrings("/outputs", plain);
+
+    const direct = try lib.m3.demoHrefFor(testing.allocator, true, "/outputs");
+    defer testing.allocator.free(direct);
+    try testing.expectEqualStrings("/outputs?mock=1", direct);
+
+    const filtered = try lib.m3.demoHrefFor(testing.allocator, true, "/history?type=wiki");
+    defer testing.allocator.free(filtered);
+    try testing.expectEqualStrings("/history?type=wiki&mock=1", filtered);
+
+    const anchored = try lib.m3.demoHrefFor(testing.allocator, true, "/wiki/limits#references");
+    defer testing.allocator.free(anchored);
+    try testing.expectEqualStrings("/wiki/limits?mock=1#references", anchored);
+
+    const filtered_anchored = try lib.m3.demoHrefFor(testing.allocator, true, "/wiki/limits?tab=sources#references");
+    defer testing.allocator.free(filtered_anchored);
+    try testing.expectEqualStrings("/wiki/limits?tab=sources&mock=1#references", filtered_anchored);
+
+    const replaced = try lib.m3.demoHrefFor(testing.allocator, true, "/history?mock=0&type=wiki&mock=1");
+    defer testing.allocator.free(replaced);
+    try testing.expectEqualStrings("/history?type=wiki&mock=1", replaced);
+
+    const empty_query = try lib.m3.demoHrefFor(testing.allocator, true, "/outputs?#preview");
+    defer testing.allocator.free(empty_query);
+    try testing.expectEqualStrings("/outputs?mock=1#preview", empty_query);
+}
+
+test "M3 meters preserve unknown and reject fabricated percentages" {
+    try testing.expectEqual(@as(?u8, 78), lib.m3.meterValue(@as(?u8, 78)));
+    try testing.expectEqual(@as(?u8, null), lib.m3.meterValue(@as(?u8, 101)));
+    try testing.expectEqual(@as(?u8, 63), lib.m3.meterValue(@as(?f64, 0.625)));
+    try testing.expectEqual(@as(?u8, null), lib.m3.meterValue(@as(?f64, null)));
+    try testing.expectEqual(@as(?u8, null), lib.m3.meterValue(@as(?f64, -0.1)));
+    try testing.expectEqual(@as(?u8, 73), lib.m3.meterPercent(72.5));
+    try testing.expectEqual(@as(?u8, 1), lib.m3.meterPercent(1.0));
+    try testing.expectEqual(@as(?u8, null), lib.m3.meterPercent(100.1));
+    try testing.expectEqual(@as(usize, 1_999_980), lib.m3.pageOffset("100000", 20));
+}
+
+test "M3 export filenames are stable and path safe" {
+    const filename = try lib.m3.safeExportFilename(testing.allocator, " ../My Study: Guide ");
+    defer testing.allocator.free(filename);
+    try testing.expectEqualStrings("my-study-guide.md", filename);
+}
+
+test "M3 internal links reject external and ambiguous paths" {
+    try testing.expectEqualStrings("/health?severity=warning", lib.m3.safeInternalHref("/health?severity=warning", "/dashboard"));
+    try testing.expectEqualStrings("/dashboard", lib.m3.safeInternalHref("https://example.com", "/dashboard"));
+    try testing.expectEqualStrings("/dashboard", lib.m3.safeInternalHref("//example.com", "/dashboard"));
+    try testing.expectEqualStrings("/dashboard", lib.m3.safeInternalHref("/\\example.com", "/dashboard"));
+    try testing.expectEqualStrings("/dashboard", lib.m3.safeInternalHref("/\t/example.com", "/dashboard"));
+    try testing.expectEqualStrings("/dashboard", lib.m3.safeInternalHref("/health search", "/dashboard"));
+    try testing.expectEqualStrings("/dashboard", lib.m3.safeInternalHref("/health\r\nX-Test: unsafe", "/dashboard"));
+}
+
+test "escapeSafe never returns raw HTML" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const escaped = lib.ui.escapeSafe(arena.allocator(), "<script>alert('x')</script>");
+    try testing.expectEqualStrings("&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;", escaped);
+}
+
+test "escapeSafe releases partial output after allocation failure" {
+    var failing = testing.FailingAllocator.init(testing.allocator, .{
+        .fail_index = 1,
+        .resize_fail_index = 0,
+    });
+    const escaped = lib.ui.escapeSafe(
+        failing.allocator(),
+        "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<",
+    );
+    try testing.expectEqualStrings("", escaped);
+    try testing.expect(failing.has_induced_failure);
+    try testing.expectEqual(failing.allocations, failing.deallocations);
+    try testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+}
+
+test "chat SSE aggregation requires a valid completed response" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const sse =
+        "event: token\r\ndata: {\"text\":\"Hello \"}\r\n\r\n" ++
+        "event: token\r\ndata: {\"text\":\"world\"}\r\n\r\n" ++
+        "event: citations\r\ndata: {\"citations\":[{\"title\":\"Notes\",\"url\":\"/sources\",\"snippet\":\"Grounded text\"}]}\r\n\r\n" ++
+        "event: done\r\ndata: {\"grounded\":true,\"confidence\":0.75}\r\n\r\n";
+
+    const reply = try lib.chat.aggregateSse(alloc, sse);
+    try testing.expectEqualStrings("Hello world", reply.message);
+    try testing.expect(reply.grounded);
+    try testing.expectEqual(@as(usize, 1), reply.citations.len);
+    try testing.expectEqualStrings("Notes", reply.citations[0].title);
+
+    const no_context = try lib.chat.aggregateSse(
+        alloc,
+        "event: done\ndata: {\"grounded\":false,\"confidence\":0.0,\"message\":\"No grounded context was found.\"}\n\n",
+    );
+    try testing.expectEqualStrings("No grounded context was found.", no_context.message);
+    try testing.expect(!no_context.grounded);
+
+    try testing.expectError(error.InvalidSse, lib.chat.aggregateSse(alloc, "event: token\ndata: {\"text\":\"truncated\"}\n\n"));
+    try testing.expectError(error.InvalidSse, lib.chat.aggregateSse(alloc, "event: token\ndata: not-json\n\nevent: done\ndata: {\"grounded\":false,\"confidence\":0.0}\n\n"));
+    try testing.expectError(error.InvalidSse, lib.chat.aggregateSse(alloc, "event: citations\ndata: not-json\n\nevent: done\ndata: {\"grounded\":false,\"confidence\":0.0}\n\n"));
+    try testing.expectError(error.InvalidSse, lib.chat.aggregateSse(alloc, "event: done\ndata: not-json\n\n"));
+    try testing.expectError(error.InvalidSse, lib.chat.aggregateSse(alloc, "event: token\ndata: {\"text\":\"partial\"}\n\nevent: done\ndata: {}\n\n"));
+    try testing.expectError(error.InvalidSse, lib.chat.aggregateSse(alloc, "event: done\ndata: {\"grounded\":false,\"confidence\":0.0,\"message\":\"complete\"}\n\nevent: token\ndata: {\"text\":\"late\"}\n\n"));
+    try testing.expectError(error.InvalidSse, lib.chat.aggregateSse(alloc, "event: done\ndata: {\"grounded\":false,\"confidence\":0.0,\"message\":\"complete\"}\n\nevent: done\ndata: {\"grounded\":false,\"confidence\":0.0,\"message\":\"duplicate\"}\n\n"));
 }
 
 test "markdown renderMarkdown handles blockquote list and references" {

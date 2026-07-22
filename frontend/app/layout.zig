@@ -1,5 +1,6 @@
 const std = @import("std");
 const mer = @import("mer");
+const lib = @import("lib");
 
 const CSS = @embedFile("_styles.css");
 
@@ -18,12 +19,33 @@ const NAV_ITEMS = [_]NavItem{
     .{ .href = "/flashcards", .label = "Flashcards", .match = "/flashcards", .icon = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"m12 2 9 5-9 5-9-5 9-5Z\"/><path d=\"m3 12 9 5 9-5\"/><path d=\"m3 17 9 5 9-5\"/></svg>" },
 };
 
+const SECONDARY_NAV_ITEMS = [_]NavItem{
+    .{ .href = "/outputs", .label = "Outputs", .match = "/outputs", .icon = "" },
+    .{ .href = "/progress", .label = "Knowledge", .match = "/progress", .icon = "" },
+    .{ .href = "/health", .label = "Health", .match = "/health", .icon = "" },
+    .{ .href = "/history", .label = "History", .match = "/history", .icon = "" },
+    .{ .href = "/marked-papers", .label = "Papers", .match = "/marked-papers", .icon = "" },
+    .{ .href = "/settings/providers", .label = "Providers", .match = "/settings/providers", .icon = "" },
+};
+
+fn documentTitle(body: []const u8) ?[]const u8 {
+    const marker = "data-cp-document-title=\"";
+    const marker_start = std.mem.indexOf(u8, body, marker) orelse return null;
+    const value_start = marker_start + marker.len;
+    const value_end = std.mem.indexOfScalar(u8, body[value_start..], '"') orelse return null;
+    const title = body[value_start .. value_start + value_end];
+    if (title.len == 0 or std.mem.indexOfScalar(u8, title, '<') != null) return null;
+    return title;
+}
+
 pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, meta: mer.Meta) []const u8 {
     var buf: std.Io.Writer.Allocating = .init(allocator);
     const w = &buf.writer;
-    const title = if (meta.title.len > 0) meta.title else "WikiBase";
+    const signup_page = std.mem.indexOf(u8, body, "data-auth-mode=\"signup\"") != null;
+    const title = if (signup_page) "Create account" else documentTitle(body) orelse if (meta.title.len > 0) meta.title else "WikiBase";
     const desc = if (meta.description.len > 0) meta.description else "A student workspace for sources, wiki notes, cited Q&A, and flashcards.";
     const anonymous_page = std.mem.indexOf(u8, body, "data-cp-auth=\"anonymous\"") != null;
+    const explicit_demo = std.mem.indexOf(u8, body, "data-cp-demo=\"true\"") != null;
     const signed_in = std.mem.indexOf(u8, path, "/login") == null and !std.mem.eql(u8, path, "/") and !anonymous_page;
     const reader_page = std.mem.startsWith(u8, path, "/wiki/");
     const standalone = std.mem.eql(u8, path, "/") or std.mem.startsWith(u8, path, "/login") or std.mem.startsWith(u8, path, "/404") or reader_page;
@@ -44,7 +66,7 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
             w.writeAll("\n") catch {};
         }
     }
-    w.writeAll("<script defer src=\"/app.js?v=wikibase-7\"></script></head><body><a class=\"cp-skip\" href=\"#main\">Skip to content</a>\n") catch return body;
+    w.writeAll("<script defer src=\"/app.js?v=wikibase-8\"></script></head><body><a class=\"cp-skip\" href=\"#main\">Skip to content</a>\n") catch return body;
 
     if (standalone) {
         if (!std.mem.eql(u8, path, "/") and !reader_page) {
@@ -66,9 +88,22 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         const active = std.mem.startsWith(u8, path, item.match);
         const cls: []const u8 = if (active) "cp-tab cp-tab-active" else "cp-tab";
         const current: []const u8 = if (active) " aria-current=\"page\"" else "";
-        w.print("<a class=\"{s}\" href=\"{s}\"{s}>{s}<span>{s}</span></a>\n", .{ cls, item.href, current, item.icon, item.label }) catch return body;
+        const href = lib.m3.demoHrefFor(allocator, explicit_demo, item.href) catch return body;
+        w.print("<a class=\"{s}\" href=\"{s}\"{s}>{s}<span>{s}</span></a>\n", .{ cls, href, current, item.icon, item.label }) catch return body;
     }
-    w.writeAll("</nav><div class=\"cp-sidebar-foot\"><span class=\"cp-profile-orb\">PS</span><span><strong>Pranav</strong><small>NUS student</small></span>") catch return body;
+    w.writeAll("</nav><details class=\"cp-mobile-more\" style=\"margin-top:8px\"><summary>More</summary><nav aria-label=\"More\">") catch return body;
+    for (SECONDARY_NAV_ITEMS) |item| {
+        const active = std.mem.startsWith(u8, path, item.match);
+        const current: []const u8 = if (active) " aria-current=\"page\"" else "";
+        const href = lib.m3.demoHrefFor(allocator, explicit_demo, item.href) catch return body;
+        w.print("<a href=\"{s}\"{s}>{s}</a>", .{ href, current, item.label }) catch return body;
+    }
+    w.writeAll("</nav></details><div class=\"cp-sidebar-foot\">") catch return body;
+    if (signed_in) {
+        w.writeAll("<span class=\"cp-profile-orb\">A</span><span><strong>Account</strong><small>Signed in</small></span>") catch return body;
+    } else {
+        w.writeAll("<span class=\"cp-profile-orb\">D</span><span><strong>Demo</strong><small>Illustrative data</small></span>") catch return body;
+    }
     if (signed_in) {
         w.writeAll("<form action=\"/logout\" method=\"post\"><button type=\"submit\" aria-label=\"Sign out\"><svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M10 17l5-5-5-5M15 12H3M15 3h5a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1h-5\"/></svg></button></form>") catch return body;
     } else {
@@ -83,16 +118,30 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         \\      <button type="button" aria-label="Notifications"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><i></i></button>
         \\      <span class="cp-profile-orb">PS</span>
         \\    </div>
-        \\    <header class="cp-mobile-header"><a class="cp-brand" href="/"><span class="cp-brand-mark">W</span><span class="cp-brand-name">WikiBase</span></a></header>
-        \\    <main class="cp-main" id="main">
+        \\    <header class="cp-mobile-header"><a class="cp-brand" href="/"><span class="cp-brand-mark">W</span><span class="cp-brand-name">WikiBase</span></a>
+        \\      <button class="cp-mobile-theme" type="button" data-cp-theme-toggle aria-label="Switch to dark mode"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3a6 6 0 1 0 9 9 9 9 0 1 1-9-9Z"/></svg></button>
+        \\      <details class="cp-mobile-more"><summary>Menu</summary><nav aria-label="Mobile menu">
     ) catch return body;
+    for (NAV_ITEMS ++ SECONDARY_NAV_ITEMS) |item| {
+        const active = std.mem.startsWith(u8, path, item.match);
+        const current: []const u8 = if (active) " aria-current=\"page\"" else "";
+        const href = lib.m3.demoHrefFor(allocator, explicit_demo, item.href) catch return body;
+        w.print("<a href=\"{s}\"{s}>{s}</a>", .{ href, current, item.label }) catch return body;
+    }
+    if (signed_in) {
+        w.writeAll("<form action=\"/logout\" method=\"post\" class=\"cp-mobile-account\"><input type=\"hidden\" name=\"action\" value=\"logout\"><button type=\"submit\">Sign out</button></form>") catch return body;
+    } else {
+        w.writeAll("<a class=\"cp-mobile-account\" href=\"/login\">Sign in</a>") catch return body;
+    }
+    w.writeAll("</nav></details></header><main class=\"cp-main\" id=\"main\" tabindex=\"-1\">") catch return body;
     w.writeAll(body) catch return body;
     w.writeAll("</main></div></div><nav class=\"cp-bottomnav\" aria-label=\"Primary mobile\">") catch return body;
     for (NAV_ITEMS) |item| {
         const active = std.mem.startsWith(u8, path, item.match);
         const cls: []const u8 = if (active) "cp-bottom-item cp-bottom-active" else "cp-bottom-item";
         const current: []const u8 = if (active) " aria-current=\"page\"" else "";
-        w.print("<a class=\"{s}\" href=\"{s}\"{s}>{s}<span>{s}</span></a>", .{ cls, item.href, current, item.icon, item.label }) catch return body;
+        const href = lib.m3.demoHrefFor(allocator, explicit_demo, item.href) catch return body;
+        w.print("<a class=\"{s}\" href=\"{s}\"{s}>{s}<span>{s}</span></a>", .{ cls, href, current, item.icon, item.label }) catch return body;
     }
     w.writeAll("</nav></body></html>") catch return body;
     return buf.written();

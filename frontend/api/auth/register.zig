@@ -51,6 +51,7 @@ fn registrationErrorCode(result: anytype) []const u8 {
 
 pub fn render(req: mer.Request) mer.Response {
     if (req.method != .POST) return mer.redirect("/login?mode=signup", .see_other);
+    if (!lib.mutation.allowedForOrigin(req, lib.config.load().public_origin)) return .{ .status = .forbidden, .content_type = .text, .body = "cross-site registration rejected" };
 
     const name = lib.form.value(req.allocator, req.body, "name") catch return redirectError(req, "missing_fields");
     const email = lib.form.value(req.allocator, req.body, "email") catch return redirectError(req, "missing_fields");

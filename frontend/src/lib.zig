@@ -10,4 +10,7 @@ pub const mock = @import("lib/mock.zig");
 pub const session = @import("lib/session.zig");
 pub const backend = @import("lib/backend.zig");
 pub const ui = @import("lib/ui.zig");
+pub const chat = @import("lib/chat.zig");
 pub const markdown = @import("lib/markdown.zig");
+pub const m3 = @import("lib/m3.zig");
+pub const mutation = @import("lib/mutation.zig");

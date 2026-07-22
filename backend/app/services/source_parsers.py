@@ -1,10 +1,15 @@
 import base64
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from io import BytesIO
 
 from app.models.source import Source, SourceKind
 from app.schemas.source_imports import SourceImportItem, SourceImportSection, SourceParseItem
+
+MAX_PDF_BYTES = 10 * 1024 * 1024
+MAX_PDF_PAGES = 200
+MAX_PDF_TEXT_CHARS = 2_000_000
 
 
 class SourceParseError(ValueError):
@@ -103,6 +108,8 @@ def parse_pdf(content_base64: str | None) -> list[SourceImportSection]:
     except ValueError as exc:
         raise SourceParseError("PDF content must be base64 encoded") from exc
 
+    if len(pdf_bytes) > MAX_PDF_BYTES:
+        raise SourceParseError("PDF exceeds the 10 MiB decoded size limit")
     sections: list[SourceImportSection] = []
     for page_index, page_text in enumerate(_extract_pdf_page_texts(pdf_bytes), 1):
         text = _normalize_text(page_text)
@@ -119,11 +126,24 @@ def parse_pdf(content_base64: str | None) -> list[SourceImportSection]:
     return sections
 
 
-def _extract_pdf_page_texts(pdf_bytes: bytes) -> list[str]:
+def _extract_pdf_page_texts(pdf_bytes: bytes) -> Iterator[str]:
     from pypdf import PdfReader
 
-    reader = PdfReader(BytesIO(pdf_bytes))
-    return [page.extract_text() or "" for page in reader.pages]
+    try:
+        reader = PdfReader(BytesIO(pdf_bytes), strict=True)
+        if len(reader.pages) > MAX_PDF_PAGES:
+            raise SourceParseError("PDF exceeds the 200 page limit")
+        total_text = 0
+        for page in reader.pages:
+            page_text = page.extract_text() or ""
+            total_text += len(_normalize_text(page_text))
+            if total_text > MAX_PDF_TEXT_CHARS:
+                raise SourceParseError("PDF extracted text exceeds 2,000,000 characters")
+            yield page_text
+    except SourceParseError:
+        raise
+    except Exception as exc:
+        raise SourceParseError("PDF could not be parsed safely") from exc
 
 
 def parse_source_payload(source: Source, payload: SourceParseItem) -> SourceImportItem:

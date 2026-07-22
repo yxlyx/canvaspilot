@@ -70,7 +70,19 @@ pub fn build(b: *std.Build) void {
     addRoutesModule(b, test_mod, mer_mod, lib_mod);
     const run_tests = b.addRunArtifact(b.addTest(.{ .root_module = test_mod }));
     run_tests.step.dependOn(&run_codegen.step);
-    b.step("test", "Compile the WikiBase frontend").dependOn(&run_tests.step);
+
+    // Tests in imported build modules are not collected by the main test root.
+    const module_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    module_test_mod.addImport("mer", mer_mod);
+    const run_module_tests = b.addRunArtifact(b.addTest(.{ .root_module = module_test_mod }));
+
+    const test_step = b.step("test", "Run the WikiBase frontend tests");
+    test_step.dependOn(&run_tests.step);
+    test_step.dependOn(&run_module_tests.step);
 }
 
 fn addRoutesModule(

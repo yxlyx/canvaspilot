@@ -58,6 +58,9 @@ class Source(TimestampMixin, Base):
     source_url: Mapped[str] = mapped_column(String(2048), default="")
     citation_label: Mapped[str] = mapped_column(String(1000))
     topic_tags: Mapped[list[str]] = mapped_column(ARRAY(String(100)), default=list)
+    metadata_overrides: Mapped[list[str]] = mapped_column(
+        ARRAY(String(32)), default=list, server_default=text("'{}'::varchar[]")
+    )
     status: Mapped[SourceStatus] = mapped_column(
         Enum(SourceStatus, name="sourcestatus", values_callable=enum_values),
         default=SourceStatus.PENDING,

@@ -7,6 +7,9 @@ const mer = @import("mer");
 pub const Config = struct {
     /// FastAPI backend base URL — e.g. http://localhost:8000.
     backend_url: []const u8,
+    /// Canonical browser-facing origin used for same-origin mutation checks.
+    /// Unset only supports loopback HTTP origins for local development.
+    public_origin: ?[]const u8,
     /// Name of the HttpOnly cookie that stores the app JWT.
     session_cookie: []const u8,
     /// Set to true to allow ?mock=1 to short-circuit backend calls during
@@ -14,10 +17,16 @@ pub const Config = struct {
     mock_enabled: bool,
 };
 
+pub fn parseEnabled(value: ?[]const u8) bool {
+    const raw = value orelse return false;
+    return std.mem.eql(u8, raw, "1") or std.ascii.eqlIgnoreCase(raw, "true");
+}
+
 pub fn load() Config {
     return .{
         .backend_url = mer.env("WIKIBASE_BACKEND_URL") orelse "http://localhost:8000",
+        .public_origin = mer.env("WIKIBASE_PUBLIC_ORIGIN"),
         .session_cookie = mer.env("WIKIBASE_SESSION_COOKIE") orelse "cp_session",
-        .mock_enabled = true,
+        .mock_enabled = parseEnabled(mer.env("WIKIBASE_MOCK_ENABLED")),
     };
 }
