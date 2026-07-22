@@ -90,18 +90,30 @@
     const empty = document.getElementById("cp-source-empty");
     const addModal = document.getElementById("cp-add-source-modal");
     const previewModal = document.getElementById("cp-source-preview-modal");
-    if (!grid || !search || !format || !module) return;
+    if (!grid || !search || !format) return;
 
     let status = "All";
     let lastTrigger = null;
     const initialParams = new URLSearchParams(window.location.search);
-    const initialStatus = (initialParams.get("status") || "").toLowerCase();
-    const initialType = (initialParams.get("type") || "").toLowerCase();
-    if (initialStatus === "ready" || initialStatus === "indexed") status = "Ready";
-    if (initialStatus === "pending" || initialStatus === "indexing" || initialStatus === "processing") status = "Importing";
-    if (initialStatus === "failed" || initialStatus === "archived" || initialStatus === "review") status = "Needs attention";
-    if (initialType === "url" || initialType === "web") format.value = "URL";
-    if (initialType === "pdf" || initialType === "markdown" || initialType === "assignment" || initialType === "announcement") format.value = "PDF";
+    const initialStatus = normalizeStatus(initialParams.get("status"));
+    const initialType = normalizeFormat(initialParams.get("type"));
+    if (initialStatus) status = initialStatus;
+    if (initialType) format.value = initialType;
+
+    function normalizeStatus(value) {
+      const normalized = (value || "").trim().toLowerCase();
+      if (!normalized || normalized === "all") return "All";
+      if (normalized === "ready" || normalized === "indexed") return "Ready";
+      if (normalized === "pending" || normalized === "indexing" || normalized === "processing") return "Importing";
+      if (normalized === "failed" || normalized === "archived" || normalized === "review" || normalized === "needs review" || normalized === "needs attention") return "Needs attention";
+      return value;
+    }
+
+    function normalizeFormat(value) {
+      const normalized = (value || "").trim().toLowerCase();
+      if (normalized === "web" || normalized === "web_page") return "url";
+      return normalized;
+    }
 
     function cards() {
       return Array.from(grid.querySelectorAll(".document-card"));
@@ -109,13 +121,14 @@
 
     function applyFilters() {
       const query = search.value.trim().toLowerCase();
+      const activeFormat = normalizeFormat(format.value);
       let shown = 0;
       cards().forEach(function (card) {
         const haystack = [card.dataset.title, card.dataset.module, card.dataset.format, card.dataset.tags].join(" ").toLowerCase();
         const visible = (!query || haystack.indexOf(query) !== -1)
-          && (status === "All" || card.dataset.status === status)
-          && (format.value === "All" || card.dataset.format === format.value)
-          && (module.value === "All" || card.dataset.module === module.value);
+          && (status === "All" || normalizeStatus(card.dataset.status) === status)
+          && (!activeFormat || normalizeFormat(card.dataset.format) === activeFormat)
+          && (!module || module.value === "All" || card.dataset.module === module.value);
         card.hidden = !visible;
         if (visible) shown += 1;
       });
@@ -146,7 +159,7 @@
       button.classList.toggle("active", initiallySelected);
       button.setAttribute("aria-pressed", String(initiallySelected));
       button.addEventListener("click", function () {
-        status = button.dataset.sourceStatus || "All";
+        status = normalizeStatus(button.dataset.sourceStatus);
         document.querySelectorAll("[data-source-status]").forEach(function (item) {
           const selected = item === button;
           item.classList.toggle("active", selected);
@@ -169,13 +182,13 @@
     });
     search.addEventListener("input", applyFilters);
     format.addEventListener("change", applyFilters);
-    module.addEventListener("change", applyFilters);
+    if (module) module.addEventListener("change", applyFilters);
 
     const clear = document.getElementById("cp-clear-source-filters");
     if (clear) clear.addEventListener("click", function () {
       search.value = "";
-      format.value = "All";
-      module.value = "All";
+      format.value = "";
+      if (module) module.value = "All";
       status = "All";
       const all = document.querySelector('[data-source-status="All"]');
       if (all) all.click();
@@ -219,38 +232,6 @@
       if (previewModal && !previewModal.hidden) closeModal(previewModal);
     });
 
-    const addForm = document.getElementById("cp-add-source-form");
-    if (addForm) addForm.addEventListener("submit", function (event) {
-      event.preventDefault();
-      const titleField = document.getElementById("cp-new-source-title");
-      const moduleField = document.getElementById("cp-new-source-module");
-      const title = titleField && titleField.value.trim() ? titleField.value.trim() : "New course source";
-      const moduleCode = moduleField ? moduleField.value.split(" ")[0] : "CS2040S";
-      const card = cards()[0].cloneNode(true);
-      card.dataset.title = title;
-      card.dataset.module = moduleCode;
-      card.dataset.format = "URL";
-      card.dataset.status = "Importing";
-      card.dataset.tags = "New source";
-      card.hidden = false;
-      const cardTitle = card.querySelector("header h3");
-      const cardMeta = card.querySelector("header p");
-      const paperTitle = card.querySelector(".document-paper h3");
-      const pill = card.querySelector(".status-pill");
-      const tags = card.querySelector(".document-tags");
-      if (cardTitle) cardTitle.textContent = title;
-      if (cardMeta) cardMeta.textContent = moduleCode + " · Web page · Parsing sections";
-      if (paperTitle) paperTitle.textContent = title;
-      if (pill) { pill.textContent = "Importing"; pill.className = "status-pill status-info"; }
-      if (tags) tags.textContent = "New source";
-      card.querySelectorAll("[aria-label]").forEach(function (element) {
-        if (element.hasAttribute("data-source-preview")) element.setAttribute("aria-label", "Preview " + title);
-      });
-      grid.insertBefore(card, grid.firstChild);
-      addForm.reset();
-      closeModal(addModal);
-      applyFilters();
-    });
     applyFilters();
   }
 
@@ -408,13 +389,13 @@
     }
 
     function safeCitationUrl(raw) {
-      if (!raw) return "/sources";
+      if (!raw || /[\u0000-\u0020\u007f\\]/.test(raw)) return "#";
       try {
-        if (raw.startsWith("/")) return raw;
+        if (raw.startsWith("/") && !raw.startsWith("//")) return raw;
         const url = new URL(raw, window.location.origin);
         if (url.protocol === "http:" || url.protocol === "https:") return url.href;
       } catch (_) {}
-      return "/sources";
+      return "#";
     }
 
     function appendAnswer(message, citations) {
@@ -428,22 +409,24 @@
       text.textContent = message;
       content.append(label, text);
 
-      const citationList = Array.isArray(citations) && citations.length ? citations : [
-        { title: "Lecture 08, pp. 15–18", url: "/sources" },
-        { title: "Tutorial 05, question 2", url: "/sources" },
-      ];
-      const citationRow = document.createElement("div");
-      citationRow.className = "answer-citations";
-      citationList.slice(0, 3).forEach(function (citation, index) {
-        const link = document.createElement("a");
-        link.className = "citation";
-        link.href = safeCitationUrl(citation.url || "");
-        const number = document.createElement("span");
-        number.textContent = String(index + 1);
-        link.append(number, document.createTextNode(citation.title || "Source"));
-        citationRow.appendChild(link);
-      });
-      content.appendChild(citationRow);
+      const citationList = Array.isArray(citations) ? citations : [];
+      if (citationList.length) {
+        const citationRow = document.createElement("div");
+        citationRow.className = "answer-citations";
+        citationList.slice(0, 3).forEach(function (citation, index) {
+          const link = document.createElement("a");
+          link.className = "citation";
+          link.href = safeCitationUrl(citation.url || "");
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          const number = document.createElement("span");
+          number.textContent = String(index + 1);
+          const citationText = (citation.title || "Source") + (citation.snippet ? " — " + citation.snippet : "");
+          link.append(number, document.createTextNode(citationText));
+          citationRow.appendChild(link);
+        });
+        content.appendChild(citationRow);
+      }
 
       const footer = document.createElement("footer");
       const prompt = document.createElement("span");
@@ -456,10 +439,7 @@
       needsWork.type = "button";
       needsWork.textContent = "Needs work";
       needsWork.setAttribute("aria-label", "Answer needs work");
-      const wiki = document.createElement("a");
-      wiki.href = "/wiki/balanced-search-trees";
-      wiki.textContent = "Open related wiki →";
-      footer.append(prompt, useful, needsWork, wiki);
+      footer.append(prompt, useful, needsWork);
       content.appendChild(footer);
       article.appendChild(content);
       log.appendChild(article);
@@ -499,7 +479,8 @@
       log.scrollTop = log.scrollHeight;
 
       try {
-        const response = await fetch("/api/chat", {
+        const endpoint = form.dataset.endpoint || "/api/chat";
+        const response = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -571,16 +552,23 @@
   function setupFlashcards() {
     const review = document.getElementById("cp-flash-review");
     const flashcard = document.getElementById("cp-flashcard");
+    const details = document.getElementById("cp-card-details");
     const revealButton = document.getElementById("cp-reveal-card");
     const answer = document.getElementById("cp-card-answer");
     const ratingPanel = document.getElementById("cp-rating-panel");
     const hint = document.getElementById("cp-review-hint");
-    if (!review || !flashcard || !revealButton || !answer || !ratingPanel) return;
+    if (!review || !flashcard || !details || !revealButton || !answer || !ratingPanel) return;
 
     const cards = Array.from(document.querySelectorAll("#cp-flash-data [data-card-id]"));
+    const ratingForms = Array.from(document.querySelectorAll("form[data-flash-rate]"));
     let index = 0;
     let reviewed = Number((document.getElementById("cp-reviewed-count") || {}).textContent || 0);
     let revealed = false;
+    let submitting = false;
+    let attemptStatus = null;
+
+    details.style.display = "contents";
+    flashcard.insertAdjacentElement("afterend", ratingPanel);
 
     document.querySelectorAll("[data-deck-url]").forEach(function (button) {
       button.addEventListener("click", function () {
@@ -590,6 +578,7 @@
 
     function setRevealed(next) {
       revealed = next;
+      details.open = next;
       flashcard.classList.toggle("revealed", next);
       answer.hidden = !next;
       revealButton.hidden = next;
@@ -623,24 +612,68 @@
     }
 
     function rate() {
-      if (!revealed) return;
       reviewed += 1;
       index = cards.length ? (index + 1) % cards.length : 0;
       updateEvidence();
       renderCurrent();
     }
 
-    revealButton.addEventListener("click", function () { setRevealed(true); });
-    document.querySelectorAll("form[data-flash-rate]").forEach(function (form) {
-      form.addEventListener("submit", function (event) {
-        event.preventDefault();
-        const request = fetch(form.action, { method: "POST", body: new FormData(form), redirect: "manual" });
-        request.catch(function () {});
-        rate();
+    function showFailure(message) {
+      if (!attemptStatus) {
+        attemptStatus = document.createElement("div");
+        attemptStatus.className = "cp-status-banner cp-status-error";
+        attemptStatus.setAttribute("role", "alert");
+        ratingPanel.insertAdjacentElement("beforebegin", attemptStatus);
+      }
+      attemptStatus.textContent = message;
+      attemptStatus.hidden = false;
+    }
+
+    function setSubmitting(next) {
+      submitting = next;
+      ratingForms.forEach(function (form) {
+        const button = form.querySelector('button[type="submit"]');
+        if (button) button.disabled = next;
       });
+    }
+
+    revealButton.addEventListener("click", function (event) {
+      event.preventDefault();
+      setRevealed(true);
     });
-    document.querySelectorAll("button[data-flash-rate]").forEach(function (button) {
-      button.addEventListener("click", rate);
+    ratingForms.forEach(function (form) {
+      form.addEventListener("submit", async function (event) {
+        event.preventDefault();
+        if (!revealed || submitting) return;
+        if (attemptStatus) attemptStatus.hidden = true;
+        setSubmitting(true);
+        try {
+          const response = await fetch(form.action, { method: "POST", body: new FormData(form) });
+          if (response.status === 401) {
+            throw new Error("unauthorized");
+          }
+          if (!response.ok) {
+            throw new Error("request failed");
+          }
+          if (response.redirected) {
+            const destination = new URL(response.url, window.location.href);
+            if (destination.pathname === "/login") {
+              throw new Error("unauthorized");
+            }
+            if (destination.searchParams.get("attempt") !== "saved") {
+              throw new Error("save failed");
+            }
+          }
+          rate();
+        } catch (error) {
+          const message = error && error.message === "unauthorized"
+            ? "Your session has expired. This answer was not recorded; sign in and try again."
+            : "Practice result could not be saved. This card is still open and your answer was not recorded; try again.";
+          showFailure(message);
+        } finally {
+          setSubmitting(false);
+        }
+      });
     });
 
     document.addEventListener("keydown", function (event) {
@@ -649,9 +682,11 @@
       if (event.code === "Space") {
         event.preventDefault();
         if (!revealed) setRevealed(true);
-      } else if (revealed && /^[1-4]$/.test(event.key)) {
+      } else if (revealed && !submitting && /^[1-4]$/.test(event.key)) {
+        const form = ratingForms[Number(event.key) - 1];
+        if (!form) return;
         event.preventDefault();
-        rate();
+        form.requestSubmit();
       }
     });
     renderCurrent();

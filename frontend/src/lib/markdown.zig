@@ -50,7 +50,7 @@ pub fn renderMarkdown(
 /// Emit an escaped plain-text run.
 fn emitRun(allocator: std.mem.Allocator, w: *std.Io.Writer, run: []const u8) !void {
     if (run.len == 0) return;
-    const safe = ui.escape(allocator, run) catch run;
+    const safe = ui.escapeSafe(allocator, run);
     try w.writeAll(safe);
 }
 
@@ -66,7 +66,7 @@ pub fn renderInline(allocator: std.mem.Allocator, w: *std.Io.Writer, text: []con
                 try emitRun(allocator, w, text[run_start..i]);
                 const title = text[i + 2 .. end];
                 const slug = slugify(allocator, title);
-                const safe_title = ui.escape(allocator, title) catch title;
+                const safe_title = ui.escapeSafe(allocator, title);
                 try w.print("<a href=\"/wiki/{s}\">{s}</a>", .{ slug, safe_title });
                 i = end + 2;
                 run_start = i;
@@ -78,7 +78,7 @@ pub fn renderInline(allocator: std.mem.Allocator, w: *std.Io.Writer, text: []con
             if (std.mem.indexOfPos(u8, text, i + 1, "`")) |end| {
                 try emitRun(allocator, w, text[run_start..i]);
                 const code = text[i + 1 .. end];
-                const safe_code = ui.escape(allocator, code) catch code;
+                const safe_code = ui.escapeSafe(allocator, code);
                 try w.print("<code>{s}</code>", .{safe_code});
                 i = end + 1;
                 run_start = i;
@@ -90,7 +90,7 @@ pub fn renderInline(allocator: std.mem.Allocator, w: *std.Io.Writer, text: []con
             if (std.mem.indexOfPos(u8, text, i + 2, "]")) |end| {
                 try emitRun(allocator, w, text[run_start..i]);
                 const key = text[i + 2 .. end];
-                const safe_key = ui.escape(allocator, key) catch key;
+                const safe_key = ui.escapeSafe(allocator, key);
                 try w.print("<sup class=\"cp-cite\">{s}</sup>", .{safe_key});
                 i = end + 1;
                 run_start = i;

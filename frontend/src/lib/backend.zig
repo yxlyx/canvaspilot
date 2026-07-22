@@ -1,11 +1,13 @@
 // src/lib/backend.zig — thin server-side HTTP client around mer.fetch that
-// talks to the FastAPI backend. Always returns Result(T) so call-sites can
-// gracefully fall back to mock data on failure.
+// talks to the FastAPI backend. Always returns Result(T) so live call-sites
+// can render explicit unavailable/error states without fixture fallback.
 
 const std = @import("std");
 const mer = @import("mer");
 const types = @import("types.zig");
 const config = @import("config.zig");
+
+const max_response_bytes = 8 * 1024 * 1024;
 
 pub fn Result(comptime T: type) type {
     return struct {
@@ -59,6 +61,7 @@ fn requestJson(
         .method = method,
         .body = body,
         .headers = headers_buf[0..n],
+        .max_response_bytes = max_response_bytes,
     }) catch |e| {
         return .{ .status = 0, .err = @errorName(e) };
     };
@@ -91,6 +94,7 @@ fn requestJsonNoAuth(
         .method = method,
         .body = body,
         .headers = &headers,
+        .max_response_bytes = max_response_bytes,
     }) catch |e| {
         return .{ .status = 0, .err = @errorName(e) };
     };
@@ -183,6 +187,17 @@ pub fn listSources(allocator: std.mem.Allocator, token: []const u8) Result([]typ
     return requestJson([]types.SourceResponse, allocator, token, .GET, "/api/sources", null);
 }
 
+pub fn createSource(
+    allocator: std.mem.Allocator,
+    token: []const u8,
+    payload: anytype,
+) Result(types.SourceResponse) {
+    const body = stringify(allocator, payload) catch {
+        return .{ .status = 0, .err = "could not encode request" };
+    };
+    return requestJson(types.SourceResponse, allocator, token, .POST, "/api/sources", body);
+}
+
 pub fn listWikiPages(allocator: std.mem.Allocator, token: []const u8) Result([]types.WikiPageResponse) {
     return requestJson([]types.WikiPageResponse, allocator, token, .GET, "/api/wiki/pages", null);
 }
@@ -226,4 +241,81 @@ pub fn submitFlashcardAttempt(
 
 pub fn triggerSync(allocator: std.mem.Allocator, token: []const u8) Result(types.SyncStatus) {
     return requestJson(types.SyncStatus, allocator, token, .POST, "/api/modules/sync", "{}");
+}
+
+pub fn listOutputs(allocator: std.mem.Allocator, token: []const u8, cursor: ?[]const u8) Result(types.StudyOutputPageResponse) {
+    const path = if (cursor) |value|
+        std.fmt.allocPrint(allocator, "/api/outputs/page?limit=20&cursor={s}", .{value}) catch return .{ .status = 0, .err = "alloc" }
+    else
+        "/api/outputs/page?limit=20";
+    return requestJson(types.StudyOutputPageResponse, allocator, token, .GET, path, null);
+}
+pub fn getOutput(allocator: std.mem.Allocator, token: []const u8, id: []const u8) Result(types.StudyOutputResponse) {
+    const path = std.fmt.allocPrint(allocator, "/api/outputs/{s}", .{id}) catch return .{ .status = 0, .err = "alloc" };
+    return requestJson(types.StudyOutputResponse, allocator, token, .GET, path, null);
+}
+pub fn listHealth(allocator: std.mem.Allocator, token: []const u8) Result([]types.HealthFindingResponse) {
+    return requestJson([]types.HealthFindingResponse, allocator, token, .GET, "/api/workspace/health", null);
+}
+pub fn getHealth(allocator: std.mem.Allocator, token: []const u8, id: []const u8) Result(types.HealthFindingResponse) {
+    const path = std.fmt.allocPrint(allocator, "/api/workspace/health/{s}", .{id}) catch return .{ .status = 0, .err = "alloc" };
+    return requestJson(types.HealthFindingResponse, allocator, token, .GET, path, null);
+}
+pub fn history(allocator: std.mem.Allocator, token: []const u8) Result([]types.HistoryEntryResponse) {
+    return requestJson([]types.HistoryEntryResponse, allocator, token, .GET, "/api/workspace/history", null);
+}
+pub fn revisions(allocator: std.mem.Allocator, token: []const u8, page_id: []const u8) Result([]types.WikiRevisionResponse) {
+    const path = std.fmt.allocPrint(allocator, "/api/wiki/pages/{s}/revisions", .{page_id}) catch return .{ .status = 0, .err = "alloc" };
+    return requestJson([]types.WikiRevisionResponse, allocator, token, .GET, path, null);
+}
+pub fn revisionDiff(allocator: std.mem.Allocator, token: []const u8, page_id: []const u8, from: usize, to: usize) Result(types.RevisionDiffResponse) {
+    const path = std.fmt.allocPrint(allocator, "/api/wiki/pages/{s}/diff?from_revision={d}&to_revision={d}", .{ page_id, from, to }) catch return .{ .status = 0, .err = "alloc" };
+    return requestJson(types.RevisionDiffResponse, allocator, token, .GET, path, null);
+}
+pub fn topicMeters(allocator: std.mem.Allocator, token: []const u8) Result([]types.TopicMeterResponse) {
+    return requestJson([]types.TopicMeterResponse, allocator, token, .GET, "/api/meters/topics", null);
+}
+pub fn listMarkedPapers(allocator: std.mem.Allocator, token: []const u8, cursor: ?[]const u8) Result(types.MarkedPaperPageResponse) {
+    const path = if (cursor) |value|
+        std.fmt.allocPrint(allocator, "/api/marked-papers/page?limit=20&cursor={s}", .{value}) catch return .{ .status = 0, .err = "alloc" }
+    else
+        "/api/marked-papers/page?limit=20";
+    return requestJson(types.MarkedPaperPageResponse, allocator, token, .GET, path, null);
+}
+pub fn getMarkedPaper(allocator: std.mem.Allocator, token: []const u8, id: []const u8) Result(types.MarkedPaperResponse) {
+    const path = std.fmt.allocPrint(allocator, "/api/marked-papers/{s}", .{id}) catch return .{ .status = 0, .err = "alloc" };
+    return requestJson(types.MarkedPaperResponse, allocator, token, .GET, path, null);
+}
+pub fn providerDescriptors(allocator: std.mem.Allocator, token: []const u8) Result([]types.ProviderDescriptor) {
+    return requestJson([]types.ProviderDescriptor, allocator, token, .GET, "/api/providers", null);
+}
+pub fn providerSettings(allocator: std.mem.Allocator, token: []const u8) Result([]types.ProviderStatusResponse) {
+    return requestJson([]types.ProviderStatusResponse, allocator, token, .GET, "/api/providers/settings", null);
+}
+
+pub const RawResult = struct {
+    status: u16,
+    body: []const u8 = "",
+    content_type: ?[]const u8 = null,
+    content_disposition: ?[]const u8 = null,
+    err: ?[]const u8 = null,
+};
+pub fn proxy(allocator: std.mem.Allocator, token: []const u8, idempotency_key: []const u8, method: std.http.Method, path: []const u8, body: ?[]const u8, max_bytes: usize) RawResult {
+    const request_body: ?[]const u8 = if (body == null and method.requestHasBody()) "null" else body;
+    const url = buildUrl(allocator, path) catch return .{ .status = 0, .err = "could not build URL" };
+    const bearer = authHeader(allocator, token) catch return .{ .status = 0, .err = "could not build authorization" };
+    var headers_buf: [4]std.http.Header = undefined;
+    headers_buf[0] = .{ .name = "Authorization", .value = bearer };
+    headers_buf[1] = .{ .name = "Accept", .value = "application/json, text/markdown, application/zip" };
+    var n: usize = 2;
+    if (idempotency_key.len > 0) {
+        headers_buf[n] = .{ .name = "Idempotency-Key", .value = idempotency_key };
+        n += 1;
+    }
+    if (request_body != null) {
+        headers_buf[n] = .{ .name = "Content-Type", .value = "application/json" };
+        n += 1;
+    }
+    const res = mer.fetch(allocator, .{ .url = url, .method = method, .body = request_body, .headers = headers_buf[0..n], .max_response_bytes = max_bytes }) catch |e| return .{ .status = 0, .err = @errorName(e) };
+    return .{ .status = @intFromEnum(res.status), .body = res.body, .content_type = res.content_type, .content_disposition = res.content_disposition };
 }

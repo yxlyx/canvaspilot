@@ -60,6 +60,7 @@ pub const StreamWriter = struct {
 
 pub const Method = req_mod.Method;
 pub const Param = req_mod.Param;
+pub const Header = req_mod.Header;
 pub const Request = req_mod.Request;
 pub const ContentType = res_mod.ContentType;
 pub const Response = res_mod.Response;

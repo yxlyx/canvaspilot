@@ -1,6 +1,5 @@
 // app/logout.zig — clears the session cookie and redirects to /login.
-// Accepts both GET (link) and POST (form) so the header sign-out form
-// works without JS.
+// POST-only and canonical-origin guarded so another site cannot clear a session.
 
 const std = @import("std");
 const mer = @import("mer");
@@ -12,6 +11,8 @@ pub const meta: mer.Meta = .{
 };
 
 pub fn render(req: mer.Request) mer.Response {
+    if (req.method != .POST) return .{ .status = .method_not_allowed, .content_type = .text, .body = "POST only" };
+    if (!lib.mutation.allowedForOrigin(req, lib.config.load().public_origin)) return .{ .status = .forbidden, .content_type = .text, .body = "cross-site sign-out rejected" };
     const cookies = req.allocator.alloc(mer.SetCookie, 1) catch {
         return mer.internalError("could not clear session cookie");
     };

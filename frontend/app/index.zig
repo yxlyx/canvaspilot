@@ -12,7 +12,7 @@ pub fn render(req: mer.Request) mer.Response {
     }
 
     const body =
-        \\<main class="wb-landing" id="main">
+        \\<main class="wb-landing" id="main" tabindex="-1">
         \\  <section class="wb-hero">
         \\    <header class="wb-marketing-nav">
         \\      <a class="wb-brand" href="/"><span>W</span><strong>WikiBase</strong></a>
@@ -29,6 +29,7 @@ pub fn render(req: mer.Request) mer.Response {
         \\      <div><a class="wb-button wb-button-dark" href="/login?mode=signup">Start with your sources <span aria-hidden="true">↗</span></a><a class="wb-button wb-button-ghost" href="/dashboard?mock=1">View the prototype</a></div>
         \\    </div>
         \\    <div class="wb-hero-stage">
+        \\      <p class="cp-demo-label" role="note">Illustrative product preview · synthetic demo data, not a live workspace</p>
         \\      <div class="wb-product-screen wb-product-screen-hero">
         \\        <div class="wb-screen-bar"><span aria-hidden="true"><i></i><i></i><i></i></span><b>Student workspace</b><em>WikiBase</em></div>
         \\        <div class="wb-screen-viewport"><img class="wb-theme-shot wb-theme-shot-light" src="/media/product-dashboard-light.png" alt="WikiBase student workspace dashboard" width="1440" height="900"><img class="wb-theme-shot wb-theme-shot-dark" src="/media/product-dashboard-dark.png" alt="" width="1440" height="900"></div>

@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON=${PYTHON:-python}
+export PYTHON
+export ENVIRONMENT=test
+export SESSION_SECRET=test-session-secret-with-at-least-32-bytes
+export CANVAS_TOKEN_SECRET=eE-4RX-m39GFpdZXEDBtsaKZoOlMC7EpNlV9XiFrOO8=
+export PROVIDER_ENCRYPTION_SECRET=XRoe-9icgC8y3-AtmJVDwhbrRraWTUXCsSu013nHztY=
+export SECURE_COOKIES=false
+USE_DATABASE=1
+RUN_E2E=1
+RUN_AUDIT=1
+STARTED_DATABASE=0
+PARTIAL_REASONS=()
+PYTEST_MODE_ARGS=()
+
+usage() {
+    cat <<'EOF'
+Usage: ./verify [--no-db] [--no-e2e] [--no-audit]
+
+Runs backend lint, migrations, coverage tests, frontend formatting/build/tests,
+HTTP smoke tests, dependency audits, browser boundary tests, and full-stack smoke.
+
+Database verification requires TEST_DATABASE_URL and refuses DATABASE_URL. The
+URL's database must have a clearly test-named database such as wikibase_test.
+Use --no-db to block and deselect database tests. Dependency auditing is
+mandatory unless --no-audit is explicitly selected. Every --no-* option makes
+the result partial.
+EOF
+}
+
+while (($#)); do
+    case "$1" in
+        --no-db) USE_DATABASE=0; PARTIAL_REASONS+=("database tests") ;;
+        --no-e2e) RUN_E2E=0; PARTIAL_REASONS+=("browser and full-stack tests") ;;
+        --no-audit) RUN_AUDIT=0; PARTIAL_REASONS+=("dependency audits") ;;
+        -h|--help) usage; exit 0 ;;
+        *) printf 'verify: unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+    esac
+    shift
+done
+
+require() {
+    command -v "$1" >/dev/null 2>&1 || {
+        printf 'verify: required command not found: %s\n' "$1" >&2
+        exit 2
+    }
+}
+
+require "$PYTHON"
+"$PYTHON" -c 'import sys; raise SystemExit(sys.version_info < (3, 12))' || {
+    printf '%s\n' 'verify: Python 3.12 or newer is required.' >&2
+    exit 2
+}
+for module in ruff pytest; do
+    "$PYTHON" -c "import $module" >/dev/null 2>&1 || {
+        printf 'verify: required Python module not found: %s\n' "$module" >&2
+        exit 2
+    }
+done
+if ((USE_DATABASE)); then
+    "$PYTHON" -c 'import alembic' >/dev/null 2>&1 || {
+        printf '%s\n' 'verify: required Python module not found: alembic' >&2
+        exit 2
+    }
+fi
+if ((RUN_AUDIT)) && ! "$PYTHON" -c 'import pip_audit' >/dev/null 2>&1; then
+    printf '%s\n' 'verify: pip-audit is required; install it or explicitly use --no-audit.' >&2
+    exit 2
+fi
+for tool in zig curl; do require "$tool"; done
+if ((RUN_E2E || RUN_AUDIT)); then require npm; fi
+
+cd -- "$ROOT_DIR"
+# shellcheck source=scripts/verify-mode.sh
+source "$ROOT_DIR/scripts/verify-mode.sh"
+
+if ((USE_DATABASE)); then
+    configure_database_mode "$PYTHON"
+    if [[ "$TEST_DATABASE_URL" == 'postgresql+asyncpg://postgres:postgres@localhost:5432/wikibase_test' ]]; then
+        require docker
+        docker info >/dev/null 2>&1 || {
+            printf '%s\n' 'verify: Docker is not running for the local test database.' >&2
+            exit 2
+        }
+        docker compose config --quiet
+        docker compose up -d --wait db
+        docker compose exec -T db psql -U postgres -d postgres -tc \
+            "SELECT 'CREATE DATABASE wikibase_test' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'wikibase_test')" \
+            | docker compose exec -T db psql -U postgres -d postgres
+        STARTED_DATABASE=1
+    fi
+else
+    configure_no_database_mode
+    printf '%s\n' 'verify: --no-db selected; database tests are blocked and deselected.'
+fi
+
+printf '%s\n' '==> Harness safety'
+find verify scripts -type f \( -name '*.sh' -o -name verify \) -print0 \
+    | xargs -0 -n1 bash -n
+"$PYTHON" -m compileall -q scripts
+bash "$ROOT_DIR/scripts/tests/verify-safety.sh"
+
+printf '%s\n' '==> Backend'
+(
+    cd backend
+    "$PYTHON" -m ruff check .
+    "$PYTHON" -m ruff format --check .
+    if ((RUN_AUDIT)); then
+        "$PYTHON" -m pip_audit --no-deps --disable-pip -r requirements-dev.lock
+    fi
+    if ((USE_DATABASE)); then
+        "$PYTHON" -m alembic upgrade head
+        "$PYTHON" -m pytest --cov=app --cov-report=term-missing --cov-fail-under=60
+    else
+        "$PYTHON" -m pytest "${PYTEST_MODE_ARGS[@]}" --cov=app --cov-report=term-missing --cov-fail-under=60
+    fi
+)
+
+printf '%s\n' '==> Frontend'
+(
+    cd frontend
+    zig fmt --check build.zig src app api tools
+    zig build -Doptimize=ReleaseSafe
+    zig build test --summary all
+    ./tests/chat-boundary-smoke.sh
+    ./tests/m3-live-smoke.sh
+    ./tests/m3-live-smoke-safety.sh
+
+    if ((RUN_E2E || RUN_AUDIT)); then
+        cd e2e
+        npm ci
+        if ((RUN_AUDIT)); then npm audit --audit-level=high; fi
+        if ((RUN_E2E)); then
+            npx playwright install chromium
+            npm test
+        fi
+    fi
+)
+
+if ((RUN_E2E && USE_DATABASE)); then
+    "$ROOT_DIR/scripts/full-stack-smoke.sh"
+elif ((RUN_E2E)); then
+    PARTIAL_REASONS+=("full-stack smoke (requires database mode)")
+fi
+
+if ((STARTED_DATABASE)); then
+    printf '%s\n' 'verify: pgvector remains running; stop it with `docker compose down`.'
+fi
+if ((${#PARTIAL_REASONS[@]})); then
+    printf 'verify: PARTIAL verification passed; omitted: %s.\n' "$(IFS=', '; echo "${PARTIAL_REASONS[*]}")"
+else
+    printf '%s\n' 'verify: complete verification passed.'
+fi

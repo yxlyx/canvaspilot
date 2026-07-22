@@ -42,7 +42,7 @@ direction is now anchored around the student knowledge-base workflow.
 | Local auth flow | Implemented, awaiting review | PR #31 open |
 | Source ingestion foundation | Basic implementation | ingestion service and database-backed content records |
 | Retrieval pipeline | Basic implementation | chunking, embedding, vector lookup, chat route |
-| CI | Done | Backend CI and Frontend CI workflows |
+| Local verification | Done | `./verify` runs backend, frontend, database, audit, browser, and smoke checks |
 
 ## What We Have Actually Built
 
@@ -56,7 +56,7 @@ The main pieces already implemented are:
 5. Backend scaffold, database models, migration setup, and tests.
 6. A local auth flow with signup, signin, session handling, and backend auth routes.
 7. A README and milestone tracker that reflect the pivoted direction.
-8. GitHub issue tracking, PR history, CI checks, and branch protection evidence.
+8. GitHub issue tracking, PR history, local verification, and branch protection evidence.
 
 The important takeaway is that the project is no longer just a concept writeup. It has
 an actual working base for auth, source records, retrieval, frontend screens, and
@@ -245,16 +245,16 @@ merjs frontend
 | Retrieval | Embeddings and vector lookup | Grounded Q&A and search over workspace chunks. |
 | Document parsing | PyMuPDF, python-docx, BeautifulSoup, Markdown tooling | Support for PDFs, DOCX, links, and Markdown sources. |
 | Testing | pytest, Ruff, Zig format/build tests | Automated checks across backend and frontend. |
-| CI/CD | GitHub Actions | Pull request checks and deployment confidence. |
+| Verification | `./verify` local harness | Repeatable backend, frontend, database, audit, browser, and smoke checks. |
 | Local services | Docker Compose | Repeatable local PostgreSQL and pgvector setup. |
 
 ## Software Engineering Practices
 
 ### Version Control
 
-The repo uses feature branches, pull requests, branch protection, and CI checks. Recent
-history includes frontend scaffold, dashboard, chat, deployment files, submission tracker,
-and the auth flow PR.
+The repo uses feature branches, pull requests, branch protection, and local verification.
+Recent history includes frontend scaffold, dashboard, chat, deployment files, submission
+tracker, and the auth flow PR.
 
 ### GitHub Tracking
 
@@ -270,7 +270,7 @@ review.
 ### Testing
 
 Backend tests cover auth, schema validation, ingestion, retrieval, and exceptions.
-Frontend CI covers formatting, build, tests, and a boot smoke test.
+The local harness covers frontend formatting, builds, tests, HTTP checks, and browser smoke tests.
 
 ### Documentation
 
@@ -367,28 +367,37 @@ Milestone 3 should extend the prototype into a stronger study workspace.
 
 ## Testing Strategy
 
-Backend:
+Run the complete local verification harness from the repository root:
 
 ```bash
-cd backend
-ruff check .
-ruff format --check .
-pytest --cov=app --cov-report=term-missing
+./verify
 ```
 
-Frontend:
+Database verification requires `TEST_DATABASE_URL` whose effective SQLAlchemy database
+name has a distinct `test` segment. PostgreSQL URLs with any query parameters are refused,
+so connection parameters cannot override the validated database; `DATABASE_URL` is never
+reused. For the local Compose service, set
+`TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/wikibase_test`.
+`./verify --no-db` blocks and deselects database tests, `./verify --no-e2e` omits browser
+and full-stack tests, and `./verify --no-audit` explicitly omits dependency auditing.
+Each option produces a clearly marked partial result. Use one Python 3.12+ interpreter
+and install the hash-locked development dependencies first:
 
 ```bash
-cd frontend
-zig fmt --check src app api tools
-zig build
-zig build test --summary all
+python -m pip install --require-hashes -r backend/requirements-dev.lock
+python -m pip install --no-deps -e backend
 ```
 
-CI:
-
-- Backend CI runs Ruff and pytest with a PostgreSQL + pgvector service.
-- Frontend CI runs formatting, build, tests, and a boot smoke test.
+The harness runs Ruff, Alembic migrations, backend coverage, Zig format/build/unit tests,
+HTTP smoke tests, mandatory Python and npm audits, and deterministic Chromium
+browser-boundary tests. Its database-backed full-stack smoke selects unused loopback ports,
+starts both services, registers and signs in through frontend routes with a cookie jar,
+checks frontend session and authenticated rendering, and creates and renders a source
+through the frontend API bridge. Explicit occupied ports are refused and either child
+exiting fails the test. Local verification passes dynamic frontend and backend URLs to both
+services, starts pgvector, validates Compose, audits locked dependencies, and fails if any
+backend test is skipped. Container builds and Trivy filesystem/image scans are run locally
+as release checks.
 
 ## Risks (generated)
 
@@ -512,7 +521,7 @@ The proof of concept demonstrates that the project has a working base, not just 
 - PostgreSQL and pgvector migrations
 - Frontend scaffold and workspace UI
 - Chat interface and API bridge
-- CI workflows for backend and frontend
+- Local backend and frontend verification harness
 
 ### Auth PR In Review
 
@@ -522,7 +531,7 @@ The proof of concept demonstrates that the project has a working base, not just 
 - Session cookie handling
 - Backend tests for auth behavior
 
-PR #31 contains the current local auth flow and is awaiting review. CI is passing on the PR.
+PR #31 contains the original local auth flow and its historical verification evidence.
 
 ## Architecture
 
@@ -603,13 +612,13 @@ Relational records plus vector similarity search in one database.
 
 ### Quality
 
-**GitHub Actions, pytest, Ruff**
+**Local verification, pytest, Ruff**
 
-Backend and frontend CI for formatting, linting, tests, build, and boot smoke checks.
+`./verify` runs formatting, linting, tests, builds, audits, and smoke checks locally.
 
 ## GitHub Evidence
 
-GitHub workflow is part of the Milestone 1 evidence. The project already has merged PRs, visible issues, milestones, labels, and CI checks.
+Historical workflow runs remain part of the Milestone 1 evidence. The project also has merged PRs, visible issues, milestones, labels, and branch protection.
 
 | PR | Status | Evidence |
 | --- | --- | --- |
@@ -629,7 +638,7 @@ Testing is split by layer so failures are easier to diagnose and explain during 
 - Ruff format check
 - Ruff lint check
 - pytest test suite
-- PostgreSQL + pgvector CI service
+- PostgreSQL + pgvector local Compose service
 
 ### Frontend Checks
 

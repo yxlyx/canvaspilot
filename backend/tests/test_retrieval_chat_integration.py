@@ -86,7 +86,11 @@ async def retrieval_client(
     app.dependency_overrides[get_current_user] = override_get_current_user
     app.dependency_overrides[get_db] = override_get_db
 
-    transport = ASGITransport(app=app)
+    async def asgi_24_app(scope, receive, send):
+        scope = {**scope, "asgi": {**scope["asgi"], "spec_version": "2.4"}}
+        await app(scope, receive, send)
+
+    transport = ASGITransport(app=asgi_24_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client, session, user, other_user
 
