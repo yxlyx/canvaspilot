@@ -212,9 +212,66 @@ fn aggregateSse(
 
 fn mockReply(allocator: std.mem.Allocator, question: []const u8) mer.Response {
     const safe_q = lib.ui.escape(allocator, question) catch question;
+
+    if (containsAnyIgnoreCase(question, &.{ "stream", "lazy", "immutable", "list" })) {
+        const message = std.fmt.allocPrint(
+            allocator,
+            "(demo) Based on the generated wiki for \"{s}\": immutable lists avoid in-place updates, while lazy streams defer work until a value is requested. This lets students describe large or infinite sequences but only evaluate the prefix needed by the program.",
+            .{safe_q},
+        ) catch "(demo reply unavailable)";
+        const citations = [_]lib.types.Citation{
+            .{
+                .title = "Immutable Lists and Lazy Streams",
+                .url = "/wiki/immutable-lists",
+                .snippet = "Immutable lists avoid in-place updates. Lazy streams defer computation until a value is requested.",
+            },
+            .{
+                .title = "Lecture 9: Immutable Lists and Lazy Streams",
+                .url = "/sources?type=markdown",
+                .snippet = "Lecture notes imported from the CS2030S source set and chunked for cited Q&A.",
+            },
+        };
+        const reply: ChatReply = .{
+            .message = message,
+            .citations = &citations,
+            .grounded = true,
+            .confidence = 0.0,
+            .source = "mock",
+        };
+        return mer.typedJson(allocator, reply);
+    }
+
+    if (containsAnyIgnoreCase(question, &.{ "revise", "lab", "practice", "before" })) {
+        const message = std.fmt.allocPrint(
+            allocator,
+            "(demo) Based on the Lab 6 checklist for \"{s}\": review the updated deadline, check the new Coursemology test cases, and confirm each map/filter/reduce step has clear input and output types before submission.",
+            .{safe_q},
+        ) catch "(demo reply unavailable)";
+        const citations = [_]lib.types.Citation{
+            .{
+                .title = "Lab 6 Functional Collections Checklist",
+                .url = "/wiki/lab-6-functional-collections",
+                .snippet = "Review the new Coursemology test cases before final submission.",
+            },
+            .{
+                .title = "Lab 6: Functional Collections Brief",
+                .url = "/sources?type=assignment",
+                .snippet = "Assignment brief, due-date note, and test-case guidance for Lab 6.",
+            },
+        };
+        const reply: ChatReply = .{
+            .message = message,
+            .citations = &citations,
+            .grounded = true,
+            .confidence = 0.0,
+            .source = "mock",
+        };
+        return mer.typedJson(allocator, reply);
+    }
+
     const message = std.fmt.allocPrint(
         allocator,
-        "(demo) Based on the latest announcements in your synced modules, here's what I found about \"{s}\": Lab 6 has been extended to Friday 23:59. Sources are linked below.",
+        "(demo) Based on the latest announcements for \"{s}\": Lab 6 has been extended to Friday 23:59. The new Coursemology test cases should be reviewed before final submission.",
         .{safe_q},
     ) catch "(demo reply unavailable)";
 
@@ -235,4 +292,28 @@ fn mockReply(allocator: std.mem.Allocator, question: []const u8) mer.Response {
     };
 
     return mer.typedJson(allocator, reply);
+}
+
+fn containsAnyIgnoreCase(haystack: []const u8, needles: []const []const u8) bool {
+    for (needles) |needle| {
+        if (indexOfIgnoreCase(haystack, needle) != null) return true;
+    }
+    return false;
+}
+
+fn indexOfIgnoreCase(haystack: []const u8, needle: []const u8) ?usize {
+    if (needle.len == 0) return 0;
+    if (needle.len > haystack.len) return null;
+    var i: usize = 0;
+    while (i + needle.len <= haystack.len) : (i += 1) {
+        var matched = true;
+        for (needle, 0..) |needle_ch, j| {
+            if (std.ascii.toLower(haystack[i + j]) != std.ascii.toLower(needle_ch)) {
+                matched = false;
+                break;
+            }
+        }
+        if (matched) return i;
+    }
+    return null;
 }

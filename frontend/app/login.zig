@@ -31,7 +31,7 @@ pub fn render(req: mer.Request) mer.Response {
     const signup_active = std.mem.eql(u8, mode, "signup");
 
     w.writeAll(
-        \\<section class="cp-auth-shell">
+        \\<section class="cp-auth-shell" id="main">
         \\  <div class="cp-auth-copy">
         \\    <div>
         \\      <div class="cp-kicker">Course workspace</div>

@@ -8,7 +8,7 @@ pub fn render(req: mer.Request) mer.Response {
 }
 
 const BODY =
-    \\<section class="cp-landing">
+    \\<section class="cp-landing" id="main">
     \\  <h1 class="cp-landing-title">Page not found</h1>
     \\  <p class="cp-landing-sub">
     \\    The page you're looking for hasn't been built yet (or you mistyped the URL).
