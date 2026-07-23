@@ -51,7 +51,7 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     w.writeAll("<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n") catch return body;
     w.print("<title>{s} — WikiBase</title><meta name=\"description\" content=\"{s}\">\n", .{ title, desc }) catch return body;
     w.writeAll(
-        \\<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=wikibase-4">
+        \\<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=wikibase-5">
         \\<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=wikibase-3">
         \\<script>document.documentElement.classList.add('js');try{var p=localStorage.getItem('wikibase-theme-preference'),t=localStorage.getItem('wikibase-theme');document.documentElement.dataset.theme=p==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):(p||t||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'))}catch(e){}</script>
         \\<style>
