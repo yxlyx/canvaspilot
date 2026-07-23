@@ -32,7 +32,7 @@ def _decode_bearer_token(token: str) -> tuple[str, int] | None:
         if not subject:
             return None
         return subject, int(payload.get("ver", 0))
-    except (jwt.InvalidTokenError, jwt.ExpiredSignatureError):
+    except (jwt.InvalidTokenError, jwt.ExpiredSignatureError, TypeError, ValueError):
         return None
 
 
@@ -49,12 +49,20 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
 
     if not user_id:
         user_id = request.session.get("user_id")
-        supplied_version = int(request.session.get("auth_version", 0))
+        try:
+            supplied_version = int(request.session.get("auth_version", 0))
+        except (TypeError, ValueError):
+            raise UnauthorizedError() from None
 
     if not user_id:
         raise UnauthorizedError()
 
-    result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
+    try:
+        parsed_user_id = uuid.UUID(user_id)
+    except (AttributeError, TypeError, ValueError):
+        raise UnauthorizedError() from None
+
+    result = await db.execute(select(User).where(User.id == parsed_user_id))
     user = result.scalar_one_or_none()
     if not user or int(user.auth_version or 0) != supplied_version:
         raise UnauthorizedError()

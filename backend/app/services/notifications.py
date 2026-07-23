@@ -2,6 +2,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.exceptions import NotFoundError
@@ -24,14 +25,9 @@ async def upsert_notification(
     dedupe_key: str,
     expires_at: datetime | None = None,
 ) -> InAppNotification:
-    notification = await db.scalar(
-        select(InAppNotification).where(
-            InAppNotification.user_id == user_id,
-            InAppNotification.dedupe_key == dedupe_key,
-        )
-    )
-    if notification is None:
-        notification = InAppNotification(
+    statement = (
+        insert(InAppNotification)
+        .values(
             user_id=user_id,
             kind=kind,
             title=title,
@@ -40,8 +36,20 @@ async def upsert_notification(
             dedupe_key=dedupe_key,
             expires_at=expires_at,
         )
-        db.add(notification)
-        await db.flush()
+        .on_conflict_do_nothing(
+            index_elements=[InAppNotification.user_id, InAppNotification.dedupe_key]
+        )
+        .returning(InAppNotification.id)
+    )
+    await db.execute(statement)
+    notification = await db.scalar(
+        select(InAppNotification).where(
+            InAppNotification.user_id == user_id,
+            InAppNotification.dedupe_key == dedupe_key,
+        )
+    )
+    if notification is None:
+        raise RuntimeError("notification upsert did not return the stored row")
     return notification
 
 

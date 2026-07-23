@@ -246,7 +246,11 @@ async def list_study_outputs(
 
 
 async def page_study_outputs(
-    user: User, db: AsyncSession, limit: int = 20, cursor: str | None = None
+    user: User,
+    db: AsyncSession,
+    limit: int = 20,
+    cursor: str | None = None,
+    output_type: str | None = None,
 ) -> tuple[list[StudyOutput], str | None]:
     statement = (
         select(StudyOutput)
@@ -254,6 +258,8 @@ async def page_study_outputs(
         .where(StudyOutput.user_id == user.id)
         .order_by(StudyOutput.created_at.desc(), StudyOutput.id.desc())
     )
+    if output_type is not None:
+        statement = statement.where(StudyOutput.output_type == output_type)
     if cursor is not None:
         statement = statement.where(
             tuple_(StudyOutput.created_at, StudyOutput.id) < decode_cursor(cursor)

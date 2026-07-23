@@ -17,6 +17,7 @@ from app.schemas.m3 import (
     MarkedPaperQuestionUpdate,
     ProviderConfigureRequest,
 )
+from app.schemas.settings import ActivityEntryResponse
 from app.schemas.source_imports import SourceImportRun
 from app.services import exports, marked_papers
 from app.services.idempotency import request_hash
@@ -344,6 +345,22 @@ def test_study_guide_is_structurally_distinct():
     guide = build_grounded_markdown("study_guide", evidence)
     assert "## Review point 1" in guide
     assert "- [ ] Explain review point 1" in guide
+
+
+@pytest.mark.parametrize("event_type", ["summary", "outline", "study_guide"])
+def test_activity_schema_accepts_each_study_output_type(event_type):
+    entry = ActivityEntryResponse(
+        id=uuid.uuid4(),
+        event_type=event_type,
+        category="study_guides",
+        title="Generated study material",
+        summary="Grounded in workspace sources",
+        href="/wiki/guides/example",
+        resource_id=uuid.uuid4(),
+        created_at=datetime.now(UTC),
+    )
+
+    assert entry.event_type == event_type
 
 
 @pytest.mark.parametrize(
