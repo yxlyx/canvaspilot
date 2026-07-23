@@ -49,7 +49,7 @@ async def account_client() -> AsyncGenerator[tuple[AsyncClient, AsyncSession, Us
             id=uuid.uuid4(),
             name="Account Owner",
             email=email,
-            password_hash=_hash_password("password123"),
+            password_hash=_hash_password("Password123"),
         )
         session.add(user)
         await session.commit()
@@ -107,6 +107,19 @@ async def test_preferences_have_truthful_defaults_and_validate_ranges(account_cl
 
 
 @pytest.mark.asyncio
+async def test_password_change_uses_registration_password_policy(account_client):
+    client, _, _ = account_client
+
+    response = await client.post(
+        "/api/account/password",
+        json={"current_password": "Password123", "new_password": "lowercase123"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "weak_password"
+
+
+@pytest.mark.asyncio
 async def test_notifications_are_deduplicated_by_event(account_client):
     client, session, user = account_client
     source = Source(
@@ -153,7 +166,7 @@ async def test_account_export_includes_readable_data_and_excludes_secrets(accoun
     )
     await session.commit()
 
-    response = await client.post("/api/account/export", json={"current_password": "password123"})
+    response = await client.post("/api/account/export", json={"current_password": "Password123"})
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/zip")
     assert b"never-export-this-secret" not in response.content
@@ -201,7 +214,7 @@ async def test_account_deletion_cascades_owned_settings_and_notifications(accoun
     response = await client.request(
         "DELETE",
         "/api/account",
-        json={"current_password": "password123", "confirmation": "DELETE"},
+        json={"current_password": "Password123", "confirmation": "DELETE"},
     )
     assert response.status_code == 204
     assert await session.scalar(select(func.count(User.id)).where(User.id == user_id)) == 0

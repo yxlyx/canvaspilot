@@ -25,11 +25,23 @@ pub fn render(req: mer.Request) mer.Response {
     if (demo) {
         w.writeAll("<p class=\"cp-settings-readonly\">Password controls are unavailable in the synthetic preview.</p>") catch return mer.internalError("settings render failed");
     } else {
-        w.writeAll("<form method=\"post\" action=\"/api/settings\" data-settings-form data-session-ending><input type=\"hidden\" name=\"action\" value=\"password.change\"><label class=\"cp-field cp-password-field\"><span>Current password</span><span><input type=\"password\" name=\"current_password\" autocomplete=\"current-password\" required><button type=\"button\" data-password-toggle aria-label=\"Show current password\">Show</button></span></label><label class=\"cp-field cp-password-field\"><span>New password</span><span><input type=\"password\" name=\"new_password\" minlength=\"8\" autocomplete=\"new-password\" required><button type=\"button\" data-password-toggle aria-label=\"Show new password\">Show</button></span></label><label class=\"cp-field cp-password-field\"><span>Confirm new password</span><span><input type=\"password\" name=\"confirm_password\" minlength=\"8\" autocomplete=\"new-password\" required><button type=\"button\" data-password-toggle aria-label=\"Show password confirmation\">Show</button></span></label><button class=\"cp-btn cp-btn-primary\" type=\"submit\">Change password</button><p class=\"cp-form-status\" role=\"status\" tabindex=\"-1\"></p></form>") catch return mer.internalError("settings render failed");
+        w.writeAll(
+            \\<form method="post" action="/api/settings" data-settings-form data-session-ending data-settings-password-change>
+            \\  <input type="hidden" name="action" value="password.change">
+            \\  <label class="cp-field cp-password-field"><span>Current password</span><span><input type="password" name="current_password" maxlength="4096" autocomplete="current-password" required><button type="button" data-password-toggle aria-label="Show current password">Show</button></span></label>
+            \\  <div data-settings-password-policy>
+            \\    <label class="cp-field cp-password-field"><span>New password</span><span><input type="password" name="new_password" minlength="8" maxlength="4096" pattern="(?=.*[A-Z])(?=.*[0-9]).{8,}" title="Use at least 8 characters, including an uppercase letter and a number" autocomplete="new-password" aria-describedby="settings-password-rules" required data-settings-new-password><button type="button" data-password-toggle aria-label="Show new password">Show</button></span></label>
+            \\    <ul class="wb-auth-rules cp-settings-password-rules" id="settings-password-rules" aria-label="Password requirements"><li data-settings-password-rule="length"><span aria-hidden="true"></span>8 or more characters</li><li data-settings-password-rule="uppercase"><span aria-hidden="true"></span>One uppercase letter</li><li data-settings-password-rule="number"><span aria-hidden="true"></span>One number</li></ul>
+            \\  </div>
+            \\  <label class="cp-field cp-password-field"><span class="cp-settings-password-label"><span>Confirm new password</span><small data-settings-password-match aria-live="polite"></small></span><span><input type="password" name="confirm_password" minlength="8" maxlength="4096" autocomplete="new-password" required data-settings-confirm-password><button type="button" data-password-toggle aria-label="Show password confirmation">Show</button></span></label>
+            \\  <button class="cp-btn cp-btn-primary" type="submit">Change password</button>
+            \\  <p class="cp-form-status" role="status" tabindex="-1"></p>
+            \\</form>
+        ) catch return mer.internalError("settings render failed");
     }
     w.writeAll("</section>") catch return mer.internalError("settings render failed");
     if (!demo) w.writeAll("<section class=\"cp-settings-section cp-settings-signout\"><div><h2>Sign out this device</h2><p>Your other sessions remain active unless you change your password.</p></div><form action=\"/logout\" method=\"post\"><button class=\"cp-btn cp-btn-ghost\" type=\"submit\">Sign out</button></form></section>") catch return mer.internalError("settings render failed");
-    w.writeAll("</div><script src=\"/settings.js?v=20260722\" defer></script>") catch return mer.internalError("settings render failed");
+    w.writeAll("</div><script src=\"/settings.js?v=20260723\" defer></script>") catch return mer.internalError("settings render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
