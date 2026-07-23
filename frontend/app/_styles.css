@@ -1840,13 +1840,13 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 @media (max-width: 900px) {
     .wb-auth-page { grid-template-columns: 1fr; overflow: visible; }
     .wb-auth-story { display: none; }
-    .wb-auth-form-wrap { padding: 94px 24px 40px; }
-    .wb-auth-back { top: 28px; left: 24px; }
-    .wb-auth-panel { width: min(500px, 100%); }
+    .wb-auth-form-wrap { padding: 28px 24px 40px; justify-content: flex-start; gap: 24px; }
+    .wb-auth-back { min-height: 44px; position: static; align-self: flex-start; flex: none; }
+    .wb-auth-panel { width: min(500px, 100%); margin: auto; }
 }
 
 @media (max-width: 520px) {
-    .wb-auth-form-wrap { padding: 88px 20px 32px; justify-content: flex-start; }
+    .wb-auth-form-wrap { padding: 20px 20px 32px; gap: 20px; }
     .wb-auth-heading { margin: 30px 0 23px; }
     .wb-auth-heading h2 { font-size: 35px; }
     .wb-auth-rules { display: grid; gap: 7px; }
