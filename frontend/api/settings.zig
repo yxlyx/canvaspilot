@@ -80,6 +80,7 @@ pub fn render(req: mer.Request) mer.Response {
     var payload: ?[]const u8 = null;
     var session_ending = false;
     var download = false;
+    var saved_theme: ?[]const u8 = null;
 
     if (std.mem.eql(u8, action, "profile.update")) {
         const name = value(req, "name") orelse return reject(req, "enter a display name");
@@ -99,8 +100,10 @@ pub fn render(req: mer.Request) mer.Response {
         method = .PATCH;
         path = "/api/settings/preferences";
         if (value(req, "theme")) |theme| {
+            if (!std.mem.eql(u8, theme, "system") and !std.mem.eql(u8, theme, "light") and !std.mem.eql(u8, theme, "dark")) return reject(req, "choose a valid theme");
             const motion = value(req, "motion_preference") orelse return reject(req, "choose a motion preference");
             payload = stringify(req.allocator, Appearance{ .theme = theme, .motion_preference = motion });
+            saved_theme = theme;
         } else {
             const target_raw = value(req, "daily_review_target") orelse return reject(req, "enter a review target");
             const target = std.fmt.parseInt(usize, target_raw, 10) catch return reject(req, "review target must be a number");
@@ -145,6 +148,14 @@ pub fn render(req: mer.Request) mer.Response {
         return .{ .status = .ok, .content_type = .zip, .body = result.body, .headers = headers };
     }
     if (session_ending) return clearSession(req, if (wantsJson(req)) .{ .status = .ok, .content_type = .json, .body = "{\"ok\":true,\"redirect\":\"/login\"}" } else mer.redirect("/login?reason=account_changed", .see_other));
-    if (wantsJson(req)) return .{ .status = .ok, .content_type = .json, .body = if (result.body.len > 0) result.body else "{\"ok\":true}" };
-    return redirectTarget(req, true);
+    var response: mer.Response = if (wantsJson(req))
+        .{ .status = .ok, .content_type = .json, .body = if (result.body.len > 0) result.body else "{\"ok\":true}" }
+    else
+        redirectTarget(req, true);
+    if (saved_theme) |theme| {
+        const cookies = req.allocator.alloc(mer.SetCookie, 1) catch return response;
+        cookies[0] = lib.session.themeCookie(theme);
+        response = mer.withCookies(response, cookies);
+    }
+    return response;
 }

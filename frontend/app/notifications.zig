@@ -32,7 +32,7 @@ pub fn render(req: mer.Request) mer.Response {
         for (page.items) |item| notification(w, lib.ui.escapeSafe(req.allocator, item.title), lib.ui.escapeSafe(req.allocator, item.body), lib.m3.safeInternalHref(item.href, "/notifications"), lib.ui.escapeSafe(req.allocator, item.kind), item.read_at == null, item.id) catch return mer.internalError("notifications render failed");
         if (page.items.len == 0) w.writeAll("<div class=\"cp-empty\"><div><h2>You are caught up</h2><p>New actionable reminders will appear here.</p></div></div>") catch return mer.internalError("notifications render failed");
     }
-    w.writeAll("</section><script src=\"/settings.js?v=20260722\" defer></script>") catch return mer.internalError("notifications render failed");
+    w.writeAll("</section><script src=\"/settings.js?v=20260724\" defer></script>") catch return mer.internalError("notifications render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
