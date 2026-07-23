@@ -15,23 +15,35 @@ pub fn render(req: mer.Request) mer.Response {
     if (demo) return renderDemo(req, &buf);
 
     const token = lib.session.fromRequest(req).token;
-    const outputs = lib.backend.listOutputs(req.allocator, token, null);
+    const raw_cursor = req.queryParam("cursor");
+    const cursor: ?[]const u8 = if (raw_cursor) |value| if (lib.m3.safeId(value, "").len > 0) value else null else null;
+    const outputs = lib.backend.listOutputs(req.allocator, token, cursor);
     const sources = lib.backend.listSources(req.allocator, token);
     const pages = lib.backend.listWikiPages(req.allocator, token);
     if (outputs.value == null) return lib.m3.liveError(req, "Study guides", outputs.status);
-    w.writeAll("<section class=\"cp-guide-toolbar\" aria-labelledby=\"guide-create\"><div><p class=\"eyebrow\">New guide</p><h2 id=\"guide-create\">Choose the evidence boundary</h2></div><form method=\"post\" action=\"/api/m3\" data-m3-form data-success=\"/wiki/guides\"><input type=\"hidden\" name=\"action\" value=\"output.create\"><input type=\"hidden\" name=\"output_type\" value=\"study_guide\"><label class=\"cp-field\"><span>Scope</span><select name=\"scope_type\" data-scope-select><option value=\"source_ids\">Source</option><option value=\"wiki_page_id\">Wiki article</option><option value=\"topic\">Topic</option></select></label><label class=\"cp-field\" data-scope-field=\"source_ids\"><span>Source</span><select name=\"source_ids\" required><option value=\"\">Choose a source</option>") catch return mer.internalError("guides render failed");
+    if (sources.status == 401 or pages.status == 401) return lib.m3.liveError(req, "Study guides", 401);
+    const source_available = if (sources.value) |parsed| parsed.value.len > 0 else false;
+    const page_available = if (pages.value) |parsed| parsed.value.len > 0 else false;
+    const initial_scope: []const u8 = if (source_available) "source_ids" else if (page_available) "wiki_page_id" else "topic";
+    w.writeAll("<section class=\"cp-guide-toolbar\" aria-labelledby=\"guide-create\"><div><p class=\"eyebrow\">New study material</p><h2 id=\"guide-create\">Choose the evidence boundary</h2><p>Generate a guide, concise summary, or outline without leaving the Wiki workspace.</p></div><form method=\"post\" action=\"/api/m3\" data-m3-form data-success=\"/wiki/guides\"><input type=\"hidden\" name=\"action\" value=\"output.create\"><label class=\"cp-field\"><span>Format</span><select name=\"output_type\"><option value=\"study_guide\">Study guide</option><option value=\"summary\">Summary</option><option value=\"outline\">Outline</option></select></label><label class=\"cp-field\"><span>Scope</span><select name=\"scope_type\" data-scope-select>") catch return mer.internalError("guides render failed");
+    w.print("<option value=\"source_ids\"{s}{s}>Source</option><option value=\"wiki_page_id\"{s}{s}>Wiki article</option><option value=\"topic\"{s}>Topic</option></select></label><label class=\"cp-field\" data-scope-field=\"source_ids\"{s}><span>Source</span><select name=\"source_ids\" required{s}><option value=\"\">Choose a source</option>", .{ if (source_available) "" else " disabled", selected(initial_scope, "source_ids"), if (page_available) "" else " disabled", selected(initial_scope, "wiki_page_id"), selected(initial_scope, "topic"), if (std.mem.eql(u8, initial_scope, "source_ids")) "" else " hidden", if (std.mem.eql(u8, initial_scope, "source_ids")) "" else " disabled" }) catch return mer.internalError("guides render failed");
     if (sources.value) |parsed| for (parsed.value) |source| w.print("<option value=\"{s}\">{s}</option>", .{ lib.ui.escapeSafe(req.allocator, source.id), lib.ui.escapeSafe(req.allocator, source.title) }) catch return mer.internalError("guides render failed");
-    w.writeAll("</select></label><label class=\"cp-field\" data-scope-field=\"wiki_page_id\" hidden><span>Wiki article</span><select name=\"wiki_page_id\" disabled required><option value=\"\">Choose an article</option>") catch return mer.internalError("guides render failed");
+    w.print("</select></label><label class=\"cp-field\" data-scope-field=\"wiki_page_id\"{s}><span>Wiki article</span><select name=\"wiki_page_id\" required{s}><option value=\"\">Choose an article</option>", .{ if (std.mem.eql(u8, initial_scope, "wiki_page_id")) "" else " hidden", if (std.mem.eql(u8, initial_scope, "wiki_page_id")) "" else " disabled" }) catch return mer.internalError("guides render failed");
     if (pages.value) |parsed| for (parsed.value) |page| w.print("<option value=\"{s}\">{s}</option>", .{ lib.ui.escapeSafe(req.allocator, page.id), lib.ui.escapeSafe(req.allocator, page.title) }) catch return mer.internalError("guides render failed");
-    w.writeAll("</select></label><label class=\"cp-field\" data-scope-field=\"topic\" hidden><span>Topic</span><input name=\"topic\" maxlength=\"100\" disabled required></label><label class=\"cp-field\"><span>Optional title</span><input name=\"title\" maxlength=\"300\"></label><button class=\"cp-btn cp-btn-primary\" type=\"submit\">Generate guide</button><p class=\"cp-form-status\" role=\"status\"></p></form></section><section class=\"cp-document-ledger\" aria-labelledby=\"saved-guides\"><header><p class=\"eyebrow\">Library</p><h2 id=\"saved-guides\">Saved guides</h2></header>") catch return mer.internalError("guides render failed");
+    w.print("</select></label><label class=\"cp-field\" data-scope-field=\"topic\"{s}><span>Topic</span><input name=\"topic\" maxlength=\"100\" required{s}></label><label class=\"cp-field\"><span>Optional title</span><input name=\"title\" maxlength=\"300\"></label><button class=\"cp-btn cp-btn-primary\" type=\"submit\">Generate guide</button><p class=\"cp-form-status\" role=\"status\"></p></form>", .{ if (std.mem.eql(u8, initial_scope, "topic")) "" else " hidden", if (std.mem.eql(u8, initial_scope, "topic")) "" else " disabled" }) catch return mer.internalError("guides render failed");
+    if (sources.value == null) w.writeAll("<p class=\"cp-settings-readonly\" role=\"alert\">Sources are unavailable. Source scope is disabled; topic and available Wiki article scopes still work.</p>") catch return mer.internalError("guides render failed") else if (!source_available) w.writeAll("<p class=\"cp-settings-readonly\">No sources are available, so source scope is disabled.</p>") catch return mer.internalError("guides render failed");
+    if (pages.value == null) w.writeAll("<p class=\"cp-settings-readonly\" role=\"alert\">Wiki articles are unavailable. Wiki article scope is disabled; topic and available source scopes still work.</p>") catch return mer.internalError("guides render failed") else if (!page_available) w.writeAll("<p class=\"cp-settings-readonly\">No Wiki articles are available, so Wiki article scope is disabled.</p>") catch return mer.internalError("guides render failed");
+    w.writeAll("</section><section class=\"cp-document-ledger\" aria-labelledby=\"saved-guides\"><header><p class=\"eyebrow\">Library</p><h2 id=\"saved-guides\">Saved guides, summaries, and outlines</h2></header>") catch return mer.internalError("guides render failed");
     var shown: usize = 0;
     for (outputs.value.?.value.items) |output| {
-        if (!std.mem.eql(u8, output.output_type, "study_guide")) continue;
         shown += 1;
-        w.print("<article><div><h3><a href=\"/wiki/guides/{s}\">{s}</a></h3><p>{s}</p></div><span class=\"cp-state status-pill\">{s}</span><strong>{d} citations</strong></article>", .{ lib.ui.escapeSafe(req.allocator, output.id), lib.ui.escapeSafe(req.allocator, output.title), lib.ui.escapeSafe(req.allocator, output.message), lib.ui.escapeSafe(req.allocator, output.status), output.citations.len }) catch return mer.internalError("guides render failed");
+        w.print("<article><div><h3><a href=\"/wiki/guides/{s}\">{s}</a></h3><p>{s}</p></div><span class=\"cp-state status-pill\">{s} · {s}</span><strong>{d} citations</strong></article>", .{ lib.ui.escapeSafe(req.allocator, output.id), lib.ui.escapeSafe(req.allocator, output.title), lib.ui.escapeSafe(req.allocator, output.message), lib.ui.escapeSafe(req.allocator, output.output_type), lib.ui.escapeSafe(req.allocator, output.status), output.citations.len }) catch return mer.internalError("guides render failed");
     }
-    if (shown == 0) w.writeAll("<div class=\"cp-empty\"><div><h3>No study guides yet</h3><p>Create one from a source, article, or focused topic.</p></div></div>") catch return mer.internalError("guides render failed");
-    w.writeAll("</section><script src=\"/m3.js?v=20260722\" defer></script>") catch return mer.internalError("guides render failed");
+    if (shown == 0) w.writeAll("<div class=\"cp-empty\"><div><h3>No saved study material on this page</h3><p>Create a guide, summary, or outline from a source, article, or focused topic.</p></div></div>") catch return mer.internalError("guides render failed");
+    w.writeAll("</section><nav class=\"cp-filter-row wb-m3-pagination\" aria-label=\"Study material pages\">") catch return mer.internalError("guides render failed");
+    if (cursor != null) w.writeAll("<a class=\"filter-button\" href=\"/wiki/guides\">First page</a>") catch return mer.internalError("guides render failed");
+    if (outputs.value.?.value.next_cursor) |next| w.print("<a class=\"filter-button active\" href=\"/wiki/guides?cursor={s}\">Next page</a>", .{lib.ui.escapeSafe(req.allocator, next)}) catch return mer.internalError("guides render failed");
+    w.writeAll("</nav><script src=\"/m3.js?v=20260722\" defer></script>") catch return mer.internalError("guides render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
@@ -59,6 +71,10 @@ fn renderDemo(req: mer.Request, buf: *std.Io.Writer.Allocating) mer.Response {
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(buf));
 }
 
-fn tryStateOption(w: *std.Io.Writer, value: []const u8, label: []const u8, selected: []const u8) !void {
-    try w.print("<option value=\"{s}\"{s}>{s}</option>", .{ value, if (std.mem.eql(u8, value, selected)) " selected" else "", label });
+fn tryStateOption(w: *std.Io.Writer, value: []const u8, label: []const u8, current: []const u8) !void {
+    try w.print("<option value=\"{s}\"{s}>{s}</option>", .{ value, if (std.mem.eql(u8, value, current)) " selected" else "", label });
+}
+
+fn selected(actual: []const u8, expected: []const u8) []const u8 {
+    return if (std.mem.eql(u8, actual, expected)) " selected" else "";
 }

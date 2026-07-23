@@ -11,13 +11,13 @@ pub fn render(req: mer.Request) mer.Response {
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
     lib.m3.demoMarker(req, w) catch return mer.internalError("activity render failed");
-    w.writeAll("<header class=\"cp-page-header\"><div><p class=\"cp-page-kicker\">Durable workspace record</p><h1 class=\"cp-page-title\">Activity</h1><p class=\"cp-page-sub\">Content changes, reviewed evidence, and generated study guides in one chronological ledger.</p></div></header>") catch return mer.internalError("activity render failed");
+    w.writeAll("<header class=\"cp-page-header\"><div><p class=\"cp-page-kicker\">Durable workspace record</p><h1 class=\"cp-page-title\">Activity</h1><p class=\"cp-page-sub\">Content changes, reviewed evidence, and generated study material in one chronological ledger.</p></div></header>") catch return mer.internalError("activity render failed");
     lib.navigation.renderTabs(req.allocator, w, &lib.navigation.wiki_tabs, "activity", "Wiki", use_mock) catch return mer.internalError("activity tabs failed");
     w.writeAll("<nav class=\"cp-filter-row wb-m3-history-filters\" aria-label=\"Activity filters\">") catch return mer.internalError("activity render failed");
     tryFilter(req, w, "All", "all", selected, use_mock) catch return mer.internalError("activity render failed");
     tryFilter(req, w, "Content", "content", selected, use_mock) catch return mer.internalError("activity render failed");
     tryFilter(req, w, "Evidence", "evidence", selected, use_mock) catch return mer.internalError("activity render failed");
-    tryFilter(req, w, "Study guides", "study_guides", selected, use_mock) catch return mer.internalError("activity render failed");
+    tryFilter(req, w, "Study material", "study_guides", selected, use_mock) catch return mer.internalError("activity render failed");
     w.writeAll("</nav><ol class=\"cp-activity-ledger\">") catch return mer.internalError("activity render failed");
     var shown: usize = 0;
     if (use_mock) {
@@ -43,13 +43,25 @@ pub fn render(req: mer.Request) mer.Response {
             if (!std.mem.eql(u8, selected, "all") and !std.mem.eql(u8, selected, entry.category)) continue;
             shown += 1;
             const href = lib.m3.safeInternalHref(entry.href, "/wiki/activity");
-            w.print("<li><article class=\"wb-m3-history-card\"><time>{s}</time><div><p class=\"eyebrow\">{s}</p><h2><a href=\"{s}\">{s}</a></h2><p>{s}</p></div></article></li>", .{ lib.ui.escapeSafe(req.allocator, entry.created_at), lib.ui.escapeSafe(req.allocator, entry.event_type), lib.ui.escapeSafe(req.allocator, href), lib.ui.escapeSafe(req.allocator, entry.title), lib.ui.escapeSafe(req.allocator, entry.summary) }) catch return mer.internalError("activity render failed");
+            w.print("<li><article class=\"wb-m3-history-card\"><time>{s}</time><div><p class=\"eyebrow\">{s}</p><h2><a href=\"{s}\">{s}</a></h2><p>{s}</p></div></article></li>", .{ lib.ui.escapeSafe(req.allocator, entry.created_at), eventLabel(entry.event_type), lib.ui.escapeSafe(req.allocator, href), lib.ui.escapeSafe(req.allocator, entry.title), lib.ui.escapeSafe(req.allocator, entry.summary) }) catch return mer.internalError("activity render failed");
         }
     }
     if (shown == 0) w.writeAll("<li class=\"cp-empty\"><div><h2>No activity in this view</h2><p>Durable changes and reviewed evidence will appear here.</p></div></li>") catch return mer.internalError("activity render failed");
     w.writeAll("</ol>") catch return mer.internalError("activity render failed");
     if (!use_mock) if (req.queryParam("page")) |page_id| if (std.mem.eql(u8, page_id, lib.m3.safeId(page_id, ""))) renderRevisions(req, w, page_id) catch return mer.internalError("revision render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
+}
+
+fn eventLabel(event_type: []const u8) []const u8 {
+    if (std.mem.eql(u8, event_type, "study_guide")) return "Study guide";
+    if (std.mem.eql(u8, event_type, "summary")) return "Summary";
+    if (std.mem.eql(u8, event_type, "outline")) return "Outline";
+    if (std.mem.eql(u8, event_type, "wiki_revision")) return "Wiki revision";
+    if (std.mem.eql(u8, event_type, "source_change")) return "Source change";
+    if (std.mem.eql(u8, event_type, "paper_evidence")) return "Paper evidence";
+    if (std.mem.eql(u8, event_type, "flashcard_evidence")) return "Flashcard review";
+    if (std.mem.eql(u8, event_type, "processing_failure")) return "Processing failure";
+    return event_type;
 }
 
 fn renderRevisions(req: mer.Request, w: *std.Io.Writer, page_id: []const u8) !void {

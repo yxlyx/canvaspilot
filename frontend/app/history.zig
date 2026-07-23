@@ -5,7 +5,42 @@ const lib = @import("lib");
 pub const meta: mer.Meta = .{ .title = "History", .description = "Review readable wiki version and citation changes." };
 
 pub fn render(req: mer.Request) mer.Response {
-    return lib.navigation.redirectPreservingQuery(req, "/wiki/activity");
+    const legacy_type = req.queryParam("type") orelse "all";
+    const activity_type: []const u8 = if (std.mem.eql(u8, legacy_type, "wiki_revision") or std.mem.eql(u8, legacy_type, "source_change"))
+        "content"
+    else if (std.mem.eql(u8, legacy_type, "citations"))
+        "evidence"
+    else if (std.mem.eql(u8, legacy_type, "all") or std.mem.eql(u8, legacy_type, "content") or std.mem.eql(u8, legacy_type, "evidence") or std.mem.eql(u8, legacy_type, "study_guides"))
+        legacy_type
+    else
+        "all";
+    return redirectActivity(req, activity_type);
+}
+
+fn redirectActivity(req: mer.Request, activity_type: []const u8) mer.Response {
+    if (std.mem.indexOfAny(u8, req.query_string, "\r\n") != null) return mer.redirect("/wiki/activity", .permanent_redirect);
+    var target = lib.ui.buildHtml(req.allocator);
+    const w = &target.writer;
+    w.writeAll("/wiki/activity") catch return mer.redirect("/wiki/activity", .permanent_redirect);
+    var first = true;
+    var type_written = false;
+    var parts = std.mem.splitScalar(u8, req.query_string, '&');
+    while (parts.next()) |part| {
+        if (part.len == 0) continue;
+        const key_end = std.mem.indexOfScalar(u8, part, '=') orelse part.len;
+        if (std.mem.eql(u8, part[0..key_end], "type")) {
+            if (!type_written and !std.mem.eql(u8, activity_type, "all")) {
+                w.print("{s}type={s}", .{ if (first) "?" else "&", activity_type }) catch return mer.redirect("/wiki/activity", .permanent_redirect);
+                first = false;
+            }
+            type_written = true;
+            continue;
+        }
+        w.print("{s}{s}", .{ if (first) "?" else "&", part }) catch return mer.redirect("/wiki/activity", .permanent_redirect);
+        first = false;
+    }
+    if (!type_written and !std.mem.eql(u8, activity_type, "all")) w.print("{s}type={s}", .{ if (first) "?" else "&", activity_type }) catch return mer.redirect("/wiki/activity", .permanent_redirect);
+    return mer.redirect(target.written(), .permanent_redirect);
 }
 
 fn legacyRender(req: mer.Request) mer.Response {

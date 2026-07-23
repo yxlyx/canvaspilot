@@ -39,6 +39,20 @@ fn renderMockMeter(req: mer.Request, w: *std.Io.Writer, meter: lib.types.Knowled
     if (lib.m3.meterValue(meter.estimate_percent)) |value| try w.print("<label>Estimated completion <meter min=\"0\" max=\"100\" value=\"{d}\">{d}%</meter><strong>{d}%</strong></label>", .{ value, value, value }) else try w.writeAll("<p class=\"cp-unknown-meter\"><strong>Estimate unknown</strong> — more evidence is needed.</p>");
     try w.writeAll("<ul class=\"cp-plain-list wb-m3-signals\">");
     for (meter.signals) |signal| try w.print("<li><strong>{s}</strong>: {s}</li>", .{ lib.ui.escapeSafe(req.allocator, signal.label), lib.ui.escapeSafe(req.allocator, signal.evidence) });
+    if (mockRecommendation(meter.id)) |recommendation| {
+        try w.print("</ul><aside class=\"wb-m3-recommendation\"><strong>{s}</strong><p>{s}</p><p><strong>Evidence:</strong> {s}</p><p><strong>Next:</strong> {s}</p><div class=\"cp-action-row\">", .{ lib.ui.escapeSafe(req.allocator, recommendation.title), lib.ui.escapeSafe(req.allocator, recommendation.why), lib.ui.escapeSafe(req.allocator, recommendation.evidence), lib.ui.escapeSafe(req.allocator, recommendation.next_action) });
+        for (recommendation.actions) |action| {
+            const safe_href = lib.m3.safeInternalHref(action.href, "/wiki/knowledge");
+            const canonical_href = if (std.mem.startsWith(u8, safe_href, "/marked-papers/"))
+                try std.fmt.allocPrint(req.allocator, "/sources/papers/{s}", .{safe_href[15..]})
+            else
+                safe_href;
+            const href = try lib.m3.demoHref(req.allocator, req, canonical_href);
+            try w.print("<a class=\"cp-btn cp-btn-ghost\" href=\"{s}\">{s}</a>", .{ lib.ui.escapeSafe(req.allocator, href), lib.ui.escapeSafe(req.allocator, action.label) });
+        }
+        try w.writeAll("</div></aside></div></article>");
+        return;
+    }
     try w.writeAll("</ul></div></article>");
 }
 
@@ -47,5 +61,10 @@ fn renderLiveMeter(req: mer.Request, w: *std.Io.Writer, meter: lib.types.TopicMe
     if (lib.m3.meterPercent(meter.estimated_completion)) |value| try w.print("<label>Measured completion <meter min=\"0\" max=\"100\" value=\"{d}\">{d}%</meter><strong>{d}%</strong></label>", .{ value, value, value }) else try w.writeAll("<p class=\"cp-unknown-meter\"><strong>Estimate uncertain</strong> — insufficient evidence for a percentage.</p>");
     try w.writeAll("<ul class=\"cp-plain-list wb-m3-signals\">");
     for (meter.signals) |signal| try w.print("<li><strong>{s}</strong>: {d} evidence item(s){s}</li>", .{ lib.ui.escapeSafe(req.allocator, signal.name), signal.evidence_count, if (signal.value == null) " · value uncertain" else "" });
-    try w.print("</ul><aside class=\"wb-m3-recommendation\"><strong>Recommended next step</strong><p>{s}</p><a class=\"cp-btn cp-btn-ghost\" href=\"/flashcards\">Review flashcards</a></aside></div></article>", .{lib.ui.escapeSafe(req.allocator, meter.recommendation)});
+    try w.print("</ul><aside class=\"wb-m3-recommendation\"><strong>Recommended next step</strong><p>{s}</p><div class=\"cp-action-row\"><a class=\"cp-btn cp-btn-ghost\" href=\"/wiki\">Review wiki evidence</a><a class=\"cp-btn cp-btn-ghost\" href=\"/chat\">Ask from your sources</a><a class=\"cp-btn cp-btn-ghost\" href=\"/flashcards\">Practise cited cards</a><a class=\"cp-btn cp-btn-ghost\" href=\"/sources/papers\">Review paper evidence</a></div></aside></div></article>", .{lib.ui.escapeSafe(req.allocator, meter.recommendation)});
+}
+
+fn mockRecommendation(topic_id: []const u8) ?lib.types.KnowledgeRecommendation {
+    for (lib.mock.recommendations) |recommendation| if (std.mem.eql(u8, recommendation.topic_id, topic_id)) return recommendation;
+    return null;
 }

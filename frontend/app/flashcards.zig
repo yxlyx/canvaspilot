@@ -198,15 +198,15 @@ fn renderCardShell(req: mer.Request, w: *std.Io.Writer, question: []const u8, an
     if (!can_submit) try w.writeAll("<p class=\"cp-demo-rating-note\" role=\"note\">Demo preview: ratings are disabled and are not saved.</p>");
     try w.writeAll("<div>");
     if (can_submit) {
-        try renderRatingForm(req, w, card_id, deck_id, false, 1, "Again", "&lt; 1 min");
-        try renderRatingForm(req, w, card_id, deck_id, true, 2, "Hard", "2 days");
-        try renderRatingForm(req, w, card_id, deck_id, true, 3, "Good", "5 days");
-        try renderRatingForm(req, w, card_id, deck_id, true, 5, "Easy", "12 days");
+        try renderRatingForm(req, w, card_id, deck_id, false, 1, "Again", "Needs another look");
+        try renderRatingForm(req, w, card_id, deck_id, true, 2, "Hard", "Low confidence");
+        try renderRatingForm(req, w, card_id, deck_id, true, 3, "Good", "Recalled");
+        try renderRatingForm(req, w, card_id, deck_id, true, 5, "Easy", "Strong recall");
     } else {
-        try renderRatingButton(w, "Again", "&lt; 1 min");
-        try renderRatingButton(w, "Hard", "2 days");
-        try renderRatingButton(w, "Good", "5 days");
-        try renderRatingButton(w, "Easy", "12 days");
+        try renderRatingButton(w, "Again", "Needs another look");
+        try renderRatingButton(w, "Hard", "Low confidence");
+        try renderRatingButton(w, "Good", "Recalled");
+        try renderRatingButton(w, "Easy", "Strong recall");
     }
     try w.writeAll("</div></div></details></article><div class=\"review-hint\" id=\"cp-review-hint\"><span>");
     try w.writeAll(ICON_KEYBOARD);
