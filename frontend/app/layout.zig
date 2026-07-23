@@ -79,7 +79,7 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
         \\<div class="cp-app-shell">
         \\  <aside class="cp-sidebar">
         \\    <a class="cp-brand" href="/"><span class="cp-brand-mark">W</span><span class="cp-brand-name">WikiBase</span></a>
-        \\    <button class="cp-course-switcher" type="button" aria-label="Current semester"><span class="cp-course-dot">CS</span><span><strong>Semester 1</strong><small>3 active modules</small></span><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></svg></button>
+        \\    <div class="cp-course-switcher"><span class="cp-course-dot">W</span><span><strong>Knowledge workspace</strong><small>Sources, Wiki, and study</small></span></div>
         \\    <nav class="cp-tabs" aria-label="Primary">
     ) catch return body;
     for (NAV_ITEMS) |item| {
