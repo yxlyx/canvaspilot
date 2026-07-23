@@ -1,6 +1,26 @@
 (function () {
   const themeButtons = document.querySelectorAll("[data-cp-theme-toggle]");
 
+  function persistThemePreference(preference) {
+    try {
+      localStorage.setItem("wikibase-theme", preference);
+      localStorage.setItem("wikibase-theme-preference", preference);
+      const secure = window.location.protocol === "https:" ? "; Secure" : "";
+      document.cookie = "wb_theme_preference=" + encodeURIComponent(preference) + "; Path=/; Max-Age=31536000; SameSite=Lax" + secure;
+    } catch (_) {}
+
+    if (!document.querySelector("[data-cp-account-name]")) return;
+    fetch("/api/settings", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+      },
+      body: new URLSearchParams({ action: "preferences.theme", theme: preference }),
+      credentials: "same-origin",
+    }).catch(function () {});
+  }
+
   function syncThemeButtons() {
     const dark = document.documentElement.dataset.theme === "dark";
     themeButtons.forEach(function (button) {
@@ -17,10 +37,7 @@
     button.addEventListener("click", function () {
       const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
       document.documentElement.dataset.theme = next;
-      try {
-        localStorage.setItem("wikibase-theme", next);
-        localStorage.setItem("wikibase-theme-preference", next);
-      } catch (_) {}
+      persistThemePreference(next);
       syncThemeButtons();
     });
   });
@@ -282,7 +299,7 @@
       const normalized = (value || "").trim().toLowerCase();
       if (!normalized || normalized === "all") return "All";
       if (normalized === "ready" || normalized === "indexed") return "Ready";
-      if (normalized === "pending" || normalized === "indexing" || normalized === "processing") return "Importing";
+      if (normalized === "pending" || normalized === "indexing" || normalized === "processing" || normalized === "pending / importing") return "Importing";
       if (normalized === "failed" || normalized === "archived" || normalized === "review" || normalized === "needs review" || normalized === "needs attention") return "Needs attention";
       return value;
     }
@@ -334,7 +351,7 @@
     }
 
     document.querySelectorAll("[data-source-status]").forEach(function (button) {
-      const initiallySelected = button.dataset.sourceStatus === status;
+      const initiallySelected = normalizeStatus(button.dataset.sourceStatus) === status;
       button.classList.toggle("active", initiallySelected);
       button.setAttribute("aria-pressed", String(initiallySelected));
       button.addEventListener("click", function (event) {
@@ -386,12 +403,19 @@
       const paperTitle = document.getElementById("cp-preview-paper-title");
       const detail = document.getElementById("cp-preview-detail");
       const previewStatus = document.getElementById("cp-preview-status");
+      const previewContext = document.getElementById("cp-preview-context");
+      const previewFormat = document.getElementById("cp-preview-format");
+      const previewTopics = document.getElementById("cp-preview-topics");
       if (titleElement) titleElement.textContent = title;
       if (paperTitle) paperTitle.textContent = title.replace(/^.*?—\s*/, "");
       if (detail) detail.textContent = [card.dataset.module, card.dataset.format, card.dataset.tags].filter(Boolean).join(" · ");
+      if (previewContext) previewContext.textContent = card.dataset.module || "Workspace";
+      if (previewFormat) previewFormat.textContent = card.dataset.format || "Source";
+      if (previewTopics) previewTopics.textContent = card.dataset.tags || "No topics assigned";
       if (previewStatus) {
-        previewStatus.textContent = card.dataset.status || "Ready";
-        previewStatus.className = "status-pill status-" + (card.dataset.status === "Ready" ? "good" : card.dataset.status === "Importing" ? "info" : "warn");
+        const displayStatus = card.dataset.displayStatus || normalizeStatus(card.dataset.status) || "Ready";
+        previewStatus.textContent = displayStatus;
+        previewStatus.className = "status-pill status-" + (displayStatus === "Ready" ? "good" : displayStatus === "Pending" || displayStatus === "Importing" ? "info" : "warn");
       }
       openModal(previewModal, trigger);
     });
@@ -445,8 +469,8 @@
           body: JSON.stringify({ source_type: "link", origin: origin.trim(), title: title.trim(), source_url: url.trim() }),
         });
         if (!response.ok) throw new Error(response.status === 401 ? "Your session has expired. Sign in and try again." : "The source could not be added. Check the link and try again.");
-        if (statusNode) statusNode.textContent = "Source added. Indexing has started.";
-        window.setTimeout(function () { window.location.assign("/sources?import=started"); }, 450);
+        if (statusNode) statusNode.textContent = "Source saved as metadata. Ingestion has not started.";
+        window.setTimeout(function () { window.location.assign("/sources?import=saved"); }, 450);
       } catch (error) {
         if (statusNode) statusNode.textContent = error && error.message ? error.message : "The source could not be added.";
         if (submit) submit.disabled = false;
