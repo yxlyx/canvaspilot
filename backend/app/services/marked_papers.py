@@ -18,6 +18,7 @@ from app.schemas.m3 import (
     MarkedPaperUploadRequest,
 )
 from app.schemas.sources import normalize_topic_tags
+from app.services.notifications import sync_attention_notifications
 from app.services.pagination import decode_cursor, encode_cursor
 
 MAX_MARKED_PAPER_BYTES = 10 * 1024 * 1024
@@ -98,6 +99,7 @@ def extract_supported_text(text: str) -> tuple[list[dict], str]:
 async def upload_marked_paper(
     user: User, payload: MarkedPaperUploadRequest, db: AsyncSession
 ) -> MarkedPaper:
+    user_id = user.id
     try:
         raw = base64.b64decode(payload.content_base64, validate=True)
     except (ValueError, binascii.Error) as exc:
@@ -150,6 +152,8 @@ async def upload_marked_paper(
         db.add(MarkedPaperQuestion(paper_id=paper.id, reviewed=False, **values))
     await db.flush()
     await db.refresh(paper, attribute_names=["questions"])
+    if paper.extraction_status == "pending_review":
+        await sync_attention_notifications(user_id, db)
     return paper
 
 

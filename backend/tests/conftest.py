@@ -24,6 +24,7 @@ DATABASE_TEST_MODULES = {
     "test_source_imports.py",
     "test_sources.py",
     "test_wiki.py",
+    "test_account_settings.py",
 }
 
 

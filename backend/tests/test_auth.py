@@ -128,6 +128,21 @@ async def test_get_current_user_rejects_malformed_bearer(settings: Settings, mon
 
 
 @pytest.mark.asyncio
+async def test_get_current_user_rejects_revoked_token_version(settings: Settings, monkeypatch):
+    user_id = uuid.uuid4()
+    user = make_user(user_id)
+    user.auth_version = 2
+    monkeypatch.setattr(dependencies, "get_settings", lambda: settings)
+    token = dependencies.create_app_token(user_id, auth_version=1)
+
+    with pytest.raises(UnauthorizedError):
+        await dependencies.get_current_user(
+            make_request(headers=[(b"authorization", f"Bearer {token}".encode())]),
+            DummyDB(user),
+        )
+
+
+@pytest.mark.asyncio
 async def test_register_creates_user_and_token(settings: Settings, monkeypatch):
     monkeypatch.setattr(dependencies, "get_settings", lambda: settings)
     request = make_request()

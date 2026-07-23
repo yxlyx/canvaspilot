@@ -15,6 +15,7 @@ class User(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(255))
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str | None] = mapped_column(String(512))
+    auth_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     encrypted_access_token: Mapped[str | None] = mapped_column(String(1024))
     encrypted_refresh_token: Mapped[str | None] = mapped_column(String(1024))
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

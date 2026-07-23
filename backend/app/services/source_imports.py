@@ -27,6 +27,7 @@ from app.services.ingestion_jobs import (
     mark_ingestion_job_failed,
     mark_ingestion_job_running,
 )
+from app.services.notifications import sync_attention_notifications
 from app.services.source_parsers import SourceParseError, parse_source_payload
 
 
@@ -189,6 +190,7 @@ async def import_ingestion_job_sources(
                     )
                 )
             errors.append(f"{source_title}: {error_message}")
+            await sync_attention_notifications(user_id, db)
             await db.commit()
             continue
 

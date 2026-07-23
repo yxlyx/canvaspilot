@@ -11,6 +11,7 @@ from app.models.m3 import HealthFinding, SourceChange, WikiRevision
 from app.models.source import Source, SourceStatus
 from app.models.user import User
 from app.models.wiki import WikiPage
+from app.services.notifications import sync_attention_notifications
 
 MAX_HISTORY_RESULTS = 100
 MAX_HEALTH_RESOURCES = 500
@@ -120,9 +121,10 @@ def _workspace_status_finding(user_id: uuid.UUID, evaluated_resource_count: int)
 
 
 async def run_health_checks(user: User, db: AsyncSession) -> list[HealthFinding]:
+    user_id = user.id
     await db.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
-        {"lock_key": f"health:{user.id}"},
+        {"lock_key": f"health:{user_id}"},
     )
     sources = list(
         (
@@ -252,6 +254,7 @@ async def run_health_checks(user: User, db: AsyncSession) -> list[HealthFinding]
     await db.execute(delete(HealthFinding).where(HealthFinding.user_id == user.id))
     db.add_all(findings)
     await db.flush()
+    await sync_attention_notifications(user_id, db)
     return findings
 
 
