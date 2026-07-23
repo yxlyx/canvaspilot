@@ -91,7 +91,7 @@ async def authenticated_m3_clients():
     suffix = uuid.uuid4().hex
     owner_email = f"m3-real-owner-{suffix}@example.com"
     other_email = f"m3-real-other-{suffix}@example.com"
-    password = "integration-password"
+    password = "IntegrationPassword1"
     transport = ASGITransport(app=app)
     async with (
         AsyncClient(
@@ -704,6 +704,27 @@ async def test_workspace_health_empty_healthy_and_issue_states(m3_client):
     assert issue_findings[0]["severity"] == "error"
     assert issue_findings[0]["state"] == "failed"
     assert all(finding["code"] != "workspace_healthy" for finding in issue_findings)
+
+    first_notifications = (await client.get("/api/notifications")).json()["items"]
+    first_health_notifications = [
+        item for item in first_notifications if item["kind"] == "health_attention"
+    ]
+    assert len(first_health_notifications) == 1
+    first_notification = first_health_notifications[0]
+
+    assert (await client.post("/api/workspace/health")).status_code == 200
+    refreshed_findings = (await client.get("/api/workspace/health")).json()
+    assert len(refreshed_findings) == 1
+    assert refreshed_findings[0]["id"] != issue_findings[0]["id"]
+    refreshed_notifications = (await client.get("/api/notifications")).json()["items"]
+    refreshed_health_notifications = [
+        item for item in refreshed_notifications if item["kind"] == "health_attention"
+    ]
+    assert len(refreshed_health_notifications) == 1
+    assert refreshed_health_notifications[0]["id"] == first_notification["id"]
+    assert refreshed_health_notifications[0]["href"] == (
+        f"/sources/health/{refreshed_findings[0]['id']}"
+    )
 
 
 @pytest.mark.asyncio
