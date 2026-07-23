@@ -1,6 +1,6 @@
 import uuid
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class UserResponse(BaseModel):
@@ -18,11 +18,15 @@ class TokenResponse(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    name: str
-    email: str
-    password: str
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(max_length=255)
+    email: str = Field(max_length=320)
+    password: str = Field(max_length=4096)
 
 
 class LoginRequest(BaseModel):
-    email: str
-    password: str
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(max_length=320)
+    password: str = Field(max_length=4096)

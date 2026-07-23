@@ -8,6 +8,47 @@
     if (error) status.focus();
   };
 
+  const passwordForm = document.querySelector("[data-settings-password-change]");
+  if (passwordForm) {
+    const password = passwordForm.querySelector("[data-settings-new-password]");
+    const confirmation = passwordForm.querySelector("[data-settings-confirm-password]");
+    const match = passwordForm.querySelector("[data-settings-password-match]");
+    const checks = {
+      length: (value) => value.length >= 8,
+      uppercase: (value) => /[A-Z]/.test(value),
+      number: (value) => /[0-9]/.test(value),
+    };
+    const updatePassword = () => {
+      const value = password?.value || "";
+      let valid = true;
+      Object.entries(checks).forEach(([name, check]) => {
+        const item = passwordForm.querySelector(`[data-settings-password-rule="${name}"]`);
+        const met = check(value);
+        valid = valid && met;
+        item?.classList.toggle("is-met", met);
+        item?.setAttribute("aria-label", `${met ? "Met" : "Not met"}: ${item.textContent.trim()}`);
+      });
+      password?.setCustomValidity(value && !valid ? "Use at least 8 characters, including an uppercase letter and a number." : "");
+      return valid;
+    };
+    const updateConfirmation = () => {
+      if (!confirmation || !password || !match) return;
+      const hasValue = confirmation.value.length > 0;
+      const matches = hasValue && confirmation.value === password.value;
+      confirmation.setCustomValidity(hasValue && !matches ? "Passwords do not match." : "");
+      confirmation.setAttribute("aria-invalid", hasValue && !matches ? "true" : "false");
+      match.textContent = !hasValue ? "" : matches ? "Passwords match" : "Passwords do not match";
+      match.dataset.state = !hasValue ? "" : matches ? "match" : "mismatch";
+    };
+    password?.addEventListener("input", () => {
+      updatePassword();
+      updateConfirmation();
+    });
+    confirmation?.addEventListener("input", updateConfirmation);
+    updatePassword();
+    updateConfirmation();
+  }
+
   forms.forEach((form) => {
     form.addEventListener("submit", async (event) => {
       if (!form.reportValidity()) return;

@@ -37,8 +37,13 @@ def _validate_email(email: str) -> None:
 
 
 def _validate_password(password: str) -> None:
-    if len(password) < 8:
-        raise BadAuthRequestError("weak_password", "Password must be at least 8 characters")
+    has_uppercase = any("A" <= character <= "Z" for character in password)
+    has_number = any("0" <= character <= "9" for character in password)
+    if len(password) < 8 or not has_uppercase or not has_number:
+        raise BadAuthRequestError(
+            "weak_password",
+            "Password must be at least 8 characters and include an uppercase letter and a number",
+        )
 
 
 def _hash_password(password: str) -> str:

@@ -26,12 +26,157 @@
   });
   syncThemeButtons();
 
+  setupAuth();
   setupChat();
   setupFlashcards();
   setupDashboard();
   setupSources();
   setupWiki();
   setupArticle();
+
+  function setupAuth() {
+    const page = document.querySelector("[data-auth-page]");
+    if (!page) return;
+
+    const form = page.querySelector("[data-auth-form]");
+    const submit = page.querySelector("[data-auth-submit]");
+    const submitLabel = page.querySelector("[data-auth-submit-label]");
+    let submitting = false;
+
+    page.querySelectorAll("[data-password-toggle]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        const input = button.parentElement && button.parentElement.querySelector("input");
+        if (!input) return;
+        const willShow = input.type === "password";
+        input.type = willShow ? "text" : "password";
+        button.textContent = willShow ? "Hide" : "Show";
+        const subject = input.matches("[data-password-confirm-input]") ? "password confirmation" : "password";
+        button.setAttribute("aria-label", (willShow ? "Hide " : "Show ") + subject);
+      });
+    });
+
+    if (form && form.dataset.authKind === "signup") {
+      const password = form.querySelector("[data-password-input]");
+      const confirm = form.querySelector("[data-password-confirm-input]");
+      const confirmWrap = form.querySelector("[data-password-confirm]");
+      const match = form.querySelector("[data-password-match]");
+      let revealed = false;
+
+      const ruleChecks = {
+        length: function (value) { return value.length >= 8; },
+        uppercase: function (value) { return /[A-Z]/.test(value); },
+        number: function (value) { return /[0-9]/.test(value); },
+      };
+
+      function revealConfirmation() {
+        if (revealed || !confirmWrap || !confirm) return;
+        revealed = true;
+        confirm.disabled = false;
+        confirmWrap.classList.add("is-revealed");
+        confirmWrap.removeAttribute("aria-hidden");
+      }
+
+      function updatePolicy() {
+        if (!password) return false;
+        const value = password.value;
+        let valid = true;
+        Object.keys(ruleChecks).forEach(function (name) {
+          const item = form.querySelector('[data-password-rule="' + name + '"]');
+          const met = ruleChecks[name](value);
+          valid = valid && met;
+          if (!item) return;
+          item.classList.toggle("is-met", met);
+          item.setAttribute("aria-label", (met ? "Met: " : "Not met: ") + item.textContent.trim());
+        });
+        password.setCustomValidity(value && !valid ? "Use at least 8 characters, including an uppercase letter and a number." : "");
+        if (value) revealConfirmation();
+        return valid;
+      }
+
+      function updateMatch() {
+        if (!password || !confirm || !match) return true;
+        const hasConfirmation = confirm.value.length > 0;
+        const matches = hasConfirmation && confirm.value === password.value;
+        confirm.setCustomValidity(hasConfirmation && !matches ? "Passwords do not match." : "");
+        confirm.setAttribute("aria-invalid", hasConfirmation && !matches ? "true" : "false");
+        match.textContent = !hasConfirmation ? "" : matches ? "Passwords match" : "Passwords do not match";
+        match.classList.toggle("is-match", matches);
+        match.classList.toggle("is-mismatch", hasConfirmation && !matches);
+        return !hasConfirmation || matches;
+      }
+
+      if (password && confirm && confirmWrap) {
+        if (password.value) {
+          revealConfirmation();
+        } else {
+          confirm.disabled = true;
+          confirmWrap.setAttribute("aria-hidden", "true");
+        }
+        password.addEventListener("input", function () {
+          updatePolicy();
+          updateMatch();
+          password.removeAttribute("aria-invalid");
+        });
+        password.addEventListener("blur", function () {
+          password.setAttribute("aria-invalid", password.value && !updatePolicy() ? "true" : "false");
+        });
+        confirm.addEventListener("input", updateMatch);
+        [120, 500].forEach(function (delay) {
+          window.setTimeout(function () {
+            if (password.value) revealConfirmation();
+            updatePolicy();
+            updateMatch();
+          }, delay);
+        });
+        updatePolicy();
+      }
+    }
+
+    if (form) {
+      form.addEventListener("submit", function (event) {
+        if (submitting) {
+          event.preventDefault();
+          return;
+        }
+        const password = form.querySelector("[data-password-input]");
+        const confirm = form.querySelector("[data-password-confirm-input]");
+        if (password) password.dispatchEvent(new Event("input"));
+        if (confirm) confirm.dispatchEvent(new Event("input"));
+        if (!form.checkValidity()) {
+          event.preventDefault();
+          const invalid = form.querySelector(":invalid");
+          if (invalid) {
+            invalid.setAttribute("aria-invalid", "true");
+            invalid.focus();
+            invalid.reportValidity();
+          }
+          return;
+        }
+        submitting = true;
+        if (submit) {
+          submit.disabled = true;
+          submit.setAttribute("aria-busy", "true");
+        }
+        if (submitLabel) {
+          submitLabel.textContent = form.dataset.authKind === "signup" ? "Creating workspace…" : "Opening workspace…";
+        }
+      });
+    }
+
+    const alert = page.querySelector('[data-auth-alert][role="alert"]');
+    if (alert) window.requestAnimationFrame(function () { alert.focus(); });
+
+    window.addEventListener("pageshow", function () {
+      submitting = false;
+      if (submit) {
+        submit.disabled = false;
+        submit.removeAttribute("aria-busy");
+      }
+      if (submitLabel && form) {
+        submitLabel.textContent = form.dataset.authKind === "signup" ? "Create my WikiBase" : "Sign in to WikiBase";
+      }
+    });
+  }
 
   function setupDashboard() {
     const mode = document.getElementById("cp-dashboard-mode");
