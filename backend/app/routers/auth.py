@@ -67,7 +67,10 @@ def _verify_password(password: str, encoded: str | None) -> bool:
 
 
 def _token_response(user: User) -> TokenResponse:
-    return TokenResponse(token=create_app_token(user.id), user=UserResponse.model_validate(user))
+    return TokenResponse(
+        token=create_app_token(user.id, user.auth_version or 0),
+        user=UserResponse.model_validate(user),
+    )
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
@@ -95,6 +98,7 @@ async def register(payload: RegisterRequest, request: Request, db: AsyncSession 
     await db.refresh(user)
 
     request.session["user_id"] = str(user.id)
+    request.session["auth_version"] = user.auth_version or 0
     return _token_response(user)
 
 
@@ -111,6 +115,7 @@ async def login(payload: LoginRequest, request: Request, db: AsyncSession = Depe
         )
 
     request.session["user_id"] = str(user.id)
+    request.session["auth_version"] = user.auth_version or 0
     return _token_response(user)
 
 
