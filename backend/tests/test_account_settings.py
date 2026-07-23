@@ -18,7 +18,7 @@ from app.models.m3 import ProviderSetting
 from app.models.settings import InAppNotification, UserPreference
 from app.models.source import Source, SourceKind, SourceStatus
 from app.models.user import User
-from app.routers.auth import _hash_password
+from app.routers.auth import _hash_password, _verify_password
 
 
 def test_every_direct_user_relationship_declares_database_cascade():
@@ -117,6 +117,23 @@ async def test_password_change_uses_registration_password_policy(account_client)
 
     assert response.status_code == 400
     assert response.json()["error"] == "weak_password"
+
+
+@pytest.mark.asyncio
+async def test_password_change_rotates_auth_version_and_replaces_password(account_client):
+    client, session, user = account_client
+    original_version = user.auth_version or 0
+
+    response = await client.post(
+        "/api/account/password",
+        json={"current_password": "Password123", "new_password": "Replacement456"},
+    )
+
+    assert response.status_code == 204
+    await session.refresh(user)
+    assert user.auth_version == original_version + 1
+    assert _verify_password("Replacement456", user.password_hash)
+    assert not _verify_password("Password123", user.password_hash)
 
 
 @pytest.mark.asyncio

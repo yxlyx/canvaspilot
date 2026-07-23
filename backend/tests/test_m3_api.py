@@ -771,6 +771,26 @@ async def test_m3_grounded_output_wiki_history_health_export_and_two_user_isolat
     assert inserted_output.json()["id"] in [
         item["id"] for item in (await client.get("/api/outputs/page?limit=100")).json()["items"]
     ]
+    filtered_outputs = (
+        await client.get(
+            "/api/outputs/page",
+            params={"limit": 1, "output_type": "study_guide"},
+        )
+    ).json()
+    assert [item["id"] for item in filtered_outputs["items"]] == [output["id"]]
+    assert filtered_outputs["next_cursor"] is None
+    assert (
+        await client.get("/api/outputs/page", params={"output_type": "unsupported"})
+    ).status_code == 422
+
+    activity_response = await client.get("/api/wiki/activity")
+    assert activity_response.status_code == 200
+    output_activity_types = {
+        entry["event_type"]
+        for entry in activity_response.json()
+        if entry["category"] == "study_guides"
+    }
+    assert output_activity_types == {"summary", "outline", "study_guide"}
 
     page_download = await client.get(f"/api/wiki/pages/{source_page['slug']}/download")
     assert page_download.status_code == 200

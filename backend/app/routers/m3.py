@@ -101,10 +101,14 @@ async def outputs(
 async def output_page(
     limit: int = Query(default=20, ge=1, le=100),
     cursor: str | None = Query(default=None, max_length=512),
+    output_type: str | None = Query(
+        default=None,
+        pattern="^(summary|outline|study_guide)$",
+    ),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    items, next_cursor = await page_study_outputs(user, db, limit, cursor)
+    items, next_cursor = await page_study_outputs(user, db, limit, cursor, output_type)
     return {"items": items, "next_cursor": next_cursor}
 
 

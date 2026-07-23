@@ -108,7 +108,7 @@ async def activity_entries(user: User, db: AsyncSession, limit: int) -> list[dic
     entries += [
         {
             "id": item.id,
-            "event_type": "study_guide",
+            "event_type": item.output_type,
             "category": "study_guides",
             "title": item.title,
             "summary": item.message or item.status.replace("_", " ").capitalize(),

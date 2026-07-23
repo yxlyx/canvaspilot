@@ -95,6 +95,8 @@ class ActivityEntryResponse(BaseModel):
         "source_change",
         "flashcard_evidence",
         "paper_evidence",
+        "summary",
+        "outline",
         "study_guide",
         "processing_failure",
     ]

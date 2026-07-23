@@ -128,6 +128,41 @@ async def test_get_current_user_rejects_malformed_bearer(settings: Settings, mon
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("subject", "version"),
+    [
+        ("not-a-uuid", 0),
+        (str(uuid.uuid4()), "not-a-number"),
+        (str(uuid.uuid4()), None),
+    ],
+)
+async def test_get_current_user_rejects_malformed_signed_claims(
+    settings: Settings, monkeypatch, subject, version
+):
+    monkeypatch.setattr(dependencies, "get_settings", lambda: settings)
+    token = jwt.encode(
+        {"sub": subject, "ver": version, "exp": datetime.now(UTC) + timedelta(minutes=5)},
+        settings.session_secret,
+        algorithm=dependencies.JWT_ALGORITHM,
+    )
+
+    with pytest.raises(UnauthorizedError):
+        await dependencies.get_current_user(
+            make_request(headers=[(b"authorization", f"Bearer {token}".encode())]),
+            DummyDB(None),
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_rejects_malformed_session_claims():
+    with pytest.raises(UnauthorizedError):
+        await dependencies.get_current_user(
+            make_request(session={"user_id": "not-a-uuid", "auth_version": "invalid"}),
+            DummyDB(None),
+        )
+
+
+@pytest.mark.asyncio
 async def test_get_current_user_rejects_revoked_token_version(settings: Settings, monkeypatch):
     user_id = uuid.uuid4()
     user = make_user(user_id)
