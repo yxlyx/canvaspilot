@@ -17,7 +17,7 @@ pub const meta: mer.Meta = .{
 const ICON_SOURCES = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><rect width=\"8\" height=\"18\" x=\"3\" y=\"3\" rx=\"1\"/><path d=\"M7 3v18\"/><path d=\"M20.4 18.9c.2.5-.1 1.1-.6 1.3l-1.9.7c-.5.2-1.1-.1-1.3-.6L11.1 5.1c-.2-.5.1-1.1.6-1.3l1.9-.7c.5-.2 1.1.1 1.3.6Z\"/></svg>";
 const ICON_WIKI = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M12 7v14\"/><path d=\"M16 12h2M16 8h2\"/><path d=\"M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3Z\"/><path d=\"M21 18a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1h-5a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3Z\"/></svg>";
 const ICON_CARDS = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"m12 2 9 5-9 5-9-5 9-5Z\"/><path d=\"m3 12 9 5 9-5M3 17l9 5 9-5\"/></svg>";
-const ICON_CHAT = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M21 15a4 4 0 0 1-4 4H8l-5 3 1.5-5A8 8 0 1 1 21 15Z\"/><path d=\"M9.1 9a3 3 0 1 1 5.3 1.9c-.9.8-1.4 1.1-1.4 2.1M12 16h.01\"/></svg>";
+const ICON_ASK = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M21 15a4 4 0 0 1-4 4H7l-4 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z\"/><path d=\"M8 8h8M8 12h5\"/></svg>";
 const ICON_ARROW = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M5 12h14M13 6l6 6-6 6\"/></svg>";
 
 pub fn render(req: mer.Request) mer.Response {
@@ -132,7 +132,7 @@ pub fn render(req: mer.Request) mer.Response {
     metricVisual(w, ICON_SOURCES, "sky", if (sources_available) indexed_sources else null, "Sources indexed", if (!sources_available) "Temporarily unavailable" else if (processing_sources > 0) "Imports still processing" else "Ready for retrieval") catch return mer.internalError("workspace render failed");
     metricVisual(w, ICON_WIKI, "moss", if (pages_available) wiki_total else null, "Wiki topics", if (pages_available) "Generated from evidence" else "Temporarily unavailable") catch return mer.internalError("workspace render failed");
     metricVisual(w, ICON_CARDS, "gold", if (decks_available) due_cards else null, "Cards due", if (decks_available) "Ready for review" else "Temporarily unavailable") catch return mer.internalError("workspace render failed");
-    metricVisual(w, ICON_CHAT, "rose", null, "Cited questions", "Measured after grounded answers") catch return mer.internalError("workspace render failed");
+    metricVisual(w, ICON_ASK, "rose", null, "Cited questions", "Measured after grounded answers") catch return mer.internalError("workspace render failed");
     w.writeAll("</section><div class=\"dashboard-columns\"><section><div class=\"section-title\"><div><h2>Active modules</h2><p>Where your knowledge is taking shape.</p></div><a href=\"") catch return mer.internalError("workspace render failed");
     w.writeAll(wiki_href) catch return mer.internalError("workspace render failed");
     w.writeAll("\">Open wiki</a></div><div class=\"module-list surface\">") catch return mer.internalError("workspace render failed");
@@ -163,10 +163,10 @@ pub fn render(req: mer.Request) mer.Response {
     }
     if (announcements_slice.len > 0) {
         const announcement = announcements_slice[0];
-        activityVisual(req, w, ICON_CHAT, announcement.title, announcement.summary orelse announcement.content, announcement.posted_at, now_secs) catch return mer.internalError("workspace render failed");
+        activityVisual(req, w, ICON_ASK, announcement.title, announcement.summary orelse announcement.content, announcement.posted_at, now_secs) catch return mer.internalError("workspace render failed");
     } else if (tasks_slice.len > 0) {
         const task = tasks_slice[0];
-        activityVisual(req, w, ICON_CHAT, task.title, "Study task available from the connected workspace.", task.due_at orelse "", now_secs) catch return mer.internalError("workspace render failed");
+        activityVisual(req, w, ICON_ASK, task.title, "Study task available from the connected workspace.", task.due_at orelse "", now_secs) catch return mer.internalError("workspace render failed");
     }
     if (decks_available and card_total > 0) {
         var due_text_buf = lib.ui.buildHtml(req.allocator);
