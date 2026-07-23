@@ -5,6 +5,13 @@ const lib = @import("lib");
 pub const meta: mer.Meta = .{ .title = "Marked paper evidence", .description = "Review unconfirmed evidence proposals from a marked paper." };
 
 pub fn render(req: mer.Request) mer.Response {
+    const id = req.param("id") orelse return lib.m3.privateForSession(req, mer.notFound());
+    if (!std.mem.eql(u8, id, lib.m3.safeId(id, ""))) return lib.m3.privateForSession(req, mer.notFound());
+    const destination = std.fmt.allocPrint(req.allocator, "/sources/papers/{s}", .{id}) catch "/sources/papers";
+    return lib.navigation.redirectPreservingQuery(req, destination);
+}
+
+fn legacyRender(req: mer.Request) mer.Response {
     if (lib.m3.gate(req, "Marked paper evidence")) |response| return response;
     if (!lib.m3.isExplicitDemo(req)) return renderLive(req);
     const raw_id = req.param("id") orelse "";

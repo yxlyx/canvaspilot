@@ -5,6 +5,10 @@ const lib = @import("lib");
 pub const meta: mer.Meta = .{ .title = "Progress", .description = "Review evidence-based topic estimates and recommendations." };
 
 pub fn render(req: mer.Request) mer.Response {
+    return lib.navigation.redirectPreservingQuery(req, "/wiki/knowledge");
+}
+
+fn legacyRender(req: mer.Request) mer.Response {
     if (lib.m3.gate(req, "Progress")) |response| return response;
     if (!lib.m3.isExplicitDemo(req)) return renderLive(req);
     var buf = lib.ui.buildHtml(req.allocator);

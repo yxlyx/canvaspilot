@@ -13,6 +13,13 @@ fn detailState(req: mer.Request, status: std.http.Status, title: []const u8, mes
 }
 
 pub fn render(req: mer.Request) mer.Response {
+    const id = req.param("id") orelse return lib.m3.privateForSession(req, mer.notFound());
+    if (!std.mem.eql(u8, id, lib.m3.safeId(id, ""))) return lib.m3.privateForSession(req, mer.notFound());
+    const destination = std.fmt.allocPrint(req.allocator, "/sources/health/{s}", .{id}) catch "/sources/health";
+    return lib.navigation.redirectPreservingQuery(req, destination);
+}
+
+fn legacyRender(req: mer.Request) mer.Response {
     if (lib.m3.gate(req, "Health finding")) |r| return r;
     if (lib.m3.isExplicitDemo(req)) return renderDemo(req);
     const id = req.param("id") orelse return detailState(req, .bad_request, "Invalid health finding", "The finding ID is missing or malformed.");

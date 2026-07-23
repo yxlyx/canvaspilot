@@ -3,6 +3,13 @@ const mer = @import("mer");
 const lib = @import("lib");
 pub const meta: mer.Meta = .{ .title = "Output detail", .description = "Review a grounded cited study output." };
 pub fn render(req: mer.Request) mer.Response {
+    const id = req.param("id") orelse return lib.m3.privateForSession(req, mer.notFound());
+    if (!std.mem.eql(u8, id, lib.m3.safeId(id, ""))) return lib.m3.privateForSession(req, mer.notFound());
+    const destination = std.fmt.allocPrint(req.allocator, "/wiki/guides/{s}", .{id}) catch "/wiki/guides";
+    return lib.navigation.redirectPreservingQuery(req, destination);
+}
+
+fn legacyRender(req: mer.Request) mer.Response {
     if (lib.m3.gate(req, "Output detail")) |response| return response;
     if (lib.m3.isExplicitDemo(req)) return renderDemo(req);
     const id = req.param("id") orelse return lib.m3.privateForSession(req, mer.notFound());

@@ -5,6 +5,10 @@ const lib = @import("lib");
 pub const meta: mer.Meta = .{ .title = "Outputs", .description = "Preview cited outputs and grounding boundaries." };
 
 pub fn render(req: mer.Request) mer.Response {
+    return lib.navigation.redirectPreservingQuery(req, "/wiki/guides");
+}
+
+fn legacyRender(req: mer.Request) mer.Response {
     if (lib.m3.gate(req, "Outputs")) |response| return response;
     if (!lib.m3.isExplicitDemo(req)) return renderLive(req);
     const requested_state = req.queryParam("state") orelse "grounded";

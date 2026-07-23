@@ -19,6 +19,7 @@
       document.documentElement.dataset.theme = next;
       try {
         localStorage.setItem("wikibase-theme", next);
+        localStorage.setItem("wikibase-theme-preference", next);
       } catch (_) {}
       syncThemeButtons();
     });

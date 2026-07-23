@@ -5,6 +5,10 @@ const lib = @import("lib");
 pub const meta: mer.Meta = .{ .title = "History", .description = "Review readable wiki version and citation changes." };
 
 pub fn render(req: mer.Request) mer.Response {
+    return lib.navigation.redirectPreservingQuery(req, "/wiki/activity");
+}
+
+fn legacyRender(req: mer.Request) mer.Response {
     if (lib.m3.gate(req, "History")) |response| return response;
     if (!lib.m3.isExplicitDemo(req)) return renderLive(req);
     const selected_type = req.queryParam("type") orelse "all";

@@ -99,6 +99,7 @@ pub fn render(req: mer.Request) mer.Response {
     w.print("<header class=\"cp-page-header\"><div><p class=\"cp-page-kicker\">{s}{d} sources", .{ if (use_mock) "Synthetic demo · " else "", library_count }) catch return mer.internalError("sources render failed");
     if (live_sources == null) w.print(" · {d} chunks", .{total_chunks}) catch return mer.internalError("sources render failed");
     w.writeAll("</p><h1 class=\"cp-page-title\">Source library</h1></div></header>") catch return mer.internalError("sources render failed");
+    lib.navigation.renderTabs(req.allocator, w, &lib.navigation.source_tabs, "library", "Sources", use_mock) catch return mer.internalError("sources tabs failed");
     if (!use_mock) if (req.queryParam("import")) |state| if (std.mem.eql(u8, state, "started")) w.writeAll("<p class=\"docs-import-note\" role=\"status\">Source accepted. Parsing and indexing have started.</p>") catch return mer.internalError("sources render failed");
     w.writeAll("<div class=\"sources-page\"><section class=\"docs-workspace\" aria-label=\"Source documents\"><header class=\"docs-toolbar\"><label class=\"docs-search\">") catch return mer.internalError("sources render failed");
     w.writeAll(ICON_SEARCH) catch return mer.internalError("sources render failed");

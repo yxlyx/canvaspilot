@@ -5,6 +5,10 @@ const lib = @import("lib");
 pub const meta: mer.Meta = .{ .title = "Workspace health", .description = "Review citation, freshness, and source health findings." };
 
 pub fn render(req: mer.Request) mer.Response {
+    return lib.navigation.redirectPreservingQuery(req, "/sources/health");
+}
+
+fn legacyRender(req: mer.Request) mer.Response {
     if (lib.m3.gate(req, "Workspace health")) |response| return response;
     if (!lib.m3.isExplicitDemo(req)) return renderLive(req);
     const selected = req.queryParam("severity") orelse "all";
