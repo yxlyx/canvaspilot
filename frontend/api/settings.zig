@@ -6,6 +6,7 @@ const Profile = struct { name: []const u8 };
 const Password = struct { current_password: []const u8, new_password: []const u8 };
 const PasswordOnly = struct { current_password: []const u8 };
 const DeleteAccount = struct { current_password: []const u8, confirmation: []const u8 };
+const Theme = struct { theme: []const u8 };
 const Appearance = struct { theme: []const u8, motion_preference: []const u8 };
 const Learning = struct { default_module_id: ?[]const u8, daily_review_target: usize };
 const Reminders = struct {
@@ -96,6 +97,13 @@ pub fn render(req: mer.Request) mer.Response {
         path = "/api/account/password";
         payload = stringify(req.allocator, Password{ .current_password = current, .new_password = new_password });
         session_ending = true;
+    } else if (std.mem.eql(u8, action, "preferences.theme")) {
+        const theme = value(req, "theme") orelse return reject(req, "choose a theme");
+        if (!std.mem.eql(u8, theme, "light") and !std.mem.eql(u8, theme, "dark")) return reject(req, "choose a valid theme");
+        method = .PATCH;
+        path = "/api/settings/preferences";
+        payload = stringify(req.allocator, Theme{ .theme = theme });
+        saved_theme = theme;
     } else if (std.mem.eql(u8, action, "preferences.update")) {
         method = .PATCH;
         path = "/api/settings/preferences";

@@ -242,6 +242,55 @@ test("account theme cookie is applied during the initial page boot", async ({ co
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
 });
 
+test("shell theme toggle persists the cookie and account preference", async ({ page }) => {
+  const requests = [];
+  await page.goto("/login");
+  await page.route("**/api/settings", async (route) => {
+    requests.push(new URLSearchParams(route.request().postData() || ""));
+    await route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' });
+  });
+  await page.setContent(`<main><strong data-cp-account-name>Account</strong>
+    <button type="button" data-cp-theme-toggle aria-label="Switch to dark mode"></button>
+    <script>document.documentElement.dataset.theme = "light";</script><script src="/app.js"></script></main>`);
+
+  await page.getByRole("button", { name: "Switch to dark mode" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect.poll(async () => (await page.context().cookies()).find((cookie) => cookie.name === "wb_theme_preference")?.value).toBe("dark");
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0].get("action")).toBe("preferences.theme");
+  expect(requests[0].get("theme")).toBe("dark");
+});
+
+test("live source preview stays metadata-only and source saves report pending ingestion", async ({ page }) => {
+  await page.goto("/login");
+  await page.route("**/api/sources", (route) => route.fulfill({
+    status: 201,
+    contentType: "application/json",
+    body: JSON.stringify({ id: "source-1", title: "Lecture notes", status: "pending" }),
+  }));
+  await page.setContent(`<main>
+    <input id="cp-source-search"><select id="cp-source-format"><option value="">All formats</option></select>
+    <span id="cp-source-count"></span><h2 id="cp-source-heading"></h2><div id="cp-source-empty" hidden></div>
+    <section id="cp-document-grid"><article class="document-card" data-title="Lecture notes" data-module="CS2040S" data-format="URL" data-status="pending" data-tags="Trees">
+      <button type="button" data-source-preview>Preview</button></article></section>
+    <div id="cp-source-preview-modal" hidden><section><button type="button" data-close-source-modal>Close</button>
+      <h3 id="cp-preview-paper-title">Source</h3><h2 id="cp-preview-title">Source</h2><p id="cp-preview-detail"></p>
+      <span id="cp-preview-status"></span><dl><dd id="cp-preview-context"></dd><dd id="cp-preview-format"></dd><dd id="cp-preview-topics"></dd></dl>
+    </section></div>
+    <form id="cp-add-source-form" action="/api/sources"><input id="cp-new-source-title" value="New source"><input id="cp-new-source-url" value="https://example.test/notes"><input id="cp-new-source-module" value="CS2040S"><button type="submit">Save source</button><p class="cp-form-status"></p></form>
+    <script src="/app.js"></script></main>`);
+
+  await page.getByRole("button", { name: "Preview" }).click();
+  await expect(page.locator("#cp-preview-context")).toHaveText("CS2040S");
+  await expect(page.locator("#cp-preview-format")).toHaveText("URL");
+  await expect(page.locator("#cp-preview-topics")).toHaveText("Trees");
+  await expect(page.locator("#cp-source-preview-modal")).not.toContainText("linked wiki claims");
+  await expect(page.locator("#cp-source-preview-modal")).not.toContainText("Traceability preserved");
+
+  await page.getByRole("button", { name: "Save source" }).click();
+  await expect(page.locator(".cp-form-status")).toHaveText("Source saved as metadata. Ingestion has not started.");
+});
+
 test("forms lock before async work, reject duplicate submits, and focus errors", async ({ page }) => {
   await page.goto("/login");
   let calls = 0; let finish;

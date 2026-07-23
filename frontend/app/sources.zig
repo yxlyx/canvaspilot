@@ -67,14 +67,14 @@ pub fn render(req: mer.Request) mer.Response {
         library_count = items.len;
         for (items) |source| {
             const display_status = sourceDisplayStatus(source.status);
-            if (std.mem.eql(u8, display_status, "Ready")) ready_count += 1 else if (std.mem.eql(u8, display_status, "Importing")) importing_count += 1 else attention_count += 1;
+            if (std.mem.eql(u8, display_status, "Ready")) ready_count += 1 else if (isActiveImportStatus(source.status)) importing_count += 1 else attention_count += 1;
         }
     } else {
         library_count = lib.mock.sources.len;
         for (lib.mock.sources) |source| {
             total_chunks += source.chunk_count;
             const display_status = sourceDisplayStatus(source.status);
-            if (std.mem.eql(u8, display_status, "Ready")) ready_count += 1 else if (std.mem.eql(u8, display_status, "Importing")) importing_count += 1 else attention_count += 1;
+            if (std.mem.eql(u8, display_status, "Ready")) ready_count += 1 else if (isActiveImportStatus(source.status)) importing_count += 1 else attention_count += 1;
         }
     }
 
@@ -100,12 +100,12 @@ pub fn render(req: mer.Request) mer.Response {
     if (live_sources == null) w.print(" · {d} chunks", .{total_chunks}) catch return mer.internalError("sources render failed");
     w.writeAll("</p><h1 class=\"cp-page-title\">Source library</h1></div></header>") catch return mer.internalError("sources render failed");
     lib.navigation.renderTabs(req.allocator, w, &lib.navigation.source_tabs, "library", "Sources", use_mock) catch return mer.internalError("sources tabs failed");
-    if (!use_mock) if (req.queryParam("import")) |state| if (std.mem.eql(u8, state, "started")) w.writeAll("<p class=\"docs-import-note\" role=\"status\">Source accepted. Parsing and indexing have started.</p>") catch return mer.internalError("sources render failed");
+    if (!use_mock) if (req.queryParam("import")) |state| if (std.mem.eql(u8, state, "saved")) w.writeAll("<p class=\"docs-import-note\" role=\"status\">Source saved as metadata. Ingestion has not started.</p>") catch return mer.internalError("sources render failed");
     w.writeAll("<div class=\"sources-page\"><section class=\"docs-workspace\" aria-label=\"Source documents\"><header class=\"docs-toolbar\"><label class=\"docs-search\">") catch return mer.internalError("sources render failed");
     w.writeAll(ICON_SEARCH) catch return mer.internalError("sources render failed");
     w.writeAll("<input id=\"cp-source-search\" placeholder=\"Search documents, modules, or topics\" aria-label=\"Search source documents\"></label><button class=\"docs-add-button\" id=\"cp-add-source\" type=\"button\">") catch return mer.internalError("sources render failed");
     w.writeAll(ICON_PLUS) catch return mer.internalError("sources render failed");
-    w.print("Add source</button></header><div class=\"docs-layout\"><section class=\"docs-main\" aria-labelledby=\"cp-source-heading\"><header class=\"docs-heading\"><div><p class=\"docs-kicker\">Workspace knowledge library</p><h2 id=\"cp-source-heading\">All documents</h2><span><b id=\"cp-source-count\">{d}</b> sources · previews show the indexed document</span></div><div class=\"docs-heading-actions\" aria-label=\"Document view options\"><button class=\"active\" type=\"button\" data-source-view=\"grid\" aria-label=\"Grid view\" aria-pressed=\"true\">", .{shown}) catch return mer.internalError("sources render failed");
+    w.print("Add source</button></header><div class=\"docs-layout\"><section class=\"docs-main\" aria-labelledby=\"cp-source-heading\"><header class=\"docs-heading\"><div><p class=\"docs-kicker\">Workspace knowledge library</p><h2 id=\"cp-source-heading\">All documents</h2><span><b id=\"cp-source-count\">{d}</b> sources · {s}</span></div><div class=\"docs-heading-actions\" aria-label=\"Document view options\"><button class=\"active\" type=\"button\" data-source-view=\"grid\" aria-label=\"Grid view\" aria-pressed=\"true\">", .{ shown, if (use_mock) "previews show the indexed document" else "previews show stored source metadata" }) catch return mer.internalError("sources render failed");
     w.writeAll(ICON_GRID) catch return mer.internalError("sources render failed");
     w.writeAll("</button><button type=\"button\" data-source-view=\"list\" aria-label=\"List view\" aria-pressed=\"false\">") catch return mer.internalError("sources render failed");
     w.writeAll(ICON_LIST) catch return mer.internalError("sources render failed");
@@ -114,7 +114,7 @@ pub fn render(req: mer.Request) mer.Response {
     w.writeAll("<div class=\"source-status-tabs\" role=\"group\" aria-label=\"Import status\">") catch return mer.internalError("sources render failed");
     tryFilterCount(w, "All", "", library_count, ICON_LIBRARY, filter_status.len == 0) catch return mer.internalError("sources render failed");
     tryFilterCount(w, "Ready", "ready", ready_count, ICON_CHECK, std.mem.eql(u8, filter_status, "ready")) catch return mer.internalError("sources render failed");
-    tryFilterCount(w, "Importing", "indexing", importing_count, ICON_DASHED, std.mem.eql(u8, filter_status, "indexing")) catch return mer.internalError("sources render failed");
+    tryFilterCount(w, "Pending / importing", "indexing", importing_count, ICON_DASHED, std.mem.eql(u8, filter_status, "indexing")) catch return mer.internalError("sources render failed");
     tryFilterCount(w, "Needs attention", "failed", attention_count, ICON_ALERT, std.mem.eql(u8, filter_status, "failed")) catch return mer.internalError("sources render failed");
     w.writeAll("</div><div class=\"source-filter-selects\">") catch return mer.internalError("sources render failed");
     w.writeAll(ICON_FILTER) catch return mer.internalError("sources render failed");
@@ -177,8 +177,13 @@ fn matchesType(actual: []const u8, selected: []const u8) bool {
 
 fn sourceDisplayStatus(status: []const u8) []const u8 {
     if (std.mem.eql(u8, status, "ready") or std.mem.eql(u8, status, "indexed")) return "Ready";
-    if (std.mem.eql(u8, status, "pending") or std.mem.eql(u8, status, "indexing") or std.mem.eql(u8, status, "processing")) return "Importing";
+    if (std.mem.eql(u8, status, "pending")) return "Pending";
+    if (std.mem.eql(u8, status, "indexing") or std.mem.eql(u8, status, "processing")) return "Importing";
     return "Needs attention";
+}
+
+fn isActiveImportStatus(status: []const u8) bool {
+    return std.mem.eql(u8, status, "pending") or std.mem.eql(u8, status, "indexing") or std.mem.eql(u8, status, "processing") or std.mem.eql(u8, status, "Importing");
 }
 
 fn sourceDisplayFormat(source_type: []const u8) []const u8 {
@@ -201,7 +206,7 @@ fn renderLiveSource(req: mer.Request, w: *std.Io.Writer, source: lib.types.Sourc
     const safe_error = lib.ui.escapeSafe(req.allocator, error_raw);
     const imported_raw = source.last_imported_at orelse "Not imported yet";
     const safe_imported = lib.ui.escapeSafe(req.allocator, imported_raw);
-    try w.print("<article class=\"document-card\" data-title=\"{s}\" data-module=\"{s}\" data-format=\"{s}\" data-status=\"{s}\" data-tags=\"{s}\"><header><div><h3>{s}</h3><p>{s} · {s} · updated {s}</p></div><button class=\"document-menu\" type=\"button\" aria-label=\"More actions for {s}\">{s}</button></header><button class=\"document-preview-button\" data-source-preview type=\"button\" aria-label=\"Preview {s}\"><div class=\"document-paper\"><div class=\"paper-running-head\"><span>{s}</span><span>{s}</span></div><span class=\"paper-kicker\">SOURCE PREVIEW</span><h3>{s}</h3><p class=\"paper-lede\">{s}</p><div class=\"paper-rule\"></div><p><strong>Import:</strong> {s}</p><p><strong>Status:</strong> {s}</p><span class=\"paper-page\">Updated {s}</span></div></button><footer><div><span class=\"status-pill status-{s}\">{s}</span><span class=\"document-tags\">", .{ safe_title, safe_module, display_format, display_status, safe_label, safe_title, safe_module, display_format, when, safe_title, ICON_MORE, safe_title, safe_module, safe_status, safe_title, safe_label, safe_imported, safe_error, when, if (std.mem.eql(u8, display_status, "Ready")) "good" else if (std.mem.eql(u8, display_status, "Importing")) "info" else "warn", display_status });
+    try w.print("<article class=\"document-card\" data-title=\"{s}\" data-module=\"{s}\" data-format=\"{s}\" data-status=\"{s}\" data-display-status=\"{s}\" data-tags=\"{s}\"><header><div><h3>{s}</h3><p>{s} · {s} · updated {s}</p></div><button class=\"document-menu\" type=\"button\" aria-label=\"More actions for {s}\">{s}</button></header><button class=\"document-preview-button\" data-source-preview type=\"button\" aria-label=\"Preview {s}\"><div class=\"document-paper\"><div class=\"paper-running-head\"><span>{s}</span><span>{s}</span></div><span class=\"paper-kicker\">SOURCE PREVIEW</span><h3>{s}</h3><p class=\"paper-lede\">{s}</p><div class=\"paper-rule\"></div><p><strong>Import:</strong> {s}</p><p><strong>Status:</strong> {s}</p><span class=\"paper-page\">Updated {s}</span></div></button><footer><div><span class=\"status-pill status-{s}\">{s}</span><span class=\"document-tags\">", .{ safe_title, safe_module, display_format, safe_status, display_status, safe_label, safe_title, safe_module, display_format, when, safe_title, ICON_MORE, safe_title, safe_module, safe_status, safe_title, safe_label, safe_imported, safe_error, when, if (std.mem.eql(u8, display_status, "Ready")) "good" else if (std.mem.eql(u8, display_status, "Pending") or std.mem.eql(u8, display_status, "Importing")) "info" else "warn", display_status });
     for (source.topic_tags) |topic| try w.print("<span>{s}</span> ", .{lib.ui.escapeSafe(req.allocator, topic)});
     try w.print("</span></div><div><button data-source-preview type=\"button\">Preview</button><a href=\"{s}\">{s} {s}</a></div></footer></article>", .{ safe_href, if (std.mem.startsWith(u8, href, "/")) "Ask with source" else "Open source", ICON_ARROW });
 }
@@ -247,13 +252,13 @@ fn renderPaper(w: *std.Io.Writer, id: []const u8) !void {
 
 fn renderDialogs(w: *std.Io.Writer, demo: bool) !void {
     try w.writeAll(
-        \\<div class="modal-backdrop document-preview-backdrop" id="cp-source-preview-modal" hidden><section class="document-preview-modal" role="dialog" aria-modal="true" aria-labelledby="cp-preview-title"><button class="preview-close" type="button" data-close-source-modal aria-label="Close document preview">×</button><div class="preview-document-stage"><div class="document-paper expanded"><span class="paper-kicker">SOURCE PREVIEW</span><h3 id="cp-preview-paper-title">Balanced Search Trees</h3><p class="paper-lede">Indexed evidence with preserved structure and citation anchors.</p><div class="paper-rule"></div><div class="scan-lines"><i></i><i></i><i></i><i></i></div></div></div><aside><p class="eyebrow">Source preview</p><h2 id="cp-preview-title">Source</h2><p id="cp-preview-detail">Course material</p><span class="status-pill status-good" id="cp-preview-status">Ready</span><dl><div><dt>Evidence</dt><dd>4 linked wiki claims</dd></div><div><dt>Traceability</dt><dd>Preserved</dd></div></dl><a class="button button-dark" href="/wiki">Open connected wiki →</a></aside></section></div>
-        \\<div class="modal-backdrop" id="cp-add-source-modal" hidden><section class="source-modal surface" role="dialog" aria-modal="true" aria-labelledby="cp-add-source-title"><button class="modal-close" type="button" data-close-source-modal aria-label="Close add source dialog">×</button><p class="eyebrow">Add evidence</p><h2 id="cp-add-source-title">Bring in a course source.</h2><p>Add a public course resource and begin parsing it into traceable evidence.</p>
+        \\<div class="modal-backdrop document-preview-backdrop" id="cp-source-preview-modal" hidden><section class="document-preview-modal" role="dialog" aria-modal="true" aria-labelledby="cp-preview-title"><button class="preview-close" type="button" data-close-source-modal aria-label="Close document preview">×</button><div class="preview-document-stage"><div class="document-paper expanded"><span class="paper-kicker">SOURCE METADATA</span><h3 id="cp-preview-paper-title">Source</h3><p class="paper-lede">This preview shows stored source metadata. Open the original source to inspect its content.</p><div class="paper-rule"></div><div class="scan-lines"><i></i><i></i><i></i><i></i></div></div></div><aside><p class="eyebrow">Source details</p><h2 id="cp-preview-title">Source</h2><p id="cp-preview-detail">Course material</p><span class="status-pill status-good" id="cp-preview-status">Ready</span><dl><div><dt>Context</dt><dd id="cp-preview-context">Workspace</dd></div><div><dt>Format</dt><dd id="cp-preview-format">Source</dd></div><div><dt>Topics</dt><dd id="cp-preview-topics">No topics assigned</dd></div></dl></aside></section></div>
+        \\<div class="modal-backdrop" id="cp-add-source-modal" hidden><section class="source-modal surface" role="dialog" aria-modal="true" aria-labelledby="cp-add-source-title"><button class="modal-close" type="button" data-close-source-modal aria-label="Close add source dialog">×</button><p class="eyebrow">Add evidence</p><h2 id="cp-add-source-title">Bring in a course source.</h2><p>Save a public course resource as pending metadata. Its content is not parsed until ingestion runs.</p>
     );
     if (demo) {
         try w.writeAll("<div class=\"notice notice-info\"><strong>Illustrative demo</strong><span>Source imports are unavailable because no live account or storage is used.</span></div>");
     } else {
-        try w.writeAll("<form id=\"cp-add-source-form\" method=\"post\" action=\"/api/sources\"><div class=\"field\"><label for=\"cp-new-source-title\">Source title</label><input id=\"cp-new-source-title\" name=\"title\" placeholder=\"e.g. Lecture 09 — Hash Tables\" required></div><div class=\"field\"><label for=\"cp-new-source-url\">Public link</label><input id=\"cp-new-source-url\" name=\"url\" type=\"url\" placeholder=\"https://...\" required></div><div class=\"field\"><label for=\"cp-new-source-module\">Module or context</label><input id=\"cp-new-source-module\" name=\"module\" placeholder=\"e.g. CS2040S\" required></div><button class=\"button button-dark\" type=\"submit\">Add and begin parsing</button><p class=\"cp-form-status\" role=\"status\" aria-live=\"polite\"></p><noscript><p>This secure import action requires JavaScript.</p></noscript></form>");
+        try w.writeAll("<form id=\"cp-add-source-form\" method=\"post\" action=\"/api/sources\"><div class=\"field\"><label for=\"cp-new-source-title\">Source title</label><input id=\"cp-new-source-title\" name=\"title\" placeholder=\"e.g. Lecture 09 — Hash Tables\" required></div><div class=\"field\"><label for=\"cp-new-source-url\">Public link</label><input id=\"cp-new-source-url\" name=\"url\" type=\"url\" placeholder=\"https://...\" required></div><div class=\"field\"><label for=\"cp-new-source-module\">Module or context</label><input id=\"cp-new-source-module\" name=\"module\" placeholder=\"e.g. CS2040S\" required></div><button class=\"button button-dark\" type=\"submit\">Save source</button><p class=\"cp-form-status\" role=\"status\" aria-live=\"polite\"></p><noscript><p>This secure import action requires JavaScript.</p></noscript></form>");
     }
     try w.writeAll("</section></div>");
 }
