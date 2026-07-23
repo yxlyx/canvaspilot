@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,22 +25,24 @@ async def upsert_notification(
     dedupe_key: str,
     expires_at: datetime | None = None,
 ) -> InAppNotification:
-    statement = (
-        insert(InAppNotification)
-        .values(
-            user_id=user_id,
-            kind=kind,
-            title=title,
-            body=body,
-            href=href,
-            dedupe_key=dedupe_key,
-            expires_at=expires_at,
-        )
-        .on_conflict_do_nothing(
-            index_elements=[InAppNotification.user_id, InAppNotification.dedupe_key]
-        )
-        .returning(InAppNotification.id)
+    insert_statement = insert(InAppNotification).values(
+        user_id=user_id,
+        kind=kind,
+        title=title,
+        body=body,
+        href=href,
+        dedupe_key=dedupe_key,
+        expires_at=expires_at,
     )
+    statement = insert_statement.on_conflict_do_update(
+        index_elements=[InAppNotification.user_id, InAppNotification.dedupe_key],
+        set_={
+            "title": insert_statement.excluded.title,
+            "body": insert_statement.excluded.body,
+            "href": insert_statement.excluded.href,
+            "expires_at": insert_statement.excluded.expires_at,
+        },
+    ).returning(InAppNotification.id)
     await db.execute(statement)
     notification = await db.scalar(
         select(InAppNotification).where(
@@ -120,18 +122,44 @@ async def sync_attention_notifications(user_id: uuid.UUID, db: AsyncSession) -> 
                 href=f"/sources/papers/{paper.id}",
                 dedupe_key=f"paper-review:{paper.id}",
             )
-    if preferences.reminder_health_attention:
-        findings = list(
-            (
-                await db.execute(
-                    select(HealthFinding).where(
-                        HealthFinding.user_id == user_id,
-                        HealthFinding.severity.in_(["warning", "error"]),
-                    )
+    findings = list(
+        (
+            await db.execute(
+                select(HealthFinding).where(
+                    HealthFinding.user_id == user_id,
+                    HealthFinding.severity.in_(["warning", "error"]),
                 )
-            ).scalars()
+            )
+        ).scalars()
+    )
+    health_keys = [
+        (
+            f"health-finding:{finding.code}:{finding.resource_type}:"
+            f"{finding.resource_id or '-'}:{finding.topic or '-'}"
         )
+        for finding in findings
+    ]
+    await db.execute(
+        delete(InAppNotification).where(
+            InAppNotification.user_id == user_id,
+            InAppNotification.kind == "health_attention",
+            InAppNotification.dedupe_key.like("health:%"),
+        )
+    )
+    stale_health = delete(InAppNotification).where(
+        InAppNotification.user_id == user_id,
+        InAppNotification.kind == "health_attention",
+        InAppNotification.dedupe_key.like("health-finding:%"),
+    )
+    if health_keys:
+        stale_health = stale_health.where(InAppNotification.dedupe_key.not_in(health_keys))
+    await db.execute(stale_health)
+    if preferences.reminder_health_attention:
         for finding in findings:
+            dedupe_key = (
+                f"health-finding:{finding.code}:{finding.resource_type}:"
+                f"{finding.resource_id or '-'}:{finding.topic or '-'}"
+            )
             await upsert_notification(
                 db,
                 user_id=user_id,
@@ -139,7 +167,7 @@ async def sync_attention_notifications(user_id: uuid.UUID, db: AsyncSession) -> 
                 title="Workspace health needs attention",
                 body=finding.message,
                 href=f"/sources/health/{finding.id}",
-                dedupe_key=f"health:{finding.id}",
+                dedupe_key=dedupe_key,
             )
 
 
