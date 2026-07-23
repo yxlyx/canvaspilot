@@ -75,7 +75,10 @@ fn renderLiveReader(req: mer.Request, page: lib.types.WikiPageResponse, now_secs
         w.print("<li id=\"ref-{d}\"><span>{d}</span><div><strong>{s}</strong><p>{s}</p><blockquote>{s}</blockquote><a href=\"/sources\">Open source →</a></div></li>", .{ index + 1, index + 1, lib.ui.escapeSafe(req.allocator, citation.source_title), lib.ui.escapeSafe(req.allocator, citation.citation_ref), lib.ui.escapeSafe(req.allocator, citation.snippet) }) catch return mer.internalError("wiki render failed");
     }
     w.writeAll("</ol></section></article><aside class=\"reader-related\"><p class=\"eyebrow\">Connected ideas</p>") catch return mer.internalError("wiki render failed");
-    for (page.backlinks) |backlink| w.print("<a href=\"{s}\"><strong>{s}</strong><span>Backlink</span></a>", .{ wiki_href, lib.ui.escapeSafe(req.allocator, backlink) }) catch return mer.internalError("wiki render failed");
+    for (page.backlinks) |backlink| {
+        const backlink_href = if (isSafeSlug(backlink)) std.fmt.allocPrint(req.allocator, "/wiki/{s}", .{backlink}) catch wiki_href else wiki_href;
+        w.print("<a href=\"{s}\"><strong>{s}</strong><span>Backlink</span></a>", .{ lib.ui.escapeSafe(req.allocator, backlink_href), lib.ui.escapeSafe(req.allocator, backlink) }) catch return mer.internalError("wiki render failed");
+    }
     w.print("<div class=\"backlinks\"><small>Evidence</small><strong>{d} citations</strong><span>{d} source records · created {s}</span></div></aside></div></main>", .{ page.citation_count, page.source_ids.len, lib.ui.escapeSafe(req.allocator, page.created_at) }) catch return mer.internalError("wiki render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }

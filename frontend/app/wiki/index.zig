@@ -20,7 +20,9 @@ pub fn render(req: mer.Request) mer.Response {
     const raw_query = req.queryParam("q") orelse "";
     const raw_module = req.queryParam("module") orelse "";
     const query = lib.form.decode(req.allocator, raw_query) catch raw_query;
-    const filter_module = lib.form.decode(req.allocator, raw_module) catch raw_module;
+    const requested_module = lib.form.decode(req.allocator, raw_module) catch raw_module;
+    const unsupported_module = requested_module.len > 0 and !std.mem.eql(u8, requested_module, "Workspace");
+    const filter_module: []const u8 = if (unsupported_module) "Workspace" else requested_module;
     var live_pages: ?[]const lib.types.WikiPageResponse = null;
     var source_count: ?usize = null;
     var deck_count: ?usize = null;
@@ -79,7 +81,9 @@ pub fn render(req: mer.Request) mer.Response {
     w.writeAll(ICON_SEARCH) catch return mer.internalError("wiki index render failed");
     w.print("<input class=\"search-field\" id=\"cp-wiki-search\" name=\"q\" value=\"{s}\" placeholder=\"Search concepts, citations, or source titles\" aria-label=\"Search wiki\"></label>", .{safe_query}) catch return mer.internalError("wiki index render failed");
     if (use_mock) w.writeAll("<input type=\"hidden\" name=\"mock\" value=\"1\">") catch return mer.internalError("wiki index render failed");
-    w.print("<div class=\"filter-row\"><button class=\"filter-button{s}\" type=\"submit\" name=\"module\" value=\"\" data-wiki-module=\"All\" aria-pressed=\"{s}\">All modules</button><button class=\"filter-button{s}\" type=\"submit\" name=\"module\" value=\"Workspace\" data-wiki-module=\"Workspace\" aria-pressed=\"{s}\">Workspace</button><button class=\"wiki-search-submit\" type=\"submit\" name=\"module\" value=\"{s}\">Search wiki</button></div></form><section class=\"article-grid\" id=\"cp-wiki-grid\" aria-live=\"polite\">", .{ if (filter_module.len == 0) " active" else "", if (filter_module.len == 0) "true" else "false", if (std.mem.eql(u8, filter_module, "Workspace")) " active" else "", if (std.mem.eql(u8, filter_module, "Workspace")) "true" else "false", safe_module }) catch return mer.internalError("wiki index render failed");
+    w.print("<div class=\"filter-row\"><button class=\"filter-button{s}\" type=\"submit\" name=\"module\" value=\"\" data-wiki-module=\"All\" aria-pressed=\"{s}\">All modules</button><button class=\"filter-button{s}\" type=\"submit\" name=\"module\" value=\"Workspace\" data-wiki-module=\"Workspace\" aria-pressed=\"{s}\">Workspace</button><button class=\"wiki-search-submit\" type=\"submit\" name=\"module\" value=\"{s}\">Search wiki</button></div></form>", .{ if (filter_module.len == 0) " active" else "", if (filter_module.len == 0) "true" else "false", if (std.mem.eql(u8, filter_module, "Workspace")) " active" else "", if (std.mem.eql(u8, filter_module, "Workspace")) "true" else "false", safe_module }) catch return mer.internalError("wiki index render failed");
+    if (unsupported_module) w.print("<p class=\"cp-inline-status\" role=\"status\">Wiki pages do not expose per-module ownership yet. Showing all workspace articles instead of an empty <strong>{s}</strong> view.</p>", .{lib.ui.escapeSafe(req.allocator, requested_module)}) catch return mer.internalError("wiki index render failed");
+    w.writeAll("<section class=\"article-grid\" id=\"cp-wiki-grid\" aria-live=\"polite\">") catch return mer.internalError("wiki index render failed");
     if (live_pages) |pages| {
         for (pages) |page| {
             if (std.mem.eql(u8, page.page_type, "index") or !matchesLivePage(page, query, filter_module)) continue;

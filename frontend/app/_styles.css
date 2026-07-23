@@ -1189,6 +1189,7 @@ a:focus-visible, .cp-btn:focus-visible, .cp-chip:focus-visible, .cp-tab:focus-vi
 
 @media (max-width:620px) {
   .cp-local-tabs { margin-left:-14px; margin-right:-14px; padding:0 14px; box-sizing:border-box; }
+  .cp-local-tabs[aria-label="Settings"] { mask-image:linear-gradient(to right,#000 0,#000 calc(100% - 28px),transparent 100%); }
   .cp-local-tabs > div { gap:22px; }
   .cp-local-tabs a { min-width:44px; justify-content:center; }
   .filter-button { min-width:44px; min-height:44px; }
@@ -1670,7 +1671,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 .card-front > p { color: var(--cp-muted); font-size: 10px; }
 .reveal-button { min-height: 66px; display: flex; align-items: center; justify-content: center; gap: 12px; border: 0; border-top: 1px solid var(--cp-border); background: var(--cp-heading); color: var(--cp-surface-solid); font-weight: 700; }
 .reveal-button small { color: var(--cp-muted-2); font-size: 8px; font-weight: 400; }
-.flashcard.revealed { grid-template-rows: minmax(230px, .8fr) minmax(240px, 1fr); }
+.flashcard.revealed { min-height: 0; grid-template-rows: auto auto; }
 .flashcard.revealed .card-front { padding-top: 55px; padding-bottom: 24px; border-bottom: 1px solid var(--cp-border); background: var(--cp-bg); }
 .flashcard.revealed .card-front h2 { font-size: clamp(29px, 3vw, 41px); }
 .card-answer { padding: 30px clamp(30px, 6vw, 72px); background: #e9f0e4; }
@@ -1710,7 +1711,13 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 }
 @media (max-width: 900px) {
     .chat-page { grid-template-columns: 1fr; }
-    .chat-context { display: none; }
+    .chat-context { padding: 14px; display: grid; grid-template-columns: minmax(180px, .8fr) minmax(220px, 1.2fr); gap: 14px; align-self: auto; }
+    .chat-context > div:first-child, .chat-context .context-sources { min-width: 0; }
+    .chat-context .context-sources { margin-top: 0; }
+    .chat-context .context-sources .section-title h2 { font-size: 18px; }
+    .chat-context .context-sources > a { display: none; }
+    .chat-context .context-sources > a:first-of-type { min-height: 48px; padding: 6px 0 0; display: grid; }
+    .chat-context .grounding-note { display: none; }
     .flash-page { width: 100%; max-width: 100%; min-width: 0; grid-template-columns: minmax(0, 1fr); overflow: hidden; }
     .deck-sidebar { width: 100%; min-width: 0; min-height: auto; overflow: hidden; }
     .deck-sidebar > div, .deck-sidebar > a { display: none; }
@@ -1718,6 +1725,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
     .deck-sidebar nav button { min-width: 190px; }
 }
 @media (max-width: 620px) {
+    .chat-context { grid-template-columns: 1fr; gap: 12px; }
     .chat-thread { min-height: calc(100vh - 215px); border-radius: 14px; }
     .turns { padding: 23px 14px; }
     .chat-welcome { min-height: 430px; }
@@ -1734,7 +1742,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
     .flashcard { min-height: 510px; }
     .card-front { padding: 50px 21px 28px; }
     .flashcard h2 { font-size: 37px; }
-    .flashcard.revealed { grid-template-rows: minmax(205px, .8fr) minmax(265px, 1fr); }
+    .flashcard.revealed { grid-template-rows: auto auto; }
     .card-answer { padding: 24px 20px; }
     .card-answer > p:not(.eyebrow) { font-size: 15px; }
     .card-source { align-items: flex-start; flex-wrap: wrap; }
@@ -1936,9 +1944,11 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 .wb-study-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; perspective: 1800px; }
 .wb-product-screen-lifted { transform: perspective(1600px) rotateX(1.2deg) rotateY(2.4deg) rotateZ(0.35deg) translateY(50px); }
 .wb-closing { min-height: 620px; margin-top: 170px; padding: 78px max(7vw, calc((100vw - 1400px) / 2)); display: flex; flex-direction: column; align-items: flex-start; justify-content: center; background: var(--cp-heading); color: #fff; }
+:root[data-theme="dark"] .wb-closing { border-top: 1px solid #3d3d38; border-bottom: 1px solid #3d3d38; background: #242421; color: #f1efe8; }
 .wb-closing .wb-brand > span { background: #fff; color: #171915; }
 .wb-closing h2 { max-width: 900px; margin-top: 70px; font-size: clamp(48px,7vw,96px); }
 .wb-closing p { max-width: 560px; margin-top: 20px; color: #c8c9c4; font-family: var(--wb-serif); font-size: 20px; line-height: 1.5; }
+:root[data-theme="dark"] .wb-closing p { color: #aaa9a2; }
 .wb-closing .wb-button { margin-top: 22px; }
 .wb-footer { max-width: 1400px; margin: 0 auto; padding: 32px 18px 20px; display: flex; justify-content: space-between; color: var(--cp-muted); font-size: 12px; }
 .wb-footer div { display: flex; gap: 28px; }

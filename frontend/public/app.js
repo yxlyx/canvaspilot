@@ -27,12 +27,44 @@
   syncThemeButtons();
 
   setupAuth();
+  setupShell();
   setupChat();
   setupFlashcards();
   setupDashboard();
   setupSources();
   setupWiki();
   setupArticle();
+
+  async function setupShell() {
+    const nameNodes = document.querySelectorAll("[data-cp-account-name]");
+    const initialNodes = document.querySelectorAll("[data-cp-account-initial]");
+    const notificationLinks = document.querySelectorAll("[data-cp-notification-link]");
+    if (!nameNodes.length && !initialNodes.length && !notificationLinks.length) return;
+
+    try {
+      const response = await fetch("/api/me", { headers: { Accept: "application/json" }, credentials: "same-origin" });
+      if (response.ok) {
+        const user = await response.json();
+        const name = typeof user.name === "string" && user.name.trim() ? user.name.trim() : "Account";
+        const initial = Array.from(name)[0]?.toUpperCase() || "W";
+        nameNodes.forEach(function (node) { node.textContent = name; });
+        initialNodes.forEach(function (node) { node.textContent = initial; });
+      }
+    } catch (_) {}
+
+    if (!notificationLinks.length) return;
+    try {
+      const response = await fetch("/api/notifications/unread-count", { headers: { Accept: "application/json" }, credentials: "same-origin" });
+      if (!response.ok) return;
+      const body = await response.json();
+      const count = Number.isFinite(body.unread_count) ? Math.max(0, body.unread_count) : 0;
+      notificationLinks.forEach(function (link) {
+        const dot = link.querySelector("i");
+        if (dot) dot.hidden = count === 0;
+        link.setAttribute("aria-label", count > 0 ? `Notifications, ${count} unread` : "Notifications");
+      });
+    } catch (_) {}
+  }
 
   function setupAuth() {
     const page = document.querySelector("[data-auth-page]");
@@ -429,7 +461,8 @@
     const search = document.getElementById("cp-wiki-search");
     const empty = document.getElementById("cp-wiki-empty");
     if (!grid || !search) return;
-    let module = new URLSearchParams(window.location.search).get("module") || "All";
+    const requestedModule = new URLSearchParams(window.location.search).get("module");
+    let module = !requestedModule || requestedModule === "Workspace" ? (requestedModule || "All") : "Workspace";
 
     function filter() {
       const query = search.value.trim().toLowerCase();
