@@ -1,11 +1,28 @@
 (() => {
   const forms = document.querySelectorAll("[data-settings-form]");
-  const message = (form, text, error = false) => {
+  const message = (form, text, error = false, focusStatus = true) => {
     const status = form.querySelector(".cp-form-status");
     if (!status) return;
     status.textContent = text;
     status.dataset.error = error ? "true" : "false";
-    if (error) status.focus();
+    status.setAttribute("role", error ? "alert" : "status");
+    if (error && focusStatus) status.focus();
+  };
+
+  const errorField = (form, body) => {
+    const explicit = Array.isArray(body?.detail)
+      ? body.detail.find((item) => Array.isArray(item?.loc))?.loc?.at(-1)
+      : null;
+    const mapped = {
+      missing_name: "name",
+      invalid_password: "current_password",
+      weak_password: "new_password",
+      password_unchanged: "new_password",
+      not_found: "default_module_id",
+    }[body?.error];
+    const name = explicit || mapped;
+    if (!name) return null;
+    return form.querySelector(`[name="${CSS.escape(String(name))}"]`);
   };
 
   const passwordForm = document.querySelector("[data-settings-password-change]");
@@ -69,11 +86,14 @@
         });
         if (!response.ok) {
           let detail = "That change could not be saved.";
+          let body = {};
           try {
-            const body = await response.json();
+            body = await response.json();
             detail = body.detail?.message || body.detail || body.error || detail;
           } catch (_) {}
-          throw new Error(detail);
+          const failure = new Error(Array.isArray(detail) ? detail[0]?.msg || "Review the highlighted field." : detail);
+          failure.field = errorField(form, body);
+          throw failure;
         }
         if (form.matches("[data-download]")) {
           const blob = await response.blob();
@@ -94,7 +114,11 @@
           message(form, "Saved.");
         }
       } catch (error) {
-        message(form, error.message || "That change could not be saved.", true);
+        if (error.field) {
+          error.field.setAttribute("aria-invalid", "true");
+          error.field.focus();
+        }
+        message(form, error.message || "That change could not be saved.", true, !error.field);
       } finally {
         submit?.removeAttribute("disabled");
       }
@@ -121,4 +145,10 @@
       localStorage.setItem("wikibase-theme", theme);
     });
   });
+
+  const activeSettingsTab = document.querySelector('.cp-local-tabs[aria-label="Settings"] a[aria-current="page"]');
+  const settingsTabs = activeSettingsTab?.closest(".cp-local-tabs");
+  if (activeSettingsTab && settingsTabs && settingsTabs.scrollWidth > settingsTabs.clientWidth) {
+    activeSettingsTab.scrollIntoView({ block: "nearest", inline: "center" });
+  }
 })();

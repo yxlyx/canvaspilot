@@ -53,7 +53,7 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     w.writeAll(
         \\<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=wikibase-5">
         \\<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=wikibase-3">
-        \\<script>document.documentElement.classList.add('js');try{var p=localStorage.getItem('wikibase-theme-preference'),t=localStorage.getItem('wikibase-theme');document.documentElement.dataset.theme=p==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):(p||t||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'))}catch(e){}</script>
+        \\<script>document.documentElement.classList.add('js');try{var c=document.cookie.match(/(?:^|;\\s*)wb_theme_preference=([^;]+)/),p=c?decodeURIComponent(c[1]):localStorage.getItem('wikibase-theme-preference'),t=localStorage.getItem('wikibase-theme');document.documentElement.dataset.theme=p==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):(p||t||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'))}catch(e){}</script>
         \\<style>
     ) catch return body;
     w.writeAll(CSS) catch return body;
@@ -64,7 +64,7 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
             w.writeAll("\n") catch {};
         }
     }
-    w.writeAll("<script defer src=\"/app.js?v=wikibase-9\"></script></head><body><a class=\"cp-skip\" href=\"#main\">Skip to content</a>\n") catch return body;
+    w.writeAll("<script defer src=\"/app.js?v=wikibase-11\"></script></head><body><a class=\"cp-skip\" href=\"#main\">Skip to content</a>\n") catch return body;
 
     if (standalone) {
         if (!std.mem.eql(u8, path, "/") and !reader_page) {
@@ -91,7 +91,7 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     }
     w.writeAll("</nav><div class=\"cp-sidebar-foot\">") catch return body;
     if (signed_in) {
-        w.writeAll("<a class=\"cp-sidebar-account\" href=\"/settings\"><span class=\"cp-profile-orb\">A</span><span><strong>Account</strong><small>Settings</small></span></a>") catch return body;
+        w.writeAll("<a class=\"cp-sidebar-account\" href=\"/settings\"><span class=\"cp-profile-orb\" data-cp-account-initial>A</span><span><strong data-cp-account-name>Account</strong><small>Settings</small></span></a>") catch return body;
     } else if (explicit_demo) {
         w.writeAll("<span class=\"cp-profile-orb\">D</span><span><strong>Demo</strong><small>Illustrative data</small></span>") catch return body;
     } else {
@@ -102,27 +102,27 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     } else {
         w.writeAll("<a href=\"/login\" aria-label=\"Sign in\"><svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"m9 18 6-6-6-6M15 12H3M15 3h5a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1h-5\"/></svg></a>") catch return body;
     }
-    w.writeAll(
+    const notification_href = lib.m3.demoHrefFor(allocator, explicit_demo, "/notifications") catch return body;
+    const settings_href = lib.m3.demoHrefFor(allocator, explicit_demo, "/settings") catch return body;
+    w.print(
         \\    </div>
         \\  </aside>
         \\  <div class="cp-content-shell">
         \\    <div class="cp-shell-tools">
         \\      <button type="button" data-cp-theme-toggle aria-label="Switch to dark mode"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3a6 6 0 1 0 9 9 9 9 0 1 1-9-9Z"/></svg></button>
-        \\      <a class="cp-shell-icon" href="/notifications" aria-label="Notifications"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><i></i></a>
-        \\      <a class="cp-profile-orb cp-profile-neutral" href="/settings" aria-label="Account settings"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></a>
+        \\      <a class="cp-shell-icon" href="{s}" aria-label="Notifications" data-cp-notification-link><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><i hidden></i></a>
+        \\      <a class="cp-profile-orb cp-profile-neutral" href="{s}" aria-label="Account settings" data-cp-account-initial><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></a>
         \\    </div>
         \\    <header class="cp-mobile-header"><a class="cp-brand" href="/"><span class="cp-brand-mark">W</span><span class="cp-brand-name">WikiBase</span></a>
         \\      <button class="cp-mobile-theme" type="button" data-cp-theme-toggle aria-label="Switch to dark mode"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3a6 6 0 1 0 9 9 9 9 0 1 1-9-9Z"/></svg></button>
         \\      <details class="cp-mobile-menu"><summary aria-label="Open navigation menu"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></summary><nav aria-label="Mobile menu">
-    ) catch return body;
+    , .{ notification_href, settings_href }) catch return body;
     for (NAV_ITEMS) |item| {
         const active = std.mem.startsWith(u8, path, item.match);
         const current: []const u8 = if (active) " aria-current=\"page\"" else "";
         const href = lib.m3.demoHrefFor(allocator, explicit_demo, item.href) catch return body;
         w.print("<a href=\"{s}\"{s}>{s}<span>{s}</span></a>", .{ href, current, item.icon, item.label }) catch return body;
     }
-    const notification_href = lib.m3.demoHrefFor(allocator, explicit_demo, "/notifications") catch return body;
-    const settings_href = lib.m3.demoHrefFor(allocator, explicit_demo, "/settings") catch return body;
     w.print("<a href=\"{s}\"><svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4\"/></svg><span>Notifications</span></a><a href=\"{s}\"><svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M12 2v3M12 19v3M4.9 4.9 7 7M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1\"/></svg><span>Settings</span></a>", .{ notification_href, settings_href }) catch return body;
     if (signed_in) {
         w.writeAll("<form action=\"/logout\" method=\"post\" class=\"cp-mobile-account\"><input type=\"hidden\" name=\"action\" value=\"logout\"><button type=\"submit\">Sign out</button></form>") catch return body;
