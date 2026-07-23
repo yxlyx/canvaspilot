@@ -292,6 +292,18 @@ pub fn providerDescriptors(allocator: std.mem.Allocator, token: []const u8) Resu
 pub fn providerSettings(allocator: std.mem.Allocator, token: []const u8) Result([]types.ProviderStatusResponse) {
     return requestJson([]types.ProviderStatusResponse, allocator, token, .GET, "/api/providers/settings", null);
 }
+pub fn preferences(allocator: std.mem.Allocator, token: []const u8) Result(types.UserPreferenceResponse) {
+    return requestJson(types.UserPreferenceResponse, allocator, token, .GET, "/api/settings/preferences", null);
+}
+pub fn notifications(allocator: std.mem.Allocator, token: []const u8, unread_only: bool) Result(types.NotificationPageResponse) {
+    return requestJson(types.NotificationPageResponse, allocator, token, .GET, if (unread_only) "/api/notifications?state=unread" else "/api/notifications", null);
+}
+pub fn notificationCount(allocator: std.mem.Allocator, token: []const u8) Result(types.NotificationCountResponse) {
+    return requestJson(types.NotificationCountResponse, allocator, token, .GET, "/api/notifications/unread-count", null);
+}
+pub fn activity(allocator: std.mem.Allocator, token: []const u8) Result([]types.ActivityEntryResponse) {
+    return requestJson([]types.ActivityEntryResponse, allocator, token, .GET, "/api/wiki/activity", null);
+}
 
 pub const RawResult = struct {
     status: u16,

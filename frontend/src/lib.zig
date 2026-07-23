@@ -14,3 +14,5 @@ pub const chat = @import("lib/chat.zig");
 pub const markdown = @import("lib/markdown.zig");
 pub const m3 = @import("lib/m3.zig");
 pub const mutation = @import("lib/mutation.zig");
+pub const navigation = @import("lib/navigation.zig");
+pub const settings_ui = @import("lib/settings_ui.zig");
