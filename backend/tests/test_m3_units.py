@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from cryptography.fernet import Fernet
 from pydantic import ValidationError
+from sqlalchemy.dialects import postgresql
 from sse_starlette.sse import EventSourceResponse
 
 from app.config import Settings
@@ -17,8 +18,9 @@ from app.schemas.m3 import (
     MarkedPaperQuestionUpdate,
     ProviderConfigureRequest,
 )
+from app.schemas.settings import ActivityEntryResponse
 from app.schemas.source_imports import SourceImportRun
-from app.services import exports, marked_papers
+from app.services import account, exports, marked_papers
 from app.services.idempotency import request_hash
 from app.services.marked_papers import MAX_QUESTIONS, extract_supported_text
 from app.services.meters import TopicEvidence, calculate_topic_meter
@@ -274,6 +276,50 @@ def test_marked_paper_parser_is_incremental_bounded_and_rejects_invalid_marks(mo
 
 
 @pytest.mark.asyncio
+async def test_account_export_preflight_rejects_before_orm_loading():
+    class OversizedAccountSession:
+        async def scalar(self, _statement):
+            return account.MAX_ACCOUNT_EXPORT_MEMORY_BYTES + 1
+
+        async def execute(self, _statement):
+            pytest.fail("account entities were loaded before preflight rejection")
+
+    with pytest.raises(WikiBaseError) as exc_info:
+        await account.export_account(SimpleNamespace(id=uuid.uuid4()), OversizedAccountSession())
+
+    assert exc_info.value.status_code == 413
+    assert exc_info.value.error == "export_too_large"
+
+
+def test_account_export_preflight_covers_projected_tables_without_excluded_payloads():
+    assert account.ACCOUNT_EXPORT_VALUE_MEMORY_FACTOR == 6
+    statement = account._account_export_preflight_statement(uuid.uuid4())
+    sql = str(statement.compile(dialect=postgresql.dialect()))
+
+    for table in (
+        "users",
+        "user_preferences",
+        "sources",
+        "source_chunks",
+        "wiki_pages",
+        "wiki_revisions",
+        "study_outputs",
+        "study_output_citations",
+        "flashcard_decks",
+        "flashcards",
+        "flashcard_attempts",
+        "learning_evidence",
+        "marked_papers",
+        "marked_paper_questions",
+        "provider_settings",
+    ):
+        assert table in sql
+    assert "wiki_citations" not in sql
+    assert "embedding" not in sql
+    assert "encrypted_api_key" not in sql
+
+
+@pytest.mark.asyncio
 async def test_workspace_export_checks_final_closed_zip_size(monkeypatch):
     async def owned_pages(*_args):
         return [SimpleNamespace(slug="page")]
@@ -344,6 +390,22 @@ def test_study_guide_is_structurally_distinct():
     guide = build_grounded_markdown("study_guide", evidence)
     assert "## Review point 1" in guide
     assert "- [ ] Explain review point 1" in guide
+
+
+@pytest.mark.parametrize("event_type", ["summary", "outline", "study_guide"])
+def test_activity_schema_accepts_each_study_output_type(event_type):
+    entry = ActivityEntryResponse(
+        id=uuid.uuid4(),
+        event_type=event_type,
+        category="study_guides",
+        title="Generated study material",
+        summary="Grounded in workspace sources",
+        href="/wiki/guides/example",
+        resource_id=uuid.uuid4(),
+        created_at=datetime.now(UTC),
+    )
+
+    assert entry.event_type == event_type
 
 
 @pytest.mark.parametrize(

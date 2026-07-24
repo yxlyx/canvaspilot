@@ -160,9 +160,94 @@ fn callBackend(
 
 fn mockReply(allocator: std.mem.Allocator, question: []const u8, explicit_demo: bool) mer.Response {
     const safe_q = lib.ui.escapeSafe(allocator, question);
+
+    if (isBalancedSearchTreeQuestion(question)) {
+        const message = std.fmt.allocPrint(
+            allocator,
+            "(demo) Based on the generated wiki for \"{s}\": an AVL tree keeps every node's balance factor in {{-1, 0, 1}}. After an update, a single rotation repairs a left-left or right-right imbalance, while a double rotation repairs a left-right or right-left imbalance. These local pointer changes preserve the binary-search-tree order because the in-order key sequence does not change, and restoring the height invariant keeps search logarithmic.",
+            .{safe_q},
+        ) catch "(demo reply unavailable)";
+        const citations = [_]lib.types.Citation{
+            .{
+                .title = "Balanced search trees",
+                .url = if (explicit_demo) "/wiki/balanced-search-trees?mock=1" else "/wiki/balanced-search-trees",
+                .snippet = "AVL rotations restore balance while preserving the in-order sequence of keys.",
+            },
+            .{
+                .title = "Lecture 08 — Balanced Search Trees",
+                .url = if (explicit_demo) "/sources?mock=1" else "/sources",
+                .snippet = "The AVL invariant bounds each node's subtree-height difference; local rotations restore it after updates.",
+            },
+        };
+        const reply: ChatReply = .{
+            .message = message,
+            .citations = &citations,
+            .grounded = true,
+            .confidence = 0.0,
+            .source = "mock",
+        };
+        return mer.typedJson(allocator, reply);
+    }
+
+    if (containsAnyIgnoreCase(question, &.{ "stream", "lazy", "immutable", "list" })) {
+        const message = std.fmt.allocPrint(
+            allocator,
+            "(demo) Based on the generated wiki for \"{s}\": immutable lists avoid in-place updates, while lazy streams defer work until a value is requested. This lets students describe large or infinite sequences but only evaluate the prefix needed by the program.",
+            .{safe_q},
+        ) catch "(demo reply unavailable)";
+        const citations = [_]lib.types.Citation{
+            .{
+                .title = "Immutable Lists and Lazy Streams",
+                .url = if (explicit_demo) "/wiki/immutable-lists?mock=1" else "/wiki/immutable-lists",
+                .snippet = "Immutable lists avoid in-place updates. Lazy streams defer computation until a value is requested.",
+            },
+            .{
+                .title = "Lecture 9: Immutable Lists and Lazy Streams",
+                .url = if (explicit_demo) "/sources?type=markdown&mock=1" else "/sources?type=markdown",
+                .snippet = "Lecture notes imported from the CS2030S source set and chunked for cited Q&A.",
+            },
+        };
+        const reply: ChatReply = .{
+            .message = message,
+            .citations = &citations,
+            .grounded = true,
+            .confidence = 0.0,
+            .source = "mock",
+        };
+        return mer.typedJson(allocator, reply);
+    }
+
+    if (containsAnyIgnoreCase(question, &.{ "revise", "lab", "practice", "before" })) {
+        const message = std.fmt.allocPrint(
+            allocator,
+            "(demo) Based on the Lab 6 checklist for \"{s}\": review the updated deadline, check the new Coursemology test cases, and confirm each map/filter/reduce step has clear input and output types before submission.",
+            .{safe_q},
+        ) catch "(demo reply unavailable)";
+        const citations = [_]lib.types.Citation{
+            .{
+                .title = "Lab 6 Functional Collections Checklist",
+                .url = if (explicit_demo) "/wiki/lab-6-functional-collections?mock=1" else "/wiki/lab-6-functional-collections",
+                .snippet = "Review the new Coursemology test cases before final submission.",
+            },
+            .{
+                .title = "Lab 6: Functional Collections Brief",
+                .url = if (explicit_demo) "/sources?type=assignment&mock=1" else "/sources?type=assignment",
+                .snippet = "Assignment brief, due-date note, and test-case guidance for Lab 6.",
+            },
+        };
+        const reply: ChatReply = .{
+            .message = message,
+            .citations = &citations,
+            .grounded = true,
+            .confidence = 0.0,
+            .source = "mock",
+        };
+        return mer.typedJson(allocator, reply);
+    }
+
     const message = std.fmt.allocPrint(
         allocator,
-        "(demo) Based on the latest announcements in your synced modules, here's what I found about \"{s}\": Lab 6 has been extended to Friday 23:59. Sources are linked below.",
+        "(demo) Based on the latest announcements for \"{s}\": Lab 6 has been extended to Friday 23:59. The new Coursemology test cases should be reviewed before final submission.",
         .{safe_q},
     ) catch "(demo reply unavailable)";
 
@@ -183,4 +268,38 @@ fn mockReply(allocator: std.mem.Allocator, question: []const u8, explicit_demo: 
     };
 
     return mer.typedJson(allocator, reply);
+}
+
+fn isBalancedSearchTreeQuestion(question: []const u8) bool {
+    return containsAnyIgnoreCase(question, &.{ "avl", "balanced tree", "balanced-tree", "rotation", "search tree", "search-tree" });
+}
+
+test "balanced search tree demo questions are recognized" {
+    try std.testing.expect(isBalancedSearchTreeQuestion("Why do AVL rotations preserve search-tree order?"));
+    try std.testing.expect(isBalancedSearchTreeQuestion("How does a balanced tree keep searches fast?"));
+    try std.testing.expect(!isBalancedSearchTreeQuestion("How should I revise for Lab 6?"));
+}
+
+fn containsAnyIgnoreCase(haystack: []const u8, needles: []const []const u8) bool {
+    for (needles) |needle| {
+        if (indexOfIgnoreCase(haystack, needle) != null) return true;
+    }
+    return false;
+}
+
+fn indexOfIgnoreCase(haystack: []const u8, needle: []const u8) ?usize {
+    if (needle.len == 0) return 0;
+    if (needle.len > haystack.len) return null;
+    var i: usize = 0;
+    while (i + needle.len <= haystack.len) : (i += 1) {
+        var matched = true;
+        for (needle, 0..) |needle_ch, j| {
+            if (std.ascii.toLower(haystack[i + j]) != std.ascii.toLower(needle_ch)) {
+                matched = false;
+                break;
+            }
+        }
+        if (matched) return i;
+    }
+    return null;
 }

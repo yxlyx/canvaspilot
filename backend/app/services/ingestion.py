@@ -15,7 +15,34 @@ from app.services.embedding import embed_chunks
 
 logger = logging.getLogger(__name__)
 
-_encoding = tiktoken.get_encoding("cl100k_base")
+_encoding = None
+
+
+class _CharacterEncoding:
+    """Deterministic fallback that preserves text when the BPE table is unavailable."""
+
+    @staticmethod
+    def encode(text: str) -> list[int]:
+        return [ord(character) for character in text]
+
+    @staticmethod
+    def decode(tokens: list[int]) -> str:
+        return "".join(chr(token) for token in tokens)
+
+
+def _get_encoding():
+    global _encoding
+    if _encoding is None:
+        try:
+            _encoding = tiktoken.get_encoding("cl100k_base")
+        except Exception as exc:  # the fallback keeps ingestion and tests offline-safe
+            logger.warning(
+                "tiktoken encoding unavailable; using conservative character tokenization: %s",
+                exc,
+            )
+            _encoding = _CharacterEncoding()
+    return _encoding
+
 
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 64
@@ -73,7 +100,7 @@ def _split_sentences(text: str) -> list[str]:
 
 
 def _token_count(text: str) -> int:
-    return len(_encoding.encode(text))
+    return len(_get_encoding().encode(text))
 
 
 def chunk_text(text: str, meta: ChunkMeta) -> list[TextChunk]:
@@ -104,9 +131,10 @@ def chunk_text(text: str, meta: ChunkMeta) -> list[TextChunk]:
                 current_sentences = []
                 current_tokens = 0
 
-            tokens = _encoding.encode(sentence)
+            encoding = _get_encoding()
+            tokens = encoding.encode(sentence)
             for i in range(0, len(tokens), CHUNK_SIZE):
-                segment = _encoding.decode(tokens[i : i + CHUNK_SIZE])
+                segment = encoding.decode(tokens[i : i + CHUNK_SIZE])
                 chunks.append(
                     TextChunk(
                         content=segment,

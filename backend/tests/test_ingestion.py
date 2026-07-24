@@ -1,4 +1,5 @@
 from app.models.content import SourceType
+from app.services import ingestion
 from app.services.ingestion import ChunkMeta, chunk_text, parse_html
 
 
@@ -77,3 +78,17 @@ class TestChunkText:
         assert len(chunks) > 1
         for chunk in chunks:
             assert chunk.token_count <= 520  # small margin for boundary effects
+
+    def test_chunking_has_a_deterministic_offline_fallback(self, monkeypatch):
+        monkeypatch.setattr(ingestion, "_encoding", None)
+        monkeypatch.setattr(
+            ingestion.tiktoken,
+            "get_encoding",
+            lambda _name: (_ for _ in ()).throw(ConnectionError("offline")),
+        )
+
+        chunks = chunk_text("Offline tokenization remains available.", self._meta())
+
+        assert len(chunks) == 1
+        assert chunks[0].token_count == len(chunks[0].content)
+        monkeypatch.setattr(ingestion, "_encoding", None)

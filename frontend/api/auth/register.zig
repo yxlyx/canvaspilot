@@ -69,10 +69,12 @@ pub fn render(req: mer.Request) mer.Response {
 
     const result = lib.backend.register(req.allocator, name.?, email.?, password.?);
     if (result.value) |v| {
-        const cookies = req.allocator.alloc(mer.SetCookie, 1) catch {
+        const cookies = req.allocator.alloc(mer.SetCookie, 3) catch {
             return mer.internalError("could not allocate session cookie");
         };
         cookies[0] = lib.session.setCookie(v.value.token);
+        cookies[1] = lib.session.themeCookie("system");
+        cookies[2] = lib.session.motionCookie("system");
         return mer.withCookies(mer.redirect("/dashboard?auth=registered", .see_other), cookies);
     }
 

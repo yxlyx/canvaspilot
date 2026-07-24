@@ -250,6 +250,13 @@ pub fn listOutputs(allocator: std.mem.Allocator, token: []const u8, cursor: ?[]c
         "/api/outputs/page?limit=20";
     return requestJson(types.StudyOutputPageResponse, allocator, token, .GET, path, null);
 }
+pub fn listStudyGuideOutputs(allocator: std.mem.Allocator, token: []const u8, cursor: ?[]const u8) Result(types.StudyOutputPageResponse) {
+    const path = if (cursor) |value|
+        std.fmt.allocPrint(allocator, "/api/outputs/page?limit=20&output_type=study_guide&cursor={s}", .{value}) catch return .{ .status = 0, .err = "alloc" }
+    else
+        "/api/outputs/page?limit=20&output_type=study_guide";
+    return requestJson(types.StudyOutputPageResponse, allocator, token, .GET, path, null);
+}
 pub fn getOutput(allocator: std.mem.Allocator, token: []const u8, id: []const u8) Result(types.StudyOutputResponse) {
     const path = std.fmt.allocPrint(allocator, "/api/outputs/{s}", .{id}) catch return .{ .status = 0, .err = "alloc" };
     return requestJson(types.StudyOutputResponse, allocator, token, .GET, path, null);
@@ -291,6 +298,18 @@ pub fn providerDescriptors(allocator: std.mem.Allocator, token: []const u8) Resu
 }
 pub fn providerSettings(allocator: std.mem.Allocator, token: []const u8) Result([]types.ProviderStatusResponse) {
     return requestJson([]types.ProviderStatusResponse, allocator, token, .GET, "/api/providers/settings", null);
+}
+pub fn preferences(allocator: std.mem.Allocator, token: []const u8) Result(types.UserPreferenceResponse) {
+    return requestJson(types.UserPreferenceResponse, allocator, token, .GET, "/api/settings/preferences", null);
+}
+pub fn notifications(allocator: std.mem.Allocator, token: []const u8, unread_only: bool) Result(types.NotificationPageResponse) {
+    return requestJson(types.NotificationPageResponse, allocator, token, .GET, if (unread_only) "/api/notifications?state=unread" else "/api/notifications", null);
+}
+pub fn notificationCount(allocator: std.mem.Allocator, token: []const u8) Result(types.NotificationCountResponse) {
+    return requestJson(types.NotificationCountResponse, allocator, token, .GET, "/api/notifications/unread-count", null);
+}
+pub fn activity(allocator: std.mem.Allocator, token: []const u8) Result([]types.ActivityEntryResponse) {
+    return requestJson([]types.ActivityEntryResponse, allocator, token, .GET, "/api/wiki/activity", null);
 }
 
 pub const RawResult = struct {

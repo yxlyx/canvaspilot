@@ -1,7 +1,7 @@
-// app/flashcards.zig — Milestone 2 flashcard practice prototype.
+// app/flashcards.zig — source-backed flashcard review.
 //
-// Provides a deck overview plus a simple review queue. Live sessions use
-// backend flashcard decks; fixtures are available only in explicit demo mode.
+// Live sessions use backend decks; fixtures are available only in explicit
+// demo mode.
 
 const std = @import("std");
 const mer = @import("mer");
@@ -9,418 +9,254 @@ const lib = @import("lib");
 
 pub const meta: mer.Meta = .{
     .title = "Flashcards",
-    .description = "Practice generated flashcards from your workspace wiki pages.",
+    .description = "Review source-backed flashcards and record learning evidence.",
 };
 
-const Rating = struct {
-    label: []const u8,
-    correct: bool,
-    confidence: u8,
-    class_name: []const u8,
-};
-
-const ratings = [_]Rating{
-    .{ .label = "Again", .correct = false, .confidence = 1, .class_name = "cp-btn cp-btn-ghost" },
-    .{ .label = "Hard", .correct = true, .confidence = 2, .class_name = "cp-btn cp-btn-ghost" },
-    .{ .label = "Good", .correct = true, .confidence = 3, .class_name = "cp-btn cp-btn-ghost" },
-    .{ .label = "Easy", .correct = true, .confidence = 5, .class_name = "cp-btn cp-btn-primary" },
-};
+const ICON_LAYERS = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"m12 2 9 5-9 5-9-5 9-5Z\"/><path d=\"m3 12 9 5 9-5M3 17l9 5 9-5\"/></svg>";
+const ICON_ARROW = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M5 12h14M13 6l6 6-6 6\"/></svg>";
+const ICON_KEYBOARD = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><rect width=\"20\" height=\"16\" x=\"2\" y=\"4\" rx=\"2\"/><path d=\"M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10\"/></svg>";
 
 pub fn render(req: mer.Request) mer.Response {
     const session = lib.session.fromRequest(req);
     if (lib.m3.access(req) == .login) return mer.redirect("/login", .see_other);
-    const use_mock = lib.m3.isExplicitDemo(req);
-    const selected_deck_id = req.queryParam("deck") orelse "";
-    const now_secs = lib.time.nowSecs();
 
+    const use_mock = lib.m3.isExplicitDemo(req);
+    const selected_id = req.queryParam("deck") orelse "";
     var live_decks: ?[]const lib.types.FlashcardDeckResponse = null;
     if (!use_mock) {
         const result = lib.backend.listFlashcardDecks(req.allocator, session.token);
-        if (result.value) |parsed_decks| {
-            live_decks = parsed_decks.value;
+        if (result.value) |parsed| {
+            live_decks = parsed.value;
         } else {
             return lib.m3.liveError(req, "Flashcards", result.status);
         }
     }
 
+    var due: usize = 0;
+    if (live_decks) |decks| {
+        for (decks) |deck| due += deck.cards.len;
+    } else {
+        for (lib.mock.decks) |deck| due += deck.due_count;
+    }
+
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
-    lib.m3.demoBanner(req, w) catch return mer.internalError("flashcards render failed");
-    const wiki_href = lib.m3.demoHref(req.allocator, req, "/wiki") catch return mer.internalError("flashcards render failed");
-    const chat_href = lib.m3.demoHref(req.allocator, req, "/chat") catch return mer.internalError("flashcards render failed");
+    lib.m3.demoMarker(req, w) catch return mer.internalError("flashcards render failed");
+    w.print("<header class=\"cp-page-header\"><div><p class=\"cp-page-kicker\">{s}{d} cards due</p><h1 class=\"cp-page-title\">Evidence-backed review</h1></div></header>\n", .{ if (use_mock) "Synthetic demo · " else "", due }) catch return mer.internalError("flashcards render failed");
 
-    w.print(
-        \\<header class="cp-page-header cp-flashcard-header">
-        \\  <div>
-        \\    <h1 class="cp-page-title">Flashcards</h1>
-        \\    <div class="cp-page-sub">Practice generated cards with source-backed answers and citations.</div>
-        \\  </div>
-        \\  <div class="cp-page-actions">
-        \\    <a class="cp-btn cp-btn-ghost" href="{s}">Open wiki</a>
-        \\    <a class="cp-btn cp-btn-primary" href="{s}">Ask follow-up</a>
-        \\  </div>
-        \\</header>
-    , .{ wiki_href, chat_href }) catch return mer.internalError("flashcards render failed");
-
-    if (req.queryParam("attempt")) |attempt| {
-        if (std.mem.eql(u8, attempt, "saved")) {
-            w.writeAll("<div class=\"cp-status-banner cp-status-info\" role=\"status\" aria-live=\"polite\">Practice result saved to learning evidence.</div>\n") catch return mer.internalError("flashcards render failed");
-        } else if (std.mem.eql(u8, attempt, "failed")) {
-            w.writeAll("<div class=\"cp-status-banner cp-status-error\" role=\"alert\">Practice result could not be saved. Your answer was not recorded; try again.</div>\n") catch return mer.internalError("flashcards render failed");
+    if (!use_mock) {
+        if (req.queryParam("attempt")) |attempt| {
+            if (std.mem.eql(u8, attempt, "saved")) {
+                w.writeAll("<div class=\"cp-status-banner cp-status-info\" role=\"status\" aria-live=\"polite\">Practice result saved to learning evidence.</div>\n") catch return mer.internalError("flashcards render failed");
+            } else if (std.mem.eql(u8, attempt, "failed")) {
+                w.writeAll("<div class=\"cp-status-banner cp-status-error\" role=\"alert\">Practice result could not be saved. Your answer was not recorded; try again.</div>\n") catch return mer.internalError("flashcards render failed");
+            }
         }
     }
+
     if (live_decks) |decks| {
         if (decks.len == 0) {
-            renderMetrics(w, 0, 0, 0) catch return mer.internalError("flashcards render failed");
-            w.writeAll("<section class=\"cp-card\"><div class=\"cp-empty\">No flashcard decks have been generated yet.</div></section>") catch return mer.internalError("flashcards render failed");
-            return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
+            if (selected_id.len > 0) {
+                renderPageStart(w) catch return mer.internalError("flashcards render failed");
+                renderDeckFooter(w, "/wiki") catch return mer.internalError("flashcards render failed");
+                renderDeckNotFound(req, w) catch return mer.internalError("flashcards render failed");
+            } else {
+                renderEmptyPage(w) catch return mer.internalError("flashcards render failed");
+            }
+        } else {
+            renderLivePage(req, w, decks, selected_id) catch return mer.internalError("flashcards render failed");
         }
-        return renderLiveDecks(req, w, &buf, decks, selected_deck_id, now_secs);
+    } else {
+        renderFixturePage(req, w, selected_id) catch return mer.internalError("flashcards render failed");
     }
-    return renderMockDecks(req, w, &buf, selected_deck_id, now_secs);
+    return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
-fn renderLiveDecks(
-    req: mer.Request,
-    w: *std.Io.Writer,
-    buf: *std.Io.Writer.Allocating,
-    decks: []const lib.types.FlashcardDeckResponse,
-    selected_deck_id: []const u8,
-    now_secs: i64,
-) mer.Response {
-    var card_total: usize = 0;
-    for (decks) |deck| card_total += deck.card_count;
-    const selected_deck = findLiveDeck(decks, selected_deck_id) orelse decks[0];
+fn renderEmptyPage(w: *std.Io.Writer) !void {
+    try renderPageStart(w);
+    try renderDeckFooter(w, "/wiki");
+    try w.writeAll("<div class=\"flash-empty surface\">No flashcard decks have been generated yet.</div></section><aside class=\"review-evidence surface\"><p class=\"eyebrow\">Session evidence</p><p>No review evidence yet.</p></aside></div>");
+}
 
-    renderMetrics(w, decks.len, card_total, selected_deck.cards.len) catch return mer.internalError("flashcards render failed");
-    renderLayoutStart(w) catch return mer.internalError("flashcards render failed");
+fn renderDeckNotFound(req: mer.Request, w: *std.Io.Writer) !void {
+    try renderReviewStart(req, w, "Review queue", "Deck not found", 0);
+    try w.writeAll("<div class=\"flash-empty surface\" role=\"status\"><strong>Deck not found.</strong> No deck matches the requested id. Pick one from the list.</div></section><aside class=\"review-evidence surface\"><p class=\"eyebrow\">Session evidence</p><p>No review evidence yet.</p></aside></div>");
+}
+
+fn renderFixturePage(req: mer.Request, w: *std.Io.Writer, selected_id: []const u8) !void {
+    const active: ?lib.types.FlashcardDeck = if (selected_id.len == 0) lib.mock.decks[0] else findMockDeck(selected_id);
+    const active_id = if (active) |deck| deck.id else "";
+    try renderPageStart(w);
+    for (lib.mock.decks) |deck| {
+        const module = if (deck.topics.len > 0) deck.topics[0] else "Workspace";
+        try renderDeckButton(req, w, deck.id, deck.title, module, deck.description, "demo", deck.updated_at, 1, deck.card_count, deck.due_count, std.mem.eql(u8, deck.id, active_id));
+    }
+    const wiki_href = try lib.m3.demoHref(req.allocator, req, "/wiki");
+    try renderDeckFooter(w, wiki_href);
+    const deck = active orelse {
+        try renderDeckNotFound(req, w);
+        return;
+    };
+    const module = if (deck.topics.len > 0) deck.topics[0] else "Workspace";
+    try renderReviewStart(req, w, module, deck.title, deck.due_count);
+
+    var first: ?lib.types.Flashcard = null;
+    for (lib.mock.flashcards) |card| if (std.mem.eql(u8, card.deck_id, deck.id)) {
+        first = card;
+        break;
+    };
+    if (first) |card| {
+        try renderCardShell(req, w, card.question, card.answer, card.citation.title, card.citation.snippet, card.id, deck.id, false);
+        for (lib.mock.flashcards) |item| {
+            if (!std.mem.eql(u8, item.deck_id, deck.id)) continue;
+            try renderCardData(req, w, item.id, item.question, item.answer, item.citation.title, item.citation.snippet, item.topic, item.citation.url, item.citation.snippet, "", "", deck.source_id, "");
+        }
+    } else {
+        try w.writeAll("<div class=\"flash-empty surface\">This deck does not have generated cards yet.</div>");
+    }
+    try renderPageEnd(w, 0);
+}
+
+fn renderLivePage(req: mer.Request, w: *std.Io.Writer, decks: []const lib.types.FlashcardDeckResponse, selected_id: []const u8) !void {
+    const active: ?lib.types.FlashcardDeckResponse = if (selected_id.len == 0) decks[0] else findLiveDeck(decks, selected_id);
+    const active_id = if (active) |deck| deck.id else "";
+    try renderPageStart(w);
     for (decks) |deck| {
-        renderLiveDeckLink(req, w, deck, selected_deck.id, now_secs) catch return mer.internalError("flashcards render failed");
+        const module = if (deck.topic_tags.len > 0) deck.topic_tags[0] else "Workspace";
+        try renderDeckButton(req, w, deck.id, deck.title, module, deck.description, deck.generation_scope, deck.updated_at, deck.source_ids.len, deck.card_count, deck.cards.len, std.mem.eql(u8, deck.id, active_id));
     }
-
-    const safe_title = lib.ui.escapeSafe(req.allocator, selected_deck.title);
-    const safe_desc = lib.ui.escapeSafe(req.allocator, selected_deck.description);
-    renderQueueHeader(w, selected_deck.cards.len, safe_title, safe_desc, selected_deck.card_count) catch return mer.internalError("flashcards render failed");
-
-    if (selected_deck.cards.len == 0) {
-        w.writeAll("      <div class=\"cp-empty\">This deck does not have generated cards yet.</div>\n") catch return mer.internalError("flashcards render failed");
-    }
-    for (selected_deck.cards, 0..) |card, index| {
-        renderLiveFlashcard(req, w, selected_deck.id, card, index + 1) catch return mer.internalError("flashcards render failed");
-    }
-    renderLayoutEnd(w) catch return mer.internalError("flashcards render failed");
-    return lib.m3.privateForSession(req, lib.ui.htmlResponse(buf));
-}
-
-fn renderMockDecks(
-    req: mer.Request,
-    w: *std.Io.Writer,
-    buf: *std.Io.Writer.Allocating,
-    selected_deck_id: []const u8,
-    now_secs: i64,
-) mer.Response {
-    const selected_id = if (selected_deck_id.len > 0) selected_deck_id else firstMockDeckId();
-    const selected_deck = if (selected_deck_id.len > 0)
-        (findMockDeck(selected_id) orelse null)
-    else
-        (findMockDeck(selected_id) orelse lib.mock.decks[0]);
-
-    if (selected_deck == null) {
-        renderMetrics(w, lib.mock.decks.len, lib.mock.flashcards.len, 0) catch return mer.internalError("flashcards render failed");
-        renderLayoutStart(w) catch return mer.internalError("flashcards render failed");
-        for (lib.mock.decks) |d| {
-            renderMockDeckLink(req, w, d, "", now_secs) catch return mer.internalError("flashcards render failed");
+    try renderDeckFooter(w, "/wiki");
+    const deck = active orelse {
+        try renderDeckNotFound(req, w);
+        return;
+    };
+    const module = if (deck.topic_tags.len > 0) deck.topic_tags[0] else "Workspace";
+    try renderReviewStart(req, w, module, deck.title, deck.cards.len);
+    if (deck.cards.len > 0) {
+        const card = deck.cards[0];
+        const page = if (card.location_label.len > 0) card.location_label else card.citation_ref;
+        try renderCardShell(req, w, card.question, card.answer, card.source_title, page, card.id, deck.id, true);
+        for (deck.cards) |item| {
+            const item_page = if (item.location_label.len > 0) item.location_label else item.citation_ref;
+            try renderCardData(req, w, item.id, item.question, item.answer, item.source_title, item_page, item.topic_tag, item.citation_ref, item.location_label, item.source_id orelse "", item.source_chunk_id orelse "", item.wiki_page_id orelse "", item.card_type);
         }
-        renderQueueHeader(w, 0, "Deck not found", "No deck matches that id.", 0) catch return mer.internalError("flashcards render failed");
-        w.writeAll("      <div class=\"cp-empty\">No deck matches the requested id. Pick one from the list.</div>\n") catch return mer.internalError("flashcards render failed");
-        renderLayoutEnd(w) catch return mer.internalError("flashcards render failed");
-        return lib.m3.privateForSession(req, lib.ui.htmlResponse(buf));
+    } else {
+        try w.writeAll("<div class=\"flash-empty surface\">This deck does not have generated cards yet.</div>");
     }
-    const deck = selected_deck.?;
-
-    var selected_cards: usize = 0;
-    for (lib.mock.flashcards) |card| {
-        if (std.mem.eql(u8, card.deck_id, deck.id)) selected_cards += 1;
-    }
-
-    renderMetrics(w, lib.mock.decks.len, lib.mock.flashcards.len, selected_cards) catch return mer.internalError("flashcards render failed");
-    renderLayoutStart(w) catch return mer.internalError("flashcards render failed");
-    for (lib.mock.decks) |d| {
-        renderMockDeckLink(req, w, d, deck.id, now_secs) catch return mer.internalError("flashcards render failed");
-    }
-
-    const safe_title = lib.ui.escapeSafe(req.allocator, deck.title);
-    const safe_desc = lib.ui.escapeSafe(req.allocator, deck.description);
-    renderQueueHeader(w, selected_cards, safe_title, safe_desc, deck.card_count) catch return mer.internalError("flashcards render failed");
-
-    var rendered_cards: usize = 0;
-    for (lib.mock.flashcards) |card| {
-        if (!std.mem.eql(u8, card.deck_id, deck.id)) continue;
-        rendered_cards += 1;
-        renderMockFlashcard(req, w, card, rendered_cards) catch return mer.internalError("flashcards render failed");
-    }
-
-    if (rendered_cards == 0) {
-        w.writeAll("      <div class=\"cp-empty\">This deck does not have generated cards yet.</div>\n") catch return mer.internalError("flashcards render failed");
-    }
-    renderLayoutEnd(w) catch return mer.internalError("flashcards render failed");
-    return lib.m3.privateForSession(req, lib.ui.htmlResponse(buf));
+    try renderPageEnd(w, 0);
 }
 
-fn renderMetrics(w: *std.Io.Writer, deck_total: usize, card_total: usize, selected_cards: usize) !void {
-    try w.writeAll("<section class=\"cp-metric-grid cp-flashcard-metrics\">\n");
-    try metricCard(w, "Decks", deck_total, "generated sets");
-    try metricCard(w, "Cards", card_total, "source-backed prompts");
-    try metricCard(w, "Selected", selected_cards, "in this deck");
-    try w.writeAll("</section>\n");
-}
-
-fn renderLayoutStart(w: *std.Io.Writer) !void {
+fn renderPageStart(w: *std.Io.Writer) !void {
     try w.writeAll(
-        \\<div class="cp-study-layout">
-        \\  <aside class="cp-card cp-deck-panel">
-        \\    <div class="cp-card-title"><span>Decks</span><span>metadata</span></div>
-        \\    <div class="cp-deck-list">
+        \\<div class="flash-page" id="cp-flash-review">
+        \\  <aside class="deck-sidebar surface"><div><p class="eyebrow">Choose a deck</p><h2>Review queue</h2></div><nav aria-label="Flashcard decks">
     );
 }
 
-fn renderQueueHeader(
-    w: *std.Io.Writer,
-    selected_cards: usize,
-    title: []const u8,
-    desc: []const u8,
-    card_count: usize,
-) !void {
+fn renderDeckButton(req: mer.Request, w: *std.Io.Writer, id: []const u8, title: []const u8, module: []const u8, description: []const u8, scope: []const u8, updated_at: []const u8, source_count: usize, total: usize, due: usize, active: bool) !void {
+    const safe_id = lib.ui.escape(req.allocator, lib.m3.safeId(id, "")) catch "";
+    const safe_title = lib.ui.escapeSafe(req.allocator, title);
+    const safe_module = lib.ui.escapeSafe(req.allocator, module);
+    const safe_description = lib.ui.escapeSafe(req.allocator, description);
+    const safe_scope = lib.ui.escapeSafe(req.allocator, scope);
+    const safe_updated = lib.ui.escapeSafe(req.allocator, updated_at);
+    const path = try std.fmt.allocPrint(req.allocator, "/flashcards?deck={s}", .{safe_id});
+    const href = try lib.m3.demoHref(req.allocator, req, path);
+    const cls: []const u8 = if (active) "cp-deck-row active" else "cp-deck-row";
+    const current: []const u8 = if (active) " aria-current=\"true\"" else "";
+    try w.print("<a class=\"{s}\" href=\"{s}\" data-deck-url=\"{s}\" data-description=\"{s}\" data-generation-scope=\"{s}\" data-updated-at=\"{s}\" data-source-count=\"{d}\"{s}><span class=\"deck-glyph\">", .{ cls, href, href, safe_description, safe_scope, safe_updated, source_count, current });
+    try w.writeAll(ICON_LAYERS);
+    try w.print("</span><span><strong>{s}</strong><small>{s} · {d} cards</small></span><b>{d}</b></a>", .{ safe_title, safe_module, total, due });
+}
+
+fn renderDeckFooter(w: *std.Io.Writer, wiki_href: []const u8) !void {
+    try w.print("</nav><a href=\"{s}\">Browse connected wiki ", .{wiki_href});
+    try w.writeAll(ICON_ARROW);
+    try w.writeAll("</a></aside><section class=\"review-stage\">");
+}
+
+fn renderReviewStart(req: mer.Request, w: *std.Io.Writer, module: []const u8, title: []const u8, due: usize) !void {
+    const safe_module = lib.ui.escapeSafe(req.allocator, module);
+    const safe_title = lib.ui.escapeSafe(req.allocator, title);
     try w.print(
-        \\    </div>
-        \\  </aside>
-        \\  <section class="cp-card cp-practice-panel">
-        \\    <div class="cp-card-title"><span>Practice queue</span><span>{d} cards</span></div>
-        \\    <div class="cp-practice-intro">
-        \\      <div>
-        \\        <h2>{s}</h2>
-        \\        <p>{s}</p>
-        \\      </div>
-        \\      <div class="cp-score-panel">
-        \\        <strong>{d}</strong>
-        \\        <small>cards in deck</small>
-        \\      </div>
-        \\    </div>
-        \\    <div class="cp-flashcard-list">
-    , .{ selected_cards, title, desc, card_count });
+        \\<header class="review-progress"><div><span class="status-pill status-info">{s}</span><strong>{s}</strong></div><div><span><b id="cp-reviewed-count">0</b> reviewed</span><div class="review-bar"><i id="cp-review-bar" style="width:0%"></i></div><b>{d} due</b></div></header>
+    , .{ safe_module, safe_title, due });
 }
 
-fn renderLayoutEnd(w: *std.Io.Writer) !void {
-    try w.writeAll(
-        \\    </div>
-        \\  </section>
-        \\</div>
-    );
+fn renderCardShell(req: mer.Request, w: *std.Io.Writer, question: []const u8, answer: []const u8, source: []const u8, page: []const u8, card_id: []const u8, deck_id: []const u8, can_submit: bool) !void {
+    const safe_question = lib.ui.escapeSafe(req.allocator, question);
+    const safe_answer = lib.ui.escapeSafe(req.allocator, answer);
+    const safe_source = lib.ui.escapeSafe(req.allocator, source);
+    const safe_page = lib.ui.escapeSafe(req.allocator, page);
+    const sources_href = try lib.m3.demoHref(req.allocator, req, "/sources");
+    try w.print(
+        \\<article class="flashcard surface" id="cp-flashcard"><div class="card-front"><div class="card-label"><span>Question <b id="cp-card-number">1</b></span><span class="status-pill status-neutral">From your sources</span></div><h2 id="cp-card-question">{s}</h2><p>Think through the invariant, then reveal the evidence-backed answer.</p></div>
+        \\<details id="cp-card-details"><summary class="reveal-button" id="cp-reveal-card" style="list-style:none"><span>Reveal answer</span><small>or press Space</small></summary>
+        \\<div class="card-answer" id="cp-card-answer"><p class="eyebrow">Answer</p><p id="cp-card-answer-text">{s}</p><div class="card-source"><a class="citation" href="{s}"><span>1</span><span id="cp-card-source">{s}</span></a><span id="cp-card-page">{s}</span><a href="{s}">Open context →</a></div></div>
+        \\<div class="rating-panel" id="cp-rating-panel"><p>How well did you recall it?</p>
+    , .{ safe_question, safe_answer, sources_href, safe_source, safe_page, sources_href });
+    if (!can_submit) try w.writeAll("<p class=\"cp-demo-rating-note\" role=\"note\">Demo preview: ratings are disabled and are not saved.</p>");
+    try w.writeAll("<div>");
+    if (can_submit) {
+        try renderRatingForm(req, w, card_id, deck_id, false, 1, "Again", "Needs another look");
+        try renderRatingForm(req, w, card_id, deck_id, true, 2, "Hard", "Low confidence");
+        try renderRatingForm(req, w, card_id, deck_id, true, 3, "Good", "Recalled");
+        try renderRatingForm(req, w, card_id, deck_id, true, 5, "Easy", "Strong recall");
+    } else {
+        try renderRatingButton(w, "Again", "Needs another look");
+        try renderRatingButton(w, "Hard", "Low confidence");
+        try renderRatingButton(w, "Good", "Recalled");
+        try renderRatingButton(w, "Easy", "Strong recall");
+    }
+    try w.writeAll("</div></div></details></article><div class=\"review-hint\" id=\"cp-review-hint\"><span>");
+    try w.writeAll(ICON_KEYBOARD);
+    if (can_submit) {
+        try w.writeAll("</span><p><strong>Keyboard review</strong><small>Space to reveal · 1–4 to advance</small></p></div><div id=\"cp-flash-data\" hidden>");
+    } else {
+        try w.writeAll("</span><p><strong>Keyboard review</strong><small>Space to reveal · ratings disabled in demo</small></p></div><div id=\"cp-flash-data\" hidden>");
+    }
 }
 
-fn firstMockDeckId() []const u8 {
-    if (lib.mock.decks.len == 0) return "";
-    return lib.mock.decks[0].id;
+fn renderRatingForm(req: mer.Request, w: *std.Io.Writer, card_id: []const u8, deck_id: []const u8, correct: bool, confidence: u8, label: []const u8, interval: []const u8) !void {
+    const safe_card = lib.ui.escape(req.allocator, lib.m3.safeId(card_id, "")) catch "";
+    const safe_deck = lib.ui.escape(req.allocator, lib.m3.safeId(deck_id, "")) catch "";
+    try w.print("<form action=\"/api/flashcards/attempt\" method=\"post\" data-flash-rate><input type=\"hidden\" name=\"card_id\" value=\"{s}\"><input type=\"hidden\" name=\"deck_id\" value=\"{s}\"><input type=\"hidden\" name=\"correct\" value=\"{s}\"><input type=\"hidden\" name=\"confidence\" value=\"{d}\"><button type=\"submit\" aria-label=\"{s}\"><span>{s}</span><small>{s}</small></button></form>", .{ safe_card, safe_deck, if (correct) "true" else "false", confidence, label, label, interval });
+}
+
+fn renderRatingButton(w: *std.Io.Writer, label: []const u8, interval: []const u8) !void {
+    try w.print("<button type=\"button\" aria-label=\"{s}\" disabled><span>{s}</span><small>{s}</small></button>", .{ label, label, interval });
+}
+
+fn renderCardData(req: mer.Request, w: *std.Io.Writer, id: []const u8, question: []const u8, answer: []const u8, source: []const u8, page: []const u8, topic: []const u8, citation_ref: []const u8, location: []const u8, source_id: []const u8, source_chunk_id: []const u8, wiki_page_id: []const u8, card_type: []const u8) !void {
+    const values = .{
+        lib.ui.escapeSafe(req.allocator, id),
+        lib.ui.escapeSafe(req.allocator, question),
+        lib.ui.escapeSafe(req.allocator, answer),
+        lib.ui.escapeSafe(req.allocator, source),
+        lib.ui.escapeSafe(req.allocator, page),
+        lib.ui.escapeSafe(req.allocator, topic),
+        lib.ui.escapeSafe(req.allocator, citation_ref),
+        lib.ui.escapeSafe(req.allocator, location),
+        lib.ui.escapeSafe(req.allocator, source_id),
+        lib.ui.escapeSafe(req.allocator, source_chunk_id),
+        lib.ui.escapeSafe(req.allocator, wiki_page_id),
+        lib.ui.escapeSafe(req.allocator, card_type),
+    };
+    try w.print("<span data-card-id=\"{s}\" data-question=\"{s}\" data-answer=\"{s}\" data-source=\"{s}\" data-page=\"{s}\" data-topic=\"{s}\" data-citation-ref=\"{s}\" data-location=\"{s}\" data-source-id=\"{s}\" data-source-chunk-id=\"{s}\" data-wiki-page-id=\"{s}\" data-card-type=\"{s}\"></span>", values);
+}
+
+fn renderPageEnd(w: *std.Io.Writer, reviewed: usize) !void {
+    try w.print(
+        \\</div></section><aside class="review-evidence surface"><p class="eyebrow">Session evidence</p><div class="evidence-stat"><strong id="cp-evidence-reviewed">{d}</strong><span>Cards reviewed</span></div><div class="evidence-stat"><strong id="cp-evidence-recall">{s}</strong><span>Recalled today</span></div><div class="evidence-stat"><strong>—</strong><span>Sources used</span></div><hr><p>Review outcomes stay attached to the topic and source that produced each card.</p></aside></div>
+    , .{ reviewed, if (reviewed > 0) "80%" else "—" });
 }
 
 fn findMockDeck(id: []const u8) ?lib.types.FlashcardDeck {
-    for (lib.mock.decks) |deck| {
-        if (std.mem.eql(u8, deck.id, id)) return deck;
-    }
+    for (lib.mock.decks) |deck| if (std.mem.eql(u8, deck.id, id)) return deck;
     return null;
 }
 
 fn findLiveDeck(decks: []const lib.types.FlashcardDeckResponse, id: []const u8) ?lib.types.FlashcardDeckResponse {
-    for (decks) |deck| {
-        if (std.mem.eql(u8, deck.id, id)) return deck;
-    }
+    for (decks) |deck| if (std.mem.eql(u8, deck.id, id)) return deck;
     return null;
-}
-
-fn metricCard(w: *std.Io.Writer, label: []const u8, value: usize, helper: []const u8) !void {
-    try w.print(
-        \\  <div class="cp-metric-card cp-metric-static">
-        \\    <span class="cp-metric-label">{s}</span>
-        \\    <span class="cp-metric-value">{d}</span>
-        \\    <span class="cp-metric-sub">{s}</span>
-        \\  </div>
-    , .{ label, value, helper });
-}
-
-fn safeToken(raw: []const u8, fallback: []const u8) []const u8 {
-    if (raw.len == 0 or raw.len > 128) return fallback;
-    for (raw) |c| {
-        switch (c) {
-            'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {},
-            else => return fallback,
-        }
-    }
-    return raw;
-}
-
-fn renderLiveDeckLink(
-    req: mer.Request,
-    w: *std.Io.Writer,
-    deck: lib.types.FlashcardDeckResponse,
-    selected_id: []const u8,
-    now_secs: i64,
-) !void {
-    const safe_title = lib.ui.escapeSafe(req.allocator, deck.title);
-    const safe_desc = lib.ui.escapeSafe(req.allocator, deck.description);
-    const safe_deck_id = lib.ui.escape(req.allocator, safeToken(deck.id, "")) catch "";
-    const when = lib.time.formatRelative(req.allocator, deck.updated_at, now_secs) catch "—";
-    const is_selected = std.mem.eql(u8, deck.id, selected_id);
-    const cls: []const u8 = if (is_selected) "cp-deck-row cp-deck-row-active" else "cp-deck-row";
-    const aria_current: []const u8 = if (is_selected) " aria-current=\"true\"" else "";
-
-    try w.print(
-        \\      <a class="{s}" href="/flashcards?deck={s}"{s}>
-        \\        <span>{s}</span>
-        \\        <small>{s}</small>
-        \\        <em>{d} cards · updated {s}</em>
-        \\      </a>
-    , .{ cls, safe_deck_id, aria_current, safe_title, safe_desc, deck.card_count, when });
-}
-
-fn renderMockDeckLink(
-    req: mer.Request,
-    w: *std.Io.Writer,
-    deck: lib.types.FlashcardDeck,
-    selected_id: []const u8,
-    now_secs: i64,
-) !void {
-    const safe_title = lib.ui.escapeSafe(req.allocator, deck.title);
-    const safe_desc = lib.ui.escapeSafe(req.allocator, deck.description);
-    const when = lib.time.formatRelative(req.allocator, deck.updated_at, now_secs) catch "—";
-    const is_selected = std.mem.eql(u8, deck.id, selected_id);
-    const cls: []const u8 = if (is_selected) "cp-deck-row cp-deck-row-active" else "cp-deck-row";
-    const aria_current: []const u8 = if (is_selected) " aria-current=\"true\"" else "";
-    const path = try std.fmt.allocPrint(req.allocator, "/flashcards?deck={s}", .{deck.id});
-    const href = try lib.m3.demoHref(req.allocator, req, path);
-
-    try w.print(
-        \\      <a class="{s}" href="{s}"{s}>
-        \\        <span>{s}</span>
-        \\        <small>{s}</small>
-        \\        <em>{d} cards · updated {s}</em>
-        \\      </a>
-    , .{ cls, href, aria_current, safe_title, safe_desc, deck.card_count, when });
-}
-
-fn renderLiveFlashcard(
-    req: mer.Request,
-    w: *std.Io.Writer,
-    deck_id: []const u8,
-    card: lib.types.FlashcardResponse,
-    index: usize,
-) !void {
-    const safe_question = lib.ui.escapeSafe(req.allocator, card.question);
-    const safe_answer = lib.ui.escapeSafe(req.allocator, card.answer);
-    const safe_topic = lib.ui.escapeSafe(req.allocator, card.topic_tag);
-    const safe_source = lib.ui.escapeSafe(req.allocator, card.source_title);
-    const safe_ref = lib.ui.escapeSafe(req.allocator, card.citation_ref);
-    const safe_card_id = lib.ui.escape(req.allocator, safeToken(card.id, "")) catch "";
-    const safe_deck_id = lib.ui.escape(req.allocator, safeToken(deck_id, "")) catch "";
-
-    try w.print(
-        \\      <article class="cp-flashcard">
-        \\        <div class="cp-flashcard-top">
-        \\          <span>Card {d}</span>
-        \\          <span class="cp-topic-pill">{s}</span>
-        \\        </div>
-        \\        <h3>{s}</h3>
-        \\        <details>
-        \\          <summary>Reveal answer</summary>
-        \\          <p>{s}</p>
-        \\          <a class="cp-citation-card" href="/sources">
-        \\            <span>{s}</span>
-        \\            <small>{s}</small>
-        \\          </a>
-        \\          <div class="cp-review-actions" aria-label="Rate this answer">
-    , .{ index, safe_topic, safe_question, safe_answer, safe_source, safe_ref });
-
-    for (ratings) |rating| {
-        try renderAttemptForm(req, w, safe_card_id, safe_deck_id, rating.correct, rating.confidence, rating.class_name, rating.label);
-    }
-    try w.writeAll(
-        \\          </div>
-        \\        </details>
-        \\      </article>
-    );
-}
-
-fn renderAttemptForm(
-    req: mer.Request,
-    w: *std.Io.Writer,
-    card_id: []const u8,
-    deck_id: []const u8,
-    is_correct: bool,
-    confidence: u8,
-    class_name: []const u8,
-    label: []const u8,
-) !void {
-    const correct_value: []const u8 = if (is_correct) "true" else "false";
-    const safe_card_id = lib.ui.escape(req.allocator, safeToken(card_id, "")) catch "";
-    const safe_deck_id = lib.ui.escape(req.allocator, safeToken(deck_id, "")) catch "";
-    try w.print(
-        \\          <form action="/api/flashcards/attempt" method="post">
-        \\            <input type="hidden" name="card_id" value="{s}">
-        \\            <input type="hidden" name="deck_id" value="{s}">
-        \\            <input type="hidden" name="correct" value="{s}">
-        \\            <input type="hidden" name="confidence" value="{d}">
-        \\            <button class="{s}" type="submit">{s}</button>
-        \\          </form>
-    , .{ safe_card_id, safe_deck_id, correct_value, confidence, class_name, label });
-}
-
-fn renderMockFlashcard(
-    req: mer.Request,
-    w: *std.Io.Writer,
-    card: lib.types.Flashcard,
-    index: usize,
-) !void {
-    const safe_question = lib.ui.escapeSafe(req.allocator, card.question);
-    const safe_answer = lib.ui.escapeSafe(req.allocator, card.answer);
-    const safe_topic = lib.ui.escapeSafe(req.allocator, card.topic);
-    const safe_citation_title = lib.ui.escapeSafe(req.allocator, card.citation.title);
-    const safe_snippet = lib.ui.escapeSafe(req.allocator, card.citation.snippet);
-    const citation_href = if (std.mem.startsWith(u8, card.citation.url, "/")) try lib.m3.demoHref(req.allocator, req, card.citation.url) else card.citation.url;
-
-    try w.print(
-        \\      <article class="cp-flashcard">
-        \\        <div class="cp-flashcard-top">
-        \\          <span>Card {d}</span>
-        \\          <span class="cp-topic-pill">{s}</span>
-        \\        </div>
-        \\        <h3>{s}</h3>
-        \\        <details>
-        \\          <summary>Reveal answer</summary>
-        \\          <p>{s}</p>
-        \\          <a class="cp-citation-card" href="{s}">
-        \\            <span>{s}</span>
-        \\            <small>{s}</small>
-        \\          </a>
-        \\          <p class="cp-demo-rating-note" role="note">Demo preview: ratings are disabled and are not saved.</p>
-        \\          <div class="cp-review-actions" aria-label="Demo ratings unavailable">
-        \\            <button class="cp-btn cp-btn-ghost" type="button" disabled>Again</button>
-        \\            <button class="cp-btn cp-btn-ghost" type="button" disabled>Hard</button>
-        \\            <button class="cp-btn cp-btn-ghost" type="button" disabled>Good</button>
-        \\            <button class="cp-btn cp-btn-primary" type="button" disabled>Easy</button>
-        \\          </div>
-        \\        </details>
-        \\      </article>
-    , .{ index, safe_topic, safe_question, safe_answer, citation_href, safe_citation_title, safe_snippet });
-}
-
-test "flashcard ratings use the supported confidence scale" {
-    try std.testing.expectEqual(@as(usize, 4), ratings.len);
-    try std.testing.expectEqualStrings("Again", ratings[0].label);
-    try std.testing.expect(!ratings[0].correct);
-    try std.testing.expectEqual(@as(u8, 1), ratings[0].confidence);
-    try std.testing.expectEqualStrings("Hard", ratings[1].label);
-    try std.testing.expectEqual(@as(u8, 2), ratings[1].confidence);
-    try std.testing.expectEqualStrings("Good", ratings[2].label);
-    try std.testing.expectEqual(@as(u8, 3), ratings[2].confidence);
-    try std.testing.expectEqualStrings("Easy", ratings[3].label);
-    try std.testing.expectEqual(@as(u8, 5), ratings[3].confidence);
 }

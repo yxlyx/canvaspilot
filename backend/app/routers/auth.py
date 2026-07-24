@@ -37,8 +37,13 @@ def _validate_email(email: str) -> None:
 
 
 def _validate_password(password: str) -> None:
-    if len(password) < 8:
-        raise BadAuthRequestError("weak_password", "Password must be at least 8 characters")
+    has_uppercase = any("A" <= character <= "Z" for character in password)
+    has_number = any("0" <= character <= "9" for character in password)
+    if len(password) < 8 or not has_uppercase or not has_number:
+        raise BadAuthRequestError(
+            "weak_password",
+            "Password must be at least 8 characters and include an uppercase letter and a number",
+        )
 
 
 def _hash_password(password: str) -> str:
@@ -67,7 +72,10 @@ def _verify_password(password: str, encoded: str | None) -> bool:
 
 
 def _token_response(user: User) -> TokenResponse:
-    return TokenResponse(token=create_app_token(user.id), user=UserResponse.model_validate(user))
+    return TokenResponse(
+        token=create_app_token(user.id, user.auth_version or 0),
+        user=UserResponse.model_validate(user),
+    )
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
@@ -95,6 +103,7 @@ async def register(payload: RegisterRequest, request: Request, db: AsyncSession 
     await db.refresh(user)
 
     request.session["user_id"] = str(user.id)
+    request.session["auth_version"] = user.auth_version or 0
     return _token_response(user)
 
 
@@ -111,6 +120,7 @@ async def login(payload: LoginRequest, request: Request, db: AsyncSession = Depe
         )
 
     request.session["user_id"] = str(user.id)
+    request.session["auth_version"] = user.auth_version or 0
     return _token_response(user)
 
 

@@ -118,10 +118,10 @@ pub fn safeSourceHref(raw: []const u8, fallback: []const u8) []const u8 {
     return if (validPublicHost(host)) raw else fallback;
 }
 
-/// Prevent authenticated HTML and API responses from entering shared or
+/// Prevent authenticated and explicit-demo responses from entering shared or
 /// browser caches. Request allocators outlive response serialization.
 pub fn privateForSession(req: mer.Request, response: mer.Response) mer.Response {
-    if (!session.fromRequest(req).isAuthenticated()) return response;
+    if (!session.fromRequest(req).isAuthenticated() and !isExplicitDemo(req)) return response;
     const headers = req.allocator.alloc(std.http.Header, response.headers.len + 2) catch
         return mer.internalError("private response headers failed");
     @memcpy(headers[0..response.headers.len], response.headers);

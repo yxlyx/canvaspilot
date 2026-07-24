@@ -412,3 +412,39 @@ pub const StudyOutputPageResponse = struct { items: []const StudyOutputResponse,
 pub const MarkedPaperPageResponse = struct { items: []const MarkedPaperResponse, next_cursor: ?[]const u8 };
 pub const ProviderDescriptor = struct { id: []const u8, name: []const u8, models: []const []const u8, endpoint: []const u8 };
 pub const ProviderStatusResponse = struct { provider: []const u8, model: []const u8, endpoint: []const u8, status: []const u8, credential: []const u8 = "********", last_tested_at: ?[]const u8, updated_at: []const u8 };
+pub const UserPreferenceResponse = struct {
+    theme: []const u8,
+    motion_preference: []const u8,
+    default_module_id: ?[]const u8,
+    daily_review_target: usize,
+    reminder_daily_review: bool,
+    reminder_processing_attention: bool,
+    reminder_paper_review: bool,
+    reminder_health_attention: bool,
+    updated_at: []const u8,
+};
+pub const NotificationResponse = struct {
+    id: []const u8,
+    kind: []const u8,
+    title: []const u8,
+    body: []const u8,
+    href: []const u8,
+    created_at: []const u8,
+    read_at: ?[]const u8,
+};
+pub const NotificationPageResponse = struct {
+    items: []const NotificationResponse,
+    unread_count: usize,
+};
+pub const NotificationCountResponse = struct { unread_count: usize };
+pub const ActivityEntryResponse = struct {
+    id: []const u8,
+    event_type: []const u8,
+    category: []const u8,
+    title: []const u8,
+    summary: []const u8,
+    href: []const u8,
+    resource_id: ?[]const u8,
+    created_at: []const u8,
+    revision_number: ?usize = null,
+};

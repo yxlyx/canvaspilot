@@ -1,13 +1,9 @@
-// app/index.zig — landing page. Authenticated users get sent straight to the
-// dashboard so the root URL feels like a real app, not a marketing page.
-
-const std = @import("std");
 const mer = @import("mer");
 const lib = @import("lib");
 
 pub const meta: mer.Meta = .{
     .title = "Home",
-    .description = "A student workspace for source-backed study notes, Q&A, and flashcards.",
+    .description = "Turn course sources into a cited wiki, grounded answers, and useful review.",
 };
 
 pub fn render(req: mer.Request) mer.Response {
@@ -16,101 +12,62 @@ pub fn render(req: mer.Request) mer.Response {
     }
 
     const body =
-        \\<div class="cp-dotgrid"><canvas id="cp-dots"></canvas></div>
-        \\<section class="cp-hero">
-        \\  <div class="cp-hero-copy">
-        \\    <div class="cp-hero-badge">Student course workspace</div>
-        \\    <h1 class="cp-hero-title">Turn course material into a <em>study OS.</em></h1>
-        \\    <p class="cp-hero-sub">
-        \\      Collect sources, compile wiki notes, ask cited questions, and practise
-        \\      flashcards from one workspace built for revision.
-        \\    </p>
-        \\    <div class="cp-hero-actions">
-        \\      <a class="cp-btn cp-btn-primary" href="/login">Sign in</a>
-        \\      <a class="cp-btn cp-btn-ghost" href="/dashboard?mock=1">View demo data</a>
-        \\    </div>
-        \\  </div>
-        \\  <div class="cp-hero-panel" aria-label="Illustrative WikiBase workflow preview">
-        \\    <div class="cp-demo-label" role="note">Illustrative example · not live workspace data</div>
-        \\    <div class="cp-course-card">
-        \\      <div class="cp-course-top">
-        \\        <div>
-        \\          <div class="cp-course-code">CS2030S</div>
-        \\          <div class="cp-course-name">Programming Methodology</div>
-        \\        </div>
-        \\        <span class="cp-course-pill">Ready</span>
+        \\<main class="wb-landing" id="main" tabindex="-1">
+        \\  <section class="wb-hero">
+        \\    <header class="wb-marketing-nav">
+        \\      <a class="wb-brand" href="/"><span>W</span><strong>WikiBase</strong></a>
+        \\      <nav aria-label="Marketing navigation"><a href="#workflow">Workflow</a><a href="#evidence">Evidence</a><a href="#study">Study</a></nav>
+        \\      <div class="wb-marketing-actions">
+        \\        <button class="wb-theme-toggle" type="button" data-cp-theme-toggle aria-label="Switch to dark mode" title="Switch colour theme"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3a6 6 0 1 0 9 9 9 9 0 1 1-9-9Z"/></svg></button>
+        \\        <a href="/login">Sign in</a><a class="wb-button wb-button-dark wb-button-small" href="/login?mode=signup">Build your wiki</a>
         \\      </div>
-        \\      <div class="cp-course-progress"><span></span></div>
-        \\      <div class="cp-flow-list">
-        \\        <div class="cp-flow-row">
-        \\          <span class="cp-flow-dot"></span>
-        \\          <span class="cp-flow-label">Indexed source library</span>
-        \\          <span class="cp-flow-meta">18 chunks</span>
-        \\        </div>
-        \\        <div class="cp-flow-row">
-        \\          <span class="cp-flow-dot"></span>
-        \\          <span class="cp-flow-label">Generated wiki pages</span>
-        \\          <span class="cp-flow-meta">4 pages</span>
-        \\        </div>
-        \\        <div class="cp-flow-row">
-        \\          <span class="cp-flow-dot"></span>
-        \\          <span class="cp-flow-label">Cited Q&amp;A ready</span>
-        \\          <span class="cp-flow-meta">grounded</span>
-        \\        </div>
-        \\        <div class="cp-flow-row">
-        \\          <span class="cp-flow-dot"></span>
-        \\          <span class="cp-flow-label">Flashcard practice queue</span>
-        \\          <span class="cp-flow-meta">12 cards</span>
-        \\        </div>
+        \\    </header>
+        \\    <div class="wb-hero-copy">
+        \\      <p class="wb-eyebrow">A quieter way to master a module</p>
+        \\      <h1>Your course knowledge, built to last.</h1>
+        \\      <p>WikiBase turns the material you already have into a connected, cited study space you can trust.</p>
+        \\      <div><a class="wb-button wb-button-dark" href="/login?mode=signup">Start with your sources <span aria-hidden="true">↗</span></a><a class="wb-button wb-button-ghost" href="/dashboard?mock=1">View the prototype</a></div>
+        \\    </div>
+        \\    <div class="wb-hero-stage">
+        \\      <div class="wb-product-screen wb-product-screen-hero">
+        \\        <div class="wb-screen-bar"><span aria-hidden="true"><i></i><i></i><i></i></span><b>Illustrative student workspace</b><em>WikiBase</em></div>
+        \\        <div class="wb-screen-viewport"><img class="wb-theme-shot wb-theme-shot-light" src="/media/product-dashboard-light.png" alt="WikiBase student workspace dashboard" width="1440" height="900"><img class="wb-theme-shot wb-theme-shot-dark" src="/media/product-dashboard-dark.png" alt="" width="1440" height="900"></div>
         \\      </div>
         \\    </div>
-        \\  </div>
-        \\</section>
-        \\<section class="cp-feature-strip" aria-label="Product flow">
-        \\  <article class="cp-feature-card">
-        \\    <div class="cp-feature-icon">1</div>
-        \\    <div class="cp-feature-title">Source library</div>
-        \\    <p class="cp-feature-copy">Keep notes, briefs, links, and readings in one place.</p>
-        \\  </article>
-        \\  <article class="cp-feature-card">
-        \\    <div class="cp-feature-icon">2</div>
-        \\    <div class="cp-feature-title">Cited wiki</div>
-        \\    <p class="cp-feature-copy">Compile Markdown pages that stay traceable to source material.</p>
-        \\  </article>
-        \\  <article class="cp-feature-card">
-        \\    <div class="cp-feature-icon">3</div>
-        \\    <div class="cp-feature-title">Grounded Q&amp;A</div>
-        \\    <p class="cp-feature-copy">Ask questions and keep citations visible beside every answer.</p>
-        \\  </article>
-        \\  <article class="cp-feature-card">
-        \\    <div class="cp-feature-icon">4</div>
-        \\    <div class="cp-feature-title">Practice loop</div>
-        \\    <p class="cp-feature-copy">Review flashcards and build evidence for weak-topic checks.</p>
-        \\  </article>
-        \\</section>
-        \\<script>
-        \\(function(){
-        \\  var c=document.getElementById('cp-dots');if(!c)return;
-        \\  var ctx=c.getContext('2d'),dpr=Math.max(1,Math.min(2,window.devicePixelRatio||1));
-        \\  var W=0,Hh=0,gap=26,cols=0,rows=0,mx=-1e4,my=-1e4,tx=-1e4,ty=-1e4,R=150,L=0,T=0;
-        \\  function resize(){var r=c.getBoundingClientRect();L=r.left;T=r.top;W=r.width;Hh=r.height;c.width=W*dpr;c.height=Hh*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);cols=Math.ceil(W/gap)+1;rows=Math.ceil(Hh/gap)+1;}
-        \\  addEventListener('resize',resize);
-        \\  addEventListener('pointermove',function(e){if(e.clientX<L){tx=-1e4;ty=-1e4;return;}tx=e.clientX-L;ty=e.clientY-T;});
-        \\  addEventListener('pointerleave',function(){tx=-1e4;ty=-1e4;});
-        \\  function frame(){
-        \\    mx+=(tx-mx)*0.12;my+=(ty-my)*0.12;
-        \\    ctx.clearRect(0,0,W,Hh);
-        \\    for(var j=0;j<rows;j++)for(var i=0;i<cols;i++){
-        \\      var x=i*gap,y=j*gap,dx=x-mx,dy=y-my,d=Math.hypot(dx,dy),t=d<R?1-d/R:0;t*=t;
-        \\      var ox=0,oy=0;if(t>0){var f=t*10/(d||1);ox=dx*f;oy=dy*f;}
-        \\      var rr=(150+82*t)|0,gg=(140-24*t)|0,bb=(125-96*t)|0,a=0.15+0.72*t,rad=1.2+2.6*t;
-        \\      ctx.beginPath();ctx.arc(x+ox,y+oy,rad,0,6.2832);ctx.fillStyle='rgba('+rr+','+gg+','+bb+','+a+')';ctx.fill();
-        \\    }
-        \\    requestAnimationFrame(frame);
-        \\  }
-        \\  resize();frame();
-        \\})();
-        \\</script>
+        \\    <p class="wb-hero-note"><span>Your whole module in view</span><span>Every answer tied to evidence</span></p>
+        \\  </section>
+        \\  <section class="wb-promises" aria-label="How WikiBase helps">
+        \\    <article><span>01</span><div><h2>Bring the evidence</h2><p>Keep slides, readings, links, and notes in one source library.</p></div></article>
+        \\    <article><span>02</span><div><h2>Build understanding</h2><p>Move through a connected wiki with every claim tied back to its source.</p></div></article>
+        \\    <article><span>03</span><div><h2>Strengthen recall</h2><p>Ask grounded questions and review flashcards without losing context.</p></div></article>
+        \\  </section>
+        \\  <section class="wb-landscape">
+        \\    <img src="/media/landscape-beginning-dithered.png" alt="Broken classical academy in a lush landscape at dawn" width="1600" height="1000">
+        \\    <div><p class="wb-eyebrow">A place to begin</p><h2>Scattered material can still become a structure.</h2></div>
+        \\  </section>
+        \\  <section id="workflow" class="wb-editorial wb-feature-pair">
+        \\    <div class="wb-editorial-copy"><p class="wb-eyebrow">Begin with what is true</p><h2>A source library that keeps its bearings.</h2><p>See what has been indexed, what is still processing, and which pieces of your wiki each source supports.</p><a class="wb-arrow-link" href="/sources">Explore the source library <span aria-hidden="true">→</span></a></div>
+        \\    <div class="wb-product-screen wb-product-screen-right"><div class="wb-screen-bar"><span aria-hidden="true"><i></i><i></i><i></i></span><b>Source library</b><em>WikiBase</em></div><div class="wb-screen-viewport"><img class="wb-theme-shot wb-theme-shot-light" src="/media/product-sources-light.png" alt="WikiBase source library with document previews" width="1440" height="900"><img class="wb-theme-shot wb-theme-shot-dark" src="/media/product-sources-dark.png" alt="" width="1440" height="900"></div></div>
+        \\  </section>
+        \\  <section class="wb-landscape"><img src="/media/landscape-progress-dithered.png" alt="Partially restored classical academy in the same landscape" width="1600" height="1000"><div><p class="wb-eyebrow">Understanding compounds</p><h2>Every connection repairs the whole.</h2></div></section>
+        \\  <section id="evidence" class="wb-editorial wb-evidence">
+        \\    <div class="wb-section-heading"><p class="wb-eyebrow">Trace every idea</p><h2>Read, ask, and verify without breaking your flow.</h2></div>
+        \\    <div class="wb-screenshot-grid">
+        \\      <article><div><span class="wb-step-chip">Wiki</span><h3>Knowledge that stays connected.</h3></div><div class="wb-product-screen"><div class="wb-screen-bar"><span aria-hidden="true"><i></i><i></i><i></i></span><b>Generated wiki</b><em>WikiBase</em></div><div class="wb-screen-viewport"><img class="wb-theme-shot wb-theme-shot-light" src="/media/product-wiki-light.png" alt="WikiBase generated wiki" width="1440" height="900"><img class="wb-theme-shot wb-theme-shot-dark" src="/media/product-wiki-dark.png" alt="" width="1440" height="900"></div></div></article>
+        \\      <article><div><span class="wb-step-chip">Ask</span><h3>Answers that show their work.</h3></div><div class="wb-product-screen wb-product-screen-right"><div class="wb-screen-bar"><span aria-hidden="true"><i></i><i></i><i></i></span><b>Cited Q&amp;A</b><em>WikiBase</em></div><div class="wb-screen-viewport"><img class="wb-theme-shot wb-theme-shot-light" src="/media/product-chat-light.png" alt="WikiBase cited question and answer workspace" width="1440" height="900"><img class="wb-theme-shot wb-theme-shot-dark" src="/media/product-chat-dark.png" alt="" width="1440" height="900"></div></div></article>
+        \\    </div>
+        \\  </section>
+        \\  <section class="wb-landscape"><img src="/media/landscape-completion-dithered.png" alt="Fully restored classical academy in the same grand landscape" width="1600" height="1000"><div><p class="wb-eyebrow">A stronger structure</p><h2>What you tend becomes what you know.</h2></div></section>
+        \\  <section id="study" class="wb-editorial wb-study">
+        \\    <div class="wb-section-heading"><p class="wb-eyebrow">Study with evidence</p><h2>Turn understanding into something you can recall.</h2></div>
+        \\    <div class="wb-study-grid">
+        \\      <div class="wb-product-screen"><div class="wb-screen-bar"><span aria-hidden="true"><i></i><i></i><i></i></span><b>Flashcard review</b><em>WikiBase</em></div><div class="wb-screen-viewport"><img class="wb-theme-shot wb-theme-shot-light" src="/media/product-flashcards-light.png" alt="WikiBase flashcard review" width="1440" height="900"><img class="wb-theme-shot wb-theme-shot-dark" src="/media/product-flashcards-dark.png" alt="" width="1440" height="900"></div></div>
+        \\      <div class="wb-product-screen wb-product-screen-right wb-product-screen-lifted"><div class="wb-screen-bar"><span aria-hidden="true"><i></i><i></i><i></i></span><b>Learning progress</b><em>WikiBase</em></div><div class="wb-screen-viewport"><img class="wb-theme-shot wb-theme-shot-light" src="/media/product-dashboard-light.png" alt="WikiBase learning progress dashboard" width="1440" height="900"><img class="wb-theme-shot wb-theme-shot-dark" src="/media/product-dashboard-dark.png" alt="" width="1440" height="900"></div></div>
+        \\    </div>
+        \\  </section>
+        \\  <section class="wb-closing"><a class="wb-brand" href="/"><span>W</span><strong>WikiBase</strong></a><h2>Build a knowledge base worthy of the work.</h2><p>Start with one module. Keep every source close. Let the structure grow.</p><a class="wb-button wb-button-light" href="/login?mode=signup">Enter WikiBase <span aria-hidden="true">↗</span></a></section>
+        \\  <footer class="wb-footer"><p>WikiBase · Source-grounded study</p><div><a href="/sources">Sources</a><a href="/wiki">Wiki</a><a href="/chat">Ask</a><a href="/flashcards">Flashcards</a></div></footer>
+        \\</main>
     ;
     return mer.html(body);
 }

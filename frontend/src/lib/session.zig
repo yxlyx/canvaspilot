@@ -63,6 +63,22 @@ pub fn clearCookie() mer.SetCookie {
     return buildCookie(cfg.session_cookie, "", 0, cfg.public_origin);
 }
 
+pub fn themeCookie(preference: []const u8) mer.SetCookie {
+    const cfg = config.load();
+    const safe = if (std.mem.eql(u8, preference, "light") or std.mem.eql(u8, preference, "dark") or std.mem.eql(u8, preference, "system")) preference else "system";
+    var cookie = buildCookie("wb_theme_preference", safe, 365 * 24 * 3600, cfg.public_origin);
+    cookie.http_only = false;
+    return cookie;
+}
+
+pub fn motionCookie(preference: []const u8) mer.SetCookie {
+    const cfg = config.load();
+    const safe = if (std.mem.eql(u8, preference, "reduce")) preference else "system";
+    var cookie = buildCookie("wb_motion_preference", safe, 365 * 24 * 3600, cfg.public_origin);
+    cookie.http_only = false;
+    return cookie;
+}
+
 test "session cookies fail secure except explicit loopback HTTP" {
     try std.testing.expect(secureForOrigin(null));
     try std.testing.expect(secureForOrigin("https://study.example"));
@@ -80,6 +96,16 @@ test "session cookies fail secure except explicit loopback HTTP" {
     var loopback_buffer: [256]u8 = undefined;
     const loopback = buildCookie("cp_session", "token", 3600, "http://127.0.0.1:3000").headerValue(&loopback_buffer);
     try std.testing.expect(std.mem.indexOf(u8, loopback, "; Secure") == null);
+
+    var theme_buffer: [256]u8 = undefined;
+    const theme = themeCookie("dark").headerValue(&theme_buffer);
+    try std.testing.expect(std.mem.indexOf(u8, theme, "wb_theme_preference=dark") != null);
+    try std.testing.expect(std.mem.indexOf(u8, theme, "; HttpOnly") == null);
+
+    var motion_buffer: [256]u8 = undefined;
+    const motion = motionCookie("reduce").headerValue(&motion_buffer);
+    try std.testing.expect(std.mem.indexOf(u8, motion, "wb_motion_preference=reduce") != null);
+    try std.testing.expect(std.mem.indexOf(u8, motion, "; HttpOnly") == null);
 }
 
 /// Redirect anonymous users to /login. Page handlers wrap their work in

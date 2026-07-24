@@ -9,17 +9,23 @@ from app.config import get_settings
 from app.db.database import init_db
 from app.exceptions import WikiBaseError, wikibase_error_handler
 from app.routers import (
+    account,
+    activity,
     auth,
     chat,
     flashcards,
     ingestion_jobs,
     m3,
     modules,
+    notifications,
     search,
     sources,
     sync,
     tasks,
     wiki,
+)
+from app.routers import (
+    settings as settings_router,
 )
 
 settings = get_settings()
@@ -87,6 +93,10 @@ app.add_middleware(
 app.add_exception_handler(WikiBaseError, wikibase_error_handler)
 
 app.include_router(auth.router, prefix="/api")
+app.include_router(account.router, prefix="/api")
+app.include_router(settings_router.router, prefix="/api")
+app.include_router(notifications.router, prefix="/api")
+app.include_router(activity.router, prefix="/api")
 app.include_router(modules.router, prefix="/api")
 app.include_router(sources.router, prefix="/api")
 app.include_router(search.router, prefix="/api")

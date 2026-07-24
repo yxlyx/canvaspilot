@@ -25,9 +25,10 @@ class DummyDB:
         self.user = user
         self.added = None
         self.committed = False
+        self.statement = None
 
     async def execute(self, statement):
-        _ = statement
+        self.statement = statement
         return DummyResult(self.user)
 
     def add(self, user):
@@ -73,13 +74,16 @@ def make_user(user_id: uuid.UUID) -> User:
 async def test_get_current_user_with_bearer_token(settings: Settings, monkeypatch):
     user_id = uuid.uuid4()
     user = make_user(user_id)
+    db = DummyDB(user)
     monkeypatch.setattr(dependencies, "get_settings", lambda: settings)
     token = dependencies.create_app_token(user_id)
     request = make_request(headers=[(b"authorization", f"Bearer {token}".encode())])
 
-    result = await dependencies.get_current_user(request, DummyDB(user))
+    result = await dependencies.get_current_user(request, db)
 
     assert result is user
+    assert db.statement._with_options[0].strategy == (("lazy", "raise"),)
+    assert db.statement._with_options[0].path == ("relationship:_sa_default",)
 
 
 @pytest.mark.asyncio
@@ -128,13 +132,63 @@ async def test_get_current_user_rejects_malformed_bearer(settings: Settings, mon
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("subject", "version"),
+    [
+        ("not-a-uuid", 0),
+        (str(uuid.uuid4()), "not-a-number"),
+        (str(uuid.uuid4()), None),
+    ],
+)
+async def test_get_current_user_rejects_malformed_signed_claims(
+    settings: Settings, monkeypatch, subject, version
+):
+    monkeypatch.setattr(dependencies, "get_settings", lambda: settings)
+    token = jwt.encode(
+        {"sub": subject, "ver": version, "exp": datetime.now(UTC) + timedelta(minutes=5)},
+        settings.session_secret,
+        algorithm=dependencies.JWT_ALGORITHM,
+    )
+
+    with pytest.raises(UnauthorizedError):
+        await dependencies.get_current_user(
+            make_request(headers=[(b"authorization", f"Bearer {token}".encode())]),
+            DummyDB(None),
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_rejects_malformed_session_claims():
+    with pytest.raises(UnauthorizedError):
+        await dependencies.get_current_user(
+            make_request(session={"user_id": "not-a-uuid", "auth_version": "invalid"}),
+            DummyDB(None),
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_rejects_revoked_token_version(settings: Settings, monkeypatch):
+    user_id = uuid.uuid4()
+    user = make_user(user_id)
+    user.auth_version = 2
+    monkeypatch.setattr(dependencies, "get_settings", lambda: settings)
+    token = dependencies.create_app_token(user_id, auth_version=1)
+
+    with pytest.raises(UnauthorizedError):
+        await dependencies.get_current_user(
+            make_request(headers=[(b"authorization", f"Bearer {token}".encode())]),
+            DummyDB(user),
+        )
+
+
+@pytest.mark.asyncio
 async def test_register_creates_user_and_token(settings: Settings, monkeypatch):
     monkeypatch.setattr(dependencies, "get_settings", lambda: settings)
     request = make_request()
     db = DummyDB(None)
 
     result = await register(
-        RegisterRequest(name="Demo User", email="DEMO@Example.COM ", password="password123"),
+        RegisterRequest(name="Demo User", email="DEMO@Example.COM ", password="Password123"),
         request,
         db,
     )
@@ -144,7 +198,7 @@ async def test_register_creates_user_and_token(settings: Settings, monkeypatch):
     assert result.user.canvas_user_id is None
     assert result.token
     assert db.committed is True
-    assert db.added.password_hash != "password123"
+    assert db.added.password_hash != "Password123"
     assert request.session["user_id"] == str(result.user.id)
 
 
@@ -154,7 +208,7 @@ async def test_register_rejects_duplicate_email():
 
     with pytest.raises(BadAuthRequestError) as exc:
         await register(
-            RegisterRequest(name="Demo User", email="test@example.com", password="password123"),
+            RegisterRequest(name="Demo User", email="test@example.com", password="Password123"),
             make_request(),
             db,
         )
@@ -176,19 +230,33 @@ async def test_register_rejects_short_password():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("password", ["password123", "PasswordOnly"])
+async def test_register_requires_uppercase_and_number(password):
+    with pytest.raises(BadAuthRequestError) as exc:
+        await register(
+            RegisterRequest(name="Demo User", email="demo@example.com", password=password),
+            make_request(),
+            DummyDB(None),
+        )
+
+    assert exc.value.error == "weak_password"
+    assert "uppercase letter and a number" in exc.value.detail
+
+
+@pytest.mark.asyncio
 async def test_login_accepts_correct_password(settings: Settings, monkeypatch):
     monkeypatch.setattr(dependencies, "get_settings", lambda: settings)
     db = DummyDB(None)
     request = make_request()
     created = await register(
-        RegisterRequest(name="Demo User", email="demo@example.com", password="password123"),
+        RegisterRequest(name="Demo User", email="demo@example.com", password="Password123"),
         request,
         db,
     )
 
     login_request = make_request()
     result = await login(
-        LoginRequest(email="demo@example.com", password="password123"),
+        LoginRequest(email="demo@example.com", password="Password123"),
         login_request,
         db,
     )
@@ -202,7 +270,7 @@ async def test_login_accepts_correct_password(settings: Settings, monkeypatch):
 async def test_login_rejects_wrong_password():
     db = DummyDB(None)
     await register(
-        RegisterRequest(name="Demo User", email="demo@example.com", password="password123"),
+        RegisterRequest(name="Demo User", email="demo@example.com", password="Password123"),
         make_request(),
         db,
     )

@@ -14,6 +14,7 @@ from app.models.m3 import (
     WikiRevision,
 )
 from app.models.module import Announcement, Assignment, Module
+from app.models.settings import InAppNotification, UserPreference
 from app.models.source import Source
 from app.models.source_chunk import SourceChunk
 from app.models.task import Task
@@ -46,4 +47,6 @@ __all__ = [
     "MarkedPaper",
     "MarkedPaperQuestion",
     "ProviderSetting",
+    "UserPreference",
+    "InAppNotification",
 ]

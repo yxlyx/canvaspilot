@@ -7,6 +7,7 @@ const SourceCreate = struct {
     origin: []const u8,
     title: []const u8,
     source_url: []const u8 = "",
+    course_context: ?[]const u8 = null,
 };
 
 fn validSourceType(value: []const u8) bool {
