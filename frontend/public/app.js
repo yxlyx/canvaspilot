@@ -459,14 +459,14 @@
       const submit = addForm.querySelector('button[type="submit"]');
       const title = (document.getElementById("cp-new-source-title") || {}).value || "";
       const url = (document.getElementById("cp-new-source-url") || {}).value || "";
-      const origin = (document.getElementById("cp-new-source-module") || {}).value || "Workspace";
+      const courseContext = (document.getElementById("cp-new-source-module") || {}).value || "";
       if (submit) submit.disabled = true;
       if (statusNode) statusNode.textContent = "Adding source…";
       try {
         const response = await fetch(addForm.action, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ source_type: "link", origin: origin.trim(), title: title.trim(), source_url: url.trim() }),
+          body: JSON.stringify({ source_type: "link", origin: "web", title: title.trim(), source_url: url.trim(), course_context: courseContext.trim() }),
         });
         if (!response.ok) throw new Error(response.status === 401 ? "Your session has expired. Sign in and try again." : "The source could not be added. Check the link and try again.");
         if (statusNode) statusNode.textContent = "Source saved as metadata. Ingestion has not started.";

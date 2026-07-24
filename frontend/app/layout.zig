@@ -53,7 +53,7 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
     w.writeAll(
         \\<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=wikibase-5">
         \\<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=wikibase-3">
-        \\<script>document.documentElement.classList.add('js');try{var c=document.cookie.match(/(?:^|;\\s*)wb_theme_preference=([^;]+)/),p=c?decodeURIComponent(c[1]):localStorage.getItem('wikibase-theme-preference'),t=localStorage.getItem('wikibase-theme');document.documentElement.dataset.theme=p==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):(p||t||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'))}catch(e){}</script>
+        \\<script>document.documentElement.classList.add('js');try{var c=document.cookie.match(/(?:^|;\\s*)wb_theme_preference=([^;]+)/),p=c?decodeURIComponent(c[1]):localStorage.getItem('wikibase-theme-preference'),t=localStorage.getItem('wikibase-theme'),m=document.cookie.match(/(?:^|;\\s*)wb_motion_preference=([^;]+)/),r=m?decodeURIComponent(m[1]):localStorage.getItem('wikibase-motion-preference');document.documentElement.dataset.theme=p==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):(p||t||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'));document.documentElement.dataset.motion=r==='reduce'?'reduce':'system'}catch(e){}</script>
         \\<style>
     ) catch return body;
     w.writeAll(CSS) catch return body;
@@ -64,7 +64,7 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
             w.writeAll("\n") catch {};
         }
     }
-    w.writeAll("<script defer src=\"/app.js?v=wikibase-11\"></script></head><body><a class=\"cp-skip\" href=\"#main\">Skip to content</a>\n") catch return body;
+    w.writeAll("<script defer src=\"/app.js?v=wikibase-12\"></script></head><body><a class=\"cp-skip\" href=\"#main\">Skip to content</a>\n") catch return body;
 
     if (standalone) {
         if (!std.mem.eql(u8, path, "/") and !reader_page) {

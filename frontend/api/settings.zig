@@ -36,6 +36,28 @@ fn mediaType(value_: []const u8) []const u8 {
     return std.mem.trim(u8, value_[0..end], " \t");
 }
 
+fn archiveDisposition(allocator: std.mem.Allocator, content_type: ?[]const u8, disposition: ?[]const u8, body: []const u8) ?[]const u8 {
+    if (!std.ascii.eqlIgnoreCase(mediaType(content_type orelse ""), "application/zip")) return null;
+    if (body.len < 4 or body[0] != 'P' or body[1] != 'K' or !((body[2] == 3 and body[3] == 4) or (body[2] == 5 and body[3] == 6) or (body[2] == 7 and body[3] == 8))) return null;
+    const raw = disposition orelse return null;
+    if (raw.len > 512 or std.mem.indexOfAny(u8, raw, "\r\n") != null) return null;
+    var fields = std.mem.splitScalar(u8, raw, ';');
+    if (!std.ascii.eqlIgnoreCase(std.mem.trim(u8, fields.first(), " \t"), "attachment")) return null;
+    while (fields.next()) |field| {
+        const trimmed = std.mem.trim(u8, field, " \t");
+        if (trimmed.len < 9 or !std.ascii.eqlIgnoreCase(trimmed[0..9], "filename=")) continue;
+        var filename = std.mem.trim(u8, trimmed[9..], " \t");
+        if (filename.len >= 2 and filename[0] == '"' and filename[filename.len - 1] == '"') filename = filename[1 .. filename.len - 1];
+        if (filename.len == 0 or filename.len > 255) return null;
+        for (filename) |c| switch (c) {
+            'a'...'z', 'A'...'Z', '0'...'9', '.', '_', '-' => {},
+            else => return null,
+        };
+        return std.fmt.allocPrint(allocator, "attachment; filename=\"{s}\"", .{filename}) catch null;
+    }
+    return null;
+}
+
 fn safeSegment(segment: []const u8) bool {
     if (segment.len == 0 or segment.len > 128) return false;
     for (segment) |c| switch (c) {
@@ -82,6 +104,7 @@ pub fn render(req: mer.Request) mer.Response {
     var session_ending = false;
     var download = false;
     var saved_theme: ?[]const u8 = null;
+    var saved_motion: ?[]const u8 = null;
 
     if (std.mem.eql(u8, action, "profile.update")) {
         const name = value(req, "name") orelse return reject(req, "enter a display name");
@@ -110,8 +133,10 @@ pub fn render(req: mer.Request) mer.Response {
         if (value(req, "theme")) |theme| {
             if (!std.mem.eql(u8, theme, "system") and !std.mem.eql(u8, theme, "light") and !std.mem.eql(u8, theme, "dark")) return reject(req, "choose a valid theme");
             const motion = value(req, "motion_preference") orelse return reject(req, "choose a motion preference");
+            if (!std.mem.eql(u8, motion, "system") and !std.mem.eql(u8, motion, "reduce")) return reject(req, "choose a valid motion preference");
             payload = stringify(req.allocator, Appearance{ .theme = theme, .motion_preference = motion });
             saved_theme = theme;
+            saved_motion = motion;
         } else {
             const target_raw = value(req, "daily_review_target") orelse return reject(req, "enter a review target");
             const target = std.fmt.parseInt(usize, target_raw, 10) catch return reject(req, "review target must be a number");
@@ -150,8 +175,9 @@ pub fn render(req: mer.Request) mer.Response {
     if (result.status == 401) return clearSession(req, if (wantsJson(req)) .{ .status = .unauthorized, .content_type = .json, .body = result.body } else mer.redirect("/login?reason=session_expired", .see_other));
     if (result.status < 200 or result.status >= 300) return if (wantsJson(req)) .{ .status = @enumFromInt(result.status), .content_type = .json, .body = result.body } else redirectTarget(req, false);
     if (download) {
+        const disposition = archiveDisposition(req.allocator, result.content_type, result.content_disposition, result.body) orelse return .{ .status = .bad_gateway, .content_type = .json, .body = "{\"error\":\"invalid account archive response\"}" };
         const headers = req.allocator.alloc(std.http.Header, 2) catch return mer.internalError("download headers failed");
-        headers[0] = .{ .name = "content-disposition", .value = result.content_disposition orelse "attachment; filename=wikibase-account.zip" };
+        headers[0] = .{ .name = "content-disposition", .value = disposition };
         headers[1] = .{ .name = "x-content-type-options", .value = "nosniff" };
         return .{ .status = .ok, .content_type = .zip, .body = result.body, .headers = headers };
     }
@@ -160,10 +186,26 @@ pub fn render(req: mer.Request) mer.Response {
         .{ .status = .ok, .content_type = .json, .body = if (result.body.len > 0) result.body else "{\"ok\":true}" }
     else
         redirectTarget(req, true);
-    if (saved_theme) |theme| {
-        const cookies = req.allocator.alloc(mer.SetCookie, 1) catch return response;
-        cookies[0] = lib.session.themeCookie(theme);
+    const cookie_count: usize = @intFromBool(saved_theme != null) + @intFromBool(saved_motion != null);
+    if (cookie_count > 0) {
+        const cookies = req.allocator.alloc(mer.SetCookie, cookie_count) catch return response;
+        var index: usize = 0;
+        if (saved_theme) |theme| {
+            cookies[index] = lib.session.themeCookie(theme);
+            index += 1;
+        }
+        if (saved_motion) |motion| cookies[index] = lib.session.motionCookie(motion);
         response = mer.withCookies(response, cookies);
     }
     return response;
+}
+
+test "account archives require ZIP content and an attachment filename" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    try std.testing.expectEqualStrings("attachment; filename=\"wikibase-account.zip\"", archiveDisposition(allocator, "application/zip; charset=binary", "attachment; filename=wikibase-account.zip", "PK\x05\x06empty").?);
+    try std.testing.expect(archiveDisposition(allocator, "text/html", "attachment; filename=wikibase-account.zip", "<html>login</html>") == null);
+    try std.testing.expect(archiveDisposition(allocator, "application/zip", null, "PK\x03\x04archive") == null);
+    try std.testing.expect(archiveDisposition(allocator, "application/zip", "inline; filename=wikibase-account.zip", "PK\x03\x04archive") == null);
 }

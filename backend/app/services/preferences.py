@@ -1,6 +1,7 @@
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.exceptions import NotFoundError
@@ -15,12 +16,14 @@ async def get_preferences(user: User, db: AsyncSession) -> UserPreference:
 
 
 async def get_preferences_by_user_id(user_id: uuid.UUID, db: AsyncSession) -> UserPreference:
-    preferences = await db.get(UserPreference, user_id)
+    await db.execute(
+        insert(UserPreference)
+        .values(user_id=user_id)
+        .on_conflict_do_nothing(index_elements=[UserPreference.user_id])
+    )
+    preferences = await db.scalar(select(UserPreference).where(UserPreference.user_id == user_id))
     if preferences is None:
-        preferences = UserPreference(user_id=user_id)
-        db.add(preferences)
-        await db.flush()
-        await db.refresh(preferences)
+        raise RuntimeError("preference insert did not return the stored row")
     return preferences
 
 

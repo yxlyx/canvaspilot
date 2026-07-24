@@ -188,7 +188,11 @@ fn isActiveImportStatus(status: []const u8) bool {
 
 fn sourceDisplayFormat(source_type: []const u8) []const u8 {
     if (std.ascii.eqlIgnoreCase(source_type, "url") or std.ascii.eqlIgnoreCase(source_type, "web") or std.ascii.eqlIgnoreCase(source_type, "web_page") or std.ascii.eqlIgnoreCase(source_type, "link")) return "URL";
-    return "PDF";
+    if (std.ascii.eqlIgnoreCase(source_type, "pdf")) return "PDF";
+    if (std.ascii.eqlIgnoreCase(source_type, "markdown")) return "Markdown";
+    if (std.ascii.eqlIgnoreCase(source_type, "plain_text")) return "Text";
+    if (std.ascii.eqlIgnoreCase(source_type, "repository")) return "Repository";
+    return "Source";
 }
 
 fn renderLiveSource(req: mer.Request, w: *std.Io.Writer, source: lib.types.SourceResponse, now_secs: i64) !void {
@@ -261,4 +265,13 @@ fn renderDialogs(w: *std.Io.Writer, demo: bool) !void {
         try w.writeAll("<form id=\"cp-add-source-form\" method=\"post\" action=\"/api/sources\"><div class=\"field\"><label for=\"cp-new-source-title\">Source title</label><input id=\"cp-new-source-title\" name=\"title\" placeholder=\"e.g. Lecture 09 — Hash Tables\" required></div><div class=\"field\"><label for=\"cp-new-source-url\">Public link</label><input id=\"cp-new-source-url\" name=\"url\" type=\"url\" placeholder=\"https://...\" required></div><div class=\"field\"><label for=\"cp-new-source-module\">Module or context</label><input id=\"cp-new-source-module\" name=\"module\" placeholder=\"e.g. CS2040S\" required></div><button class=\"button button-dark\" type=\"submit\">Save source</button><p class=\"cp-form-status\" role=\"status\" aria-live=\"polite\"></p><noscript><p>This secure import action requires JavaScript.</p></noscript></form>");
     }
     try w.writeAll("</section></div>");
+}
+
+test "source display formats preserve supported source types" {
+    try std.testing.expectEqualStrings("URL", sourceDisplayFormat("link"));
+    try std.testing.expectEqualStrings("PDF", sourceDisplayFormat("pdf"));
+    try std.testing.expectEqualStrings("Markdown", sourceDisplayFormat("markdown"));
+    try std.testing.expectEqualStrings("Text", sourceDisplayFormat("plain_text"));
+    try std.testing.expectEqualStrings("Repository", sourceDisplayFormat("repository"));
+    try std.testing.expectEqualStrings("Source", sourceDisplayFormat("future_type"));
 }
