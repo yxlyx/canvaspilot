@@ -20,7 +20,7 @@ pub fn render(req: mer.Request) mer.Response {
     themeChoice(w, "dark", "Dark", "Charcoal surfaces and soft grey contrast", preferences.theme) catch return mer.internalError("appearance render failed");
     w.print("</fieldset><fieldset class=\"cp-setting-radios\"><legend>Motion</legend><label><input type=\"radio\" name=\"motion_preference\" value=\"system\"{s}><span><strong>Follow system</strong><small>Use your device motion preference.</small></span></label><label><input type=\"radio\" name=\"motion_preference\" value=\"reduce\"{s}><span><strong>Reduce motion</strong><small>Keep transitions and movement to a minimum.</small></span></label></fieldset>", .{ if (equal(preferences.motion_preference, "system")) " checked" else "", if (equal(preferences.motion_preference, "reduce")) " checked" else "" }) catch return mer.internalError("appearance render failed");
     if (demo) w.writeAll("<p class=\"cp-settings-readonly\">Theme previews work in this synthetic view, but account preferences are not saved.</p>") catch return mer.internalError("appearance render failed") else w.writeAll("<button class=\"cp-btn cp-btn-primary\" type=\"submit\">Save appearance</button><p class=\"cp-form-status\" role=\"status\" tabindex=\"-1\"></p>") catch return mer.internalError("appearance render failed");
-    w.writeAll("</form></section></div><script src=\"/settings.js?v=20260724\" defer></script>") catch return mer.internalError("appearance render failed");
+    w.writeAll("</form></section></div><script src=\"/settings.js?v=20260724-1\" defer></script>") catch return mer.internalError("appearance render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 

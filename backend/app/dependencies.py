@@ -5,6 +5,7 @@ import jwt
 from fastapi import Depends, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import raiseload
 
 from app.config import get_settings
 from app.db.database import get_db
@@ -62,7 +63,7 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
     except (AttributeError, TypeError, ValueError):
         raise UnauthorizedError() from None
 
-    result = await db.execute(select(User).where(User.id == parsed_user_id))
+    result = await db.execute(select(User).options(raiseload("*")).where(User.id == parsed_user_id))
     user = result.scalar_one_or_none()
     if not user or int(user.auth_version or 0) != supplied_version:
         raise UnauthorizedError()

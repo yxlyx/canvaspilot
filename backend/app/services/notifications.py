@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import String, cast, delete, exists, func, literal, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,6 +42,12 @@ async def upsert_notification(
             "href": insert_statement.excluded.href,
             "expires_at": insert_statement.excluded.expires_at,
         },
+        where=(
+            InAppNotification.title.is_distinct_from(insert_statement.excluded.title)
+            | InAppNotification.body.is_distinct_from(insert_statement.excluded.body)
+            | InAppNotification.href.is_distinct_from(insert_statement.excluded.href)
+            | InAppNotification.expires_at.is_distinct_from(insert_statement.excluded.expires_at)
+        ),
     ).returning(InAppNotification.id)
     await db.execute(statement)
     notification = await db.scalar(
@@ -55,10 +61,60 @@ async def upsert_notification(
     return notification
 
 
+async def _upsert_notifications_from_select(db: AsyncSession, rows) -> None:
+    insert_statement = insert(InAppNotification).from_select(
+        [
+            InAppNotification.id,
+            InAppNotification.user_id,
+            InAppNotification.kind,
+            InAppNotification.title,
+            InAppNotification.body,
+            InAppNotification.href,
+            InAppNotification.dedupe_key,
+        ],
+        rows,
+        include_defaults=False,
+    )
+    await db.execute(
+        insert_statement.on_conflict_do_update(
+            index_elements=[InAppNotification.user_id, InAppNotification.dedupe_key],
+            set_={
+                "title": insert_statement.excluded.title,
+                "body": insert_statement.excluded.body,
+                "href": insert_statement.excluded.href,
+            },
+            where=(
+                InAppNotification.title.is_distinct_from(insert_statement.excluded.title)
+                | InAppNotification.body.is_distinct_from(insert_statement.excluded.body)
+                | InAppNotification.href.is_distinct_from(insert_statement.excluded.href)
+            ),
+        )
+    )
+
+
+async def _delete_stale_notifications(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    kind: str,
+    key_prefix: str,
+    desired_keys: set[str],
+) -> None:
+    statement = delete(InAppNotification).where(
+        InAppNotification.user_id == user_id,
+        InAppNotification.kind == kind,
+        InAppNotification.dedupe_key.like(f"{key_prefix}%"),
+    )
+    if desired_keys:
+        statement = statement.where(InAppNotification.dedupe_key.not_in(sorted(desired_keys)))
+    await db.execute(statement)
+
+
 async def sync_attention_notifications(user_id: uuid.UUID, db: AsyncSession) -> None:
     preferences = await get_preferences_by_user_id(user_id, db)
     now = datetime.now(UTC)
     today = now.date()
+    daily_review_keys: set[str] = set()
     if preferences.reminder_daily_review:
         card_count = await db.scalar(
             select(func.count(Flashcard.id)).where(Flashcard.user_id == user_id)
@@ -71,6 +127,8 @@ async def sync_attention_notifications(user_id: uuid.UUID, db: AsyncSession) -> 
         )
         if card_count and attempts < preferences.daily_review_target:
             remaining = preferences.daily_review_target - attempts
+            dedupe_key = f"daily-review:{today.isoformat()}"
+            daily_review_keys.add(dedupe_key)
             await upsert_notification(
                 db,
                 user_id=user_id,
@@ -78,67 +136,120 @@ async def sync_attention_notifications(user_id: uuid.UUID, db: AsyncSession) -> 
                 title="Your review target is waiting",
                 body=f"Review {remaining} more card{'s' if remaining != 1 else ''} today.",
                 href="/flashcards",
-                dedupe_key=f"daily-review:{today.isoformat()}",
+                dedupe_key=dedupe_key,
                 expires_at=datetime.combine(today + timedelta(days=1), datetime.min.time(), UTC),
             )
-    if preferences.reminder_processing_attention:
-        failed_sources = list(
-            (
-                await db.execute(
-                    select(Source).where(
-                        Source.user_id == user_id, Source.status == SourceStatus.FAILED
-                    )
-                )
-            ).scalars()
-        )
-        for source in failed_sources:
-            await upsert_notification(
-                db,
-                user_id=user_id,
-                kind="processing_attention",
-                title="A source needs attention",
-                body=source.title,
-                href="/sources",
-                dedupe_key=f"source-failed:{source.id}",
-            )
-    if preferences.reminder_paper_review:
-        pending_papers = list(
-            (
-                await db.execute(
-                    select(MarkedPaper).where(
-                        MarkedPaper.user_id == user_id,
-                        MarkedPaper.extraction_status == "pending_review",
-                    )
-                )
-            ).scalars()
-        )
-        for paper in pending_papers:
-            await upsert_notification(
-                db,
-                user_id=user_id,
-                kind="paper_review",
-                title="Marked work is ready to review",
-                body=paper.filename,
-                href=f"/sources/papers/{paper.id}",
-                dedupe_key=f"paper-review:{paper.id}",
-            )
-    findings = list(
-        (
-            await db.execute(
-                select(HealthFinding).where(
-                    HealthFinding.user_id == user_id,
-                    HealthFinding.severity.in_(["warning", "error"]),
-                )
-            )
-        ).scalars()
+    await _delete_stale_notifications(
+        db,
+        user_id=user_id,
+        kind="daily_review",
+        key_prefix="daily-review:",
+        desired_keys=daily_review_keys,
     )
-    health_keys = [
-        (
-            f"health-finding:{finding.code}:{finding.resource_type}:"
-            f"{finding.resource_id or '-'}:{finding.topic or '-'}"
+
+    source_key = func.concat("source-failed:", cast(Source.id, String))
+    if preferences.reminder_processing_attention:
+        await _upsert_notifications_from_select(
+            db,
+            select(
+                func.gen_random_uuid(),
+                Source.user_id,
+                literal("processing_attention"),
+                literal("A source needs attention"),
+                Source.title,
+                literal("/sources"),
+                source_key,
+            )
+            .where(Source.user_id == user_id, Source.status == SourceStatus.FAILED)
+            .order_by(source_key),
         )
-        for finding in findings
-    ]
+    matching_failed_source = exists(
+        select(Source.id).where(
+            Source.user_id == user_id,
+            Source.status == SourceStatus.FAILED,
+            InAppNotification.dedupe_key == source_key,
+        )
+    )
+    await db.execute(
+        delete(InAppNotification).where(
+            InAppNotification.user_id == user_id,
+            InAppNotification.kind == "processing_attention",
+            InAppNotification.dedupe_key.like("source-failed:%"),
+            ~matching_failed_source if preferences.reminder_processing_attention else literal(True),
+        )
+    )
+
+    paper_id = cast(MarkedPaper.id, String)
+    paper_key = func.concat("paper-review:", paper_id)
+    if preferences.reminder_paper_review:
+        await _upsert_notifications_from_select(
+            db,
+            select(
+                func.gen_random_uuid(),
+                MarkedPaper.user_id,
+                literal("paper_review"),
+                literal("Marked work is ready to review"),
+                MarkedPaper.filename,
+                func.concat("/sources/papers/", paper_id),
+                paper_key,
+            )
+            .where(
+                MarkedPaper.user_id == user_id,
+                MarkedPaper.extraction_status == "pending_review",
+            )
+            .order_by(paper_key),
+        )
+    matching_pending_paper = exists(
+        select(MarkedPaper.id).where(
+            MarkedPaper.user_id == user_id,
+            MarkedPaper.extraction_status == "pending_review",
+            InAppNotification.dedupe_key == paper_key,
+        )
+    )
+    await db.execute(
+        delete(InAppNotification).where(
+            InAppNotification.user_id == user_id,
+            InAppNotification.kind == "paper_review",
+            InAppNotification.dedupe_key.like("paper-review:%"),
+            ~matching_pending_paper if preferences.reminder_paper_review else literal(True),
+        )
+    )
+
+    health_key = func.concat(
+        "health-finding:",
+        func.md5(
+            cast(
+                func.jsonb_build_array(
+                    HealthFinding.code,
+                    HealthFinding.resource_type,
+                    HealthFinding.resource_id,
+                    HealthFinding.topic,
+                ),
+                String,
+            )
+        ),
+    )
+    active_health_finding = HealthFinding.severity.in_(["warning", "error"])
+    if preferences.reminder_health_attention:
+        await _upsert_notifications_from_select(
+            db,
+            select(
+                func.gen_random_uuid(),
+                HealthFinding.user_id,
+                literal("health_attention"),
+                literal("Workspace health needs attention"),
+                HealthFinding.message,
+                func.concat("/sources/health/", cast(HealthFinding.id, String)),
+                health_key,
+            )
+            .where(HealthFinding.user_id == user_id, active_health_finding)
+            .distinct(health_key)
+            .order_by(
+                health_key,
+                HealthFinding.created_at.desc(),
+                HealthFinding.id.desc(),
+            ),
+        )
     await db.execute(
         delete(InAppNotification).where(
             InAppNotification.user_id == user_id,
@@ -146,29 +257,21 @@ async def sync_attention_notifications(user_id: uuid.UUID, db: AsyncSession) -> 
             InAppNotification.dedupe_key.like("health:%"),
         )
     )
-    stale_health = delete(InAppNotification).where(
-        InAppNotification.user_id == user_id,
-        InAppNotification.kind == "health_attention",
-        InAppNotification.dedupe_key.like("health-finding:%"),
+    matching_health_finding = exists(
+        select(HealthFinding.id).where(
+            HealthFinding.user_id == user_id,
+            active_health_finding,
+            InAppNotification.dedupe_key == health_key,
+        )
     )
-    if health_keys:
-        stale_health = stale_health.where(InAppNotification.dedupe_key.not_in(health_keys))
-    await db.execute(stale_health)
-    if preferences.reminder_health_attention:
-        for finding in findings:
-            dedupe_key = (
-                f"health-finding:{finding.code}:{finding.resource_type}:"
-                f"{finding.resource_id or '-'}:{finding.topic or '-'}"
-            )
-            await upsert_notification(
-                db,
-                user_id=user_id,
-                kind="health_attention",
-                title="Workspace health needs attention",
-                body=finding.message,
-                href=f"/sources/health/{finding.id}",
-                dedupe_key=dedupe_key,
-            )
+    await db.execute(
+        delete(InAppNotification).where(
+            InAppNotification.user_id == user_id,
+            InAppNotification.kind == "health_attention",
+            InAppNotification.dedupe_key.like("health-finding:%"),
+            ~matching_health_finding if preferences.reminder_health_attention else literal(True),
+        )
+    )
 
 
 async def list_notifications(
@@ -218,6 +321,7 @@ async def mark_notification_read(
 
 
 async def mark_all_notifications_read(user: User, db: AsyncSession) -> None:
+    await sync_attention_notifications(user.id, db)
     await db.execute(
         update(InAppNotification)
         .where(InAppNotification.user_id == user.id, InAppNotification.read_at.is_(None))

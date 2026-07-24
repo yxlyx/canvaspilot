@@ -25,9 +25,10 @@ class DummyDB:
         self.user = user
         self.added = None
         self.committed = False
+        self.statement = None
 
     async def execute(self, statement):
-        _ = statement
+        self.statement = statement
         return DummyResult(self.user)
 
     def add(self, user):
@@ -73,13 +74,16 @@ def make_user(user_id: uuid.UUID) -> User:
 async def test_get_current_user_with_bearer_token(settings: Settings, monkeypatch):
     user_id = uuid.uuid4()
     user = make_user(user_id)
+    db = DummyDB(user)
     monkeypatch.setattr(dependencies, "get_settings", lambda: settings)
     token = dependencies.create_app_token(user_id)
     request = make_request(headers=[(b"authorization", f"Bearer {token}".encode())])
 
-    result = await dependencies.get_current_user(request, DummyDB(user))
+    result = await dependencies.get_current_user(request, db)
 
     assert result is user
+    assert db.statement._with_options[0].strategy == (("lazy", "raise"),)
+    assert db.statement._with_options[0].path == ("relationship:_sa_default",)
 
 
 @pytest.mark.asyncio

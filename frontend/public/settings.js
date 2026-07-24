@@ -9,6 +9,15 @@
     if (error && focusStatus) status.focus();
   };
 
+  const applyMotionPreference = (preference, persist = false) => {
+    const requested = preference === "reduce" ? "reduce" : "system";
+    document.documentElement.dataset.motion = requested;
+    if (!persist) return;
+    localStorage.setItem("wikibase-motion-preference", requested);
+    const secure = window.location.protocol === "https:" ? "; Secure" : "";
+    document.cookie = `wb_motion_preference=${requested}; Path=/; Max-Age=31536000; SameSite=Lax${secure}`;
+  };
+
   const errorField = (form, body) => {
     const explicit = Array.isArray(body?.detail)
       ? body.detail.find((item) => Array.isArray(item?.loc))?.loc?.at(-1)
@@ -78,7 +87,7 @@
       submit?.setAttribute("disabled", "");
       message(form, form.matches("[data-download]") ? "Preparing archive…" : "Saving…");
       try {
-        const response = await fetch(form.action, {
+        const response = await fetch(form.getAttribute("action") || "/api/settings", {
           method: "POST",
           headers: { Accept: form.matches("[data-download]") ? "application/zip" : "application/json" },
           body: new URLSearchParams(new FormData(form)),
@@ -96,12 +105,17 @@
           throw failure;
         }
         if (form.matches("[data-download]")) {
-          const blob = await response.blob();
+          const type = (response.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
           const disposition = response.headers.get("content-disposition") || "";
-          const match = disposition.match(/filename=\"?([A-Za-z0-9._-]+)\"?/);
+          const match = /^attachment\s*;(?:[^;]+;)*\s*filename=\"?([A-Za-z0-9._-]+)\"?(?:;|$)/i.exec(disposition);
+          if (response.redirected || type !== "application/zip" || !match) throw new Error("The archive response was not a valid ZIP download.");
+          const blob = await response.blob();
+          const signature = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
+          const zip = signature.length === 4 && signature[0] === 0x50 && signature[1] === 0x4b && ((signature[2] === 3 && signature[3] === 4) || (signature[2] === 5 && signature[3] === 6) || (signature[2] === 7 && signature[3] === 8));
+          if (!zip) throw new Error("The archive response was not a valid ZIP download.");
           const link = document.createElement("a");
           link.href = URL.createObjectURL(blob);
-          link.download = match?.[1] || "wikibase-account.zip";
+          link.download = match[1];
           link.click();
           setTimeout(() => URL.revokeObjectURL(link.href), 1000);
           message(form, "Archive downloaded.");
@@ -110,6 +124,9 @@
           if (body.redirect || form.matches("[data-session-ending], [data-delete-account]")) {
             window.location.assign(body.redirect || "/login");
             return;
+          }
+          if (form.matches("[data-appearance-form]")) {
+            applyMotionPreference(form.querySelector("input[name='motion_preference']:checked")?.value, true);
           }
           message(form, "Saved.");
         }
@@ -144,6 +161,10 @@
       localStorage.setItem("wikibase-theme-preference", requested);
       localStorage.setItem("wikibase-theme", theme);
     });
+  });
+
+  document.querySelectorAll("[data-appearance-form] input[name='motion_preference']").forEach((radio) => {
+    radio.addEventListener("change", () => applyMotionPreference(radio.value));
   });
 
   const activeSettingsTab = document.querySelector('.cp-local-tabs[aria-label="Settings"] a[aria-current="page"]');

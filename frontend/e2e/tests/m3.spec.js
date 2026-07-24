@@ -26,6 +26,18 @@ test("private mutation forms fail closed as POST when JavaScript is unavailable"
   expect(paperDetail).toContain('value=\\"paper.deleteQuestion\\"');
 });
 
+test("Wiki downloads retain the no-JavaScript export form contract", async () => {
+  const settings = fs.readFileSync(path.join(__dirname, "../../app/settings/data.zig"), "utf8").replaceAll('\\"', '"');
+  const wiki = fs.readFileSync(path.join(__dirname, "../../app/wiki/index.zig"), "utf8").replaceAll('\\"', '"');
+  for (const source of [settings, wiki]) {
+    expect(source).toContain('method="post" action="/api/m3" data-wiki-export><input type="hidden" name="action" value="wiki.export">');
+  }
+  expect(settings).toContain('<button class="cp-btn cp-btn-ghost" name="selection" value="all" type="submit">Download Wiki</button>');
+  expect(settings).not.toContain('type="button" data-wiki-export');
+  expect(wiki).toContain('name="selection" value="selected" type="submit">Download selected pages</button>');
+  expect(wiki).toContain('name="page_ids"');
+});
+
 test("explicit demo renders grounded and insufficient study-guide states", async ({ page }) => {
   await page.goto("/wiki/guides?mock=1");
   await expect(page.getByRole("heading", { name: "Study guides" })).toBeVisible();
@@ -236,6 +248,14 @@ test("dark landing closing panel keeps readable editorial contrast", async ({ pa
   expect(colors).toEqual({ background: "rgb(36, 36, 33)", heading: "rgb(241, 239, 232)", body: "rgb(170, 169, 162)" });
 });
 
+test("authentication refreshes account theme and motion cookies", async () => {
+  const signin = fs.readFileSync(path.join(__dirname, "../../api/auth/signin.zig"), "utf8");
+  const register = fs.readFileSync(path.join(__dirname, "../../api/auth/register.zig"), "utf8");
+  expect(signin).toContain("parsed.value.motion_preference");
+  expect(signin).toContain("lib.session.motionCookie");
+  expect(register).toContain('lib.session.motionCookie("system")');
+});
+
 test("account theme cookie is applied during the initial page boot", async ({ context, page }) => {
   await context.addCookies([{ name: "wb_theme_preference", value: "dark", url: cookieURL, sameSite: "Lax" }]);
   await page.goto("/");
@@ -261,13 +281,36 @@ test("shell theme toggle persists the cookie and account preference", async ({ p
   expect(requests[0].get("theme")).toBe("dark");
 });
 
+test("saved account motion preference remains reduced after reload", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto("/login");
+  await page.route("**/api/settings", (route) => route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' }));
+  await page.setContent(`<main><form method="post" action="/api/settings" data-settings-form data-appearance-form>
+    <input name="action" value="preferences.update"><input name="theme" value="system">
+    <label><input type="radio" name="motion_preference" value="system" checked>Follow system</label>
+    <label><input type="radio" name="motion_preference" value="reduce">Reduce motion</label>
+    <button type="submit">Save appearance</button><p class="cp-form-status" role="status"></p>
+    </form><script src="/settings.js"></script></main>`);
+
+  await page.getByRole("radio", { name: "Reduce motion" }).check();
+  await page.getByRole("button", { name: "Save appearance" }).click();
+  await expect(page.getByText("Saved.")).toBeVisible();
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-motion", "reduce");
+  await expect.poll(() => page.locator(".wb-marketing-nav").evaluate((node) => Number.parseFloat(getComputedStyle(node).transitionDuration))).toBeLessThanOrEqual(0.00001);
+});
+
 test("live source preview stays metadata-only and source saves report pending ingestion", async ({ page }) => {
   await page.goto("/login");
-  await page.route("**/api/sources", (route) => route.fulfill({
-    status: 201,
-    contentType: "application/json",
-    body: JSON.stringify({ id: "source-1", title: "Lecture notes", status: "pending" }),
-  }));
+  let sourceRequest;
+  await page.route("**/api/sources", (route) => {
+    sourceRequest = route.request().postDataJSON();
+    return route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({ id: "source-1", title: "Lecture notes", status: "pending" }),
+    });
+  });
   await page.setContent(`<main>
     <input id="cp-source-search"><select id="cp-source-format"><option value="">All formats</option></select>
     <span id="cp-source-count"></span><h2 id="cp-source-heading"></h2><div id="cp-source-empty" hidden></div>
@@ -289,6 +332,7 @@ test("live source preview stays metadata-only and source saves report pending in
 
   await page.getByRole("button", { name: "Save source" }).click();
   await expect(page.locator(".cp-form-status")).toHaveText("Source saved as metadata. Ingestion has not started.");
+  expect(sourceRequest).toEqual({ source_type: "link", origin: "web", title: "New source", source_url: "https://example.test/notes", course_context: "CS2040S" });
 });
 
 test("forms lock before async work, reject duplicate submits, and focus errors", async ({ page }) => {
@@ -340,6 +384,9 @@ test("demo settings and wiki expose no mutation controls", async ({ page }) => {
   await expect(page.locator("form[data-m3-form]")).toHaveCount(0);
   await expect(page.getByText(/Read-only preview/).first()).toBeVisible();
   await expect(page.locator("html")).not.toContainText(/sk-[A-Za-z0-9]/);
+  await page.goto("/settings/data?mock=1");
+  await expect(page.locator("form[data-wiki-export]")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Download Wiki" })).toBeDisabled();
   await page.goto("/wiki?mock=1");
   await expect(page.getByRole("button", { name: /Export|Download/ })).toHaveCount(0);
   await expect(page.locator("[data-page-download]")).toHaveCount(0);
@@ -364,6 +411,64 @@ test("signed-in shell hydrates the account identity and unread notification stat
   await expect(page.locator("[data-cp-account-initial]")).toHaveText("A");
   await expect(page.locator("[data-cp-notification-link]")).toHaveAttribute("aria-label", "Notifications, 3 unread");
   await expect(page.locator("[data-cp-notification-link] i")).not.toHaveAttribute("hidden", "");
+});
+
+test("Data & privacy Wiki control requests a full canonical export", async ({ page }) => {
+  await page.goto("/login");
+  let request;
+  await page.route("**/api/m3", async (route) => {
+    request = route.request().postDataJSON();
+    await route.fulfill({ status: 200, contentType: "application/zip", headers: { "content-disposition": 'attachment; filename="workspace-wiki.zip"' }, body: Buffer.from([0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0]) });
+  });
+  await page.setContent(`<main><form method="post" action="/api/m3" data-wiki-export>
+    <button name="selection" value="all" type="submit">Download Wiki</button><p class="cp-form-status" role="status"></p>
+    </form><script src="/m3.js"></script></main>`);
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download Wiki" }).click();
+  expect((await download).suggestedFilename()).toBe("workspace-wiki.zip");
+  expect(request).toEqual({ action: "wiki.export" });
+});
+
+test("Wiki dialog sends every selected page through the enhanced export flow", async ({ page }) => {
+  await page.goto("/login");
+  let request;
+  await page.route("**/api/m3", async (route) => {
+    request = route.request().postDataJSON();
+    await route.fulfill({ status: 200, contentType: "application/zip", headers: { "content-disposition": 'attachment; filename="selected-wiki.zip"' }, body: Buffer.from([0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0]) });
+  });
+  await page.setContent(`<main><form method="post" action="/api/m3" data-wiki-export>
+    <input type="hidden" name="action" value="wiki.export">
+    <input type="checkbox" name="page_ids" value="page-one" checked>
+    <input type="checkbox" name="page_ids" value="page-two" checked>
+    <button name="selection" value="selected" type="submit">Download selected pages</button><p class="cp-form-status" role="status"></p>
+    </form><script src="/m3.js"></script></main>`);
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download selected pages" }).click();
+  expect((await download).suggestedFilename()).toBe("selected-wiki.zip");
+  expect(request).toEqual({ action: "wiki.export", payload: { page_ids: ["page-one", "page-two"] } });
+});
+
+test("account archive downloads only valid ZIP attachments", async ({ page }) => {
+  await page.goto("/login");
+  let valid = false;
+  await page.route("**/api/settings", (route) => valid
+    ? route.fulfill({ status: 200, contentType: "application/zip", headers: { "content-disposition": 'attachment; filename="account.zip"' }, body: Buffer.from([0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0]) })
+    : route.fulfill({ status: 200, contentType: "text/html", body: "<html>Sign in</html>" }));
+  await page.setContent(`<main><form method="post" action="/api/settings" data-settings-form data-download>
+    <input name="action" value="account.export"><input name="current_password" value="secret">
+    <button type="submit">Download archive</button><p class="cp-form-status" role="status" tabindex="-1"></p>
+    </form><script src="/settings.js"></script></main>`);
+  let downloads = 0;
+  page.on("download", () => { downloads += 1; });
+  await page.getByRole("button", { name: "Download archive" }).click();
+  await expect(page.getByRole("alert")).toHaveText("The archive response was not a valid ZIP download.");
+  expect(downloads).toBe(0);
+
+  valid = true;
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download archive" }).click();
+  expect((await download).suggestedFilename()).toBe("account.zip");
+  await expect(page.getByText("Archive downloaded.")).toBeVisible();
 });
 
 test("settings validation focuses and marks the implicated field", async ({ page }) => {

@@ -30,7 +30,7 @@ def _require_password(user: User, password: str) -> None:
         raise BadAuthRequestError(
             "invalid_password",
             "Current password is incorrect",
-            status.HTTP_401_UNAUTHORIZED,
+            status.HTTP_403_FORBIDDEN,
         )
 
 

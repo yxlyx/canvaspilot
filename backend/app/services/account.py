@@ -2,20 +2,256 @@ import json
 import zipfile
 from io import BytesIO
 
-from sqlalchemy import select
+from sqlalchemy import LargeBinary, Text, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import load_only, raiseload, selectinload
 
 from app.exceptions import WikiBaseError
-from app.models.flashcard import FlashcardAttempt, FlashcardDeck, LearningEvidence
-from app.models.m3 import MarkedPaper, ProviderSetting, StudyOutput, WikiRevision
+from app.models.flashcard import (
+    Flashcard,
+    FlashcardAttempt,
+    FlashcardDeck,
+    LearningEvidence,
+)
+from app.models.m3 import (
+    MarkedPaper,
+    MarkedPaperQuestion,
+    ProviderSetting,
+    StudyOutput,
+    StudyOutputCitation,
+    WikiRevision,
+)
 from app.models.settings import UserPreference
 from app.models.source import Source
+from app.models.source_chunk import SourceChunk
 from app.models.user import User
 from app.models.wiki import WikiPage
 from app.services.exports import ExportFile, canonical_markdown
 
 MAX_ACCOUNT_EXPORT_BYTES = 100 * 1024 * 1024
+MAX_ACCOUNT_EXPORT_MEMORY_BYTES = 700 * 1024 * 1024
+ACCOUNT_EXPORT_ROW_OVERHEAD_BYTES = 1024
+ACCOUNT_EXPORT_VALUE_MEMORY_FACTOR = 6
+
+
+def _projected_column_bytes(column):
+    if isinstance(column.type, LargeBinary):
+        size = func.octet_length(column)
+    else:
+        size = func.octet_length(cast(column, Text))
+    return func.coalesce(size, 0)
+
+
+def _projected_table_bytes(columns, from_clause, *criteria):
+    value_bytes = sum((_projected_column_bytes(column) for column in columns), start=0)
+    row_bytes = value_bytes * ACCOUNT_EXPORT_VALUE_MEMORY_FACTOR + ACCOUNT_EXPORT_ROW_OVERHEAD_BYTES
+    return (
+        select(func.coalesce(func.sum(row_bytes), 0))
+        .select_from(from_clause)
+        .where(*criteria)
+        .scalar_subquery()
+    )
+
+
+def _account_export_preflight_statement(user_id):
+    sources = Source.__table__
+    chunks = SourceChunk.__table__
+    pages = WikiPage.__table__
+    revisions = WikiRevision.__table__
+    outputs = StudyOutput.__table__
+    output_citations = StudyOutputCitation.__table__
+    decks = FlashcardDeck.__table__
+    cards = Flashcard.__table__
+    attempts = FlashcardAttempt.__table__
+    evidence = LearningEvidence.__table__
+    papers = MarkedPaper.__table__
+    questions = MarkedPaperQuestion.__table__
+    providers = ProviderSetting.__table__
+    preferences = UserPreference.__table__
+    users = User.__table__
+
+    estimates = [
+        _projected_table_bytes(
+            [users.c.id, users.c.name, users.c.email, users.c.created_at],
+            users,
+            users.c.id == user_id,
+        ),
+        _projected_table_bytes(
+            [
+                preferences.c.theme,
+                preferences.c.motion_preference,
+                preferences.c.default_module_id,
+                preferences.c.daily_review_target,
+                preferences.c.reminder_daily_review,
+                preferences.c.reminder_processing_attention,
+                preferences.c.reminder_paper_review,
+                preferences.c.reminder_health_attention,
+            ],
+            preferences,
+            preferences.c.user_id == user_id,
+        ),
+        _projected_table_bytes(
+            [
+                sources.c.id,
+                sources.c.source_type,
+                sources.c.origin,
+                sources.c.title,
+                sources.c.source_url,
+                sources.c.citation_label,
+                sources.c.topic_tags,
+                sources.c.status,
+                sources.c.course_context,
+                sources.c.project_context,
+                sources.c.import_error,
+                sources.c.created_at,
+                sources.c.updated_at,
+            ],
+            sources,
+            sources.c.user_id == user_id,
+        ),
+        _projected_table_bytes(
+            [chunks.c.location_label, chunks.c.chunk_index, chunks.c.content],
+            chunks.join(sources, chunks.c.source_id == sources.c.id),
+            sources.c.user_id == user_id,
+        ),
+        _projected_table_bytes(
+            [
+                pages.c.id,
+                pages.c.slug,
+                pages.c.title,
+                pages.c.updated_at,
+                pages.c.source_ids,
+                pages.c.citation_count,
+                pages.c.backlinks,
+                pages.c.markdown,
+            ],
+            pages,
+            pages.c.user_id == user_id,
+        ),
+        _projected_table_bytes(
+            [
+                revisions.c.id,
+                revisions.c.page_id,
+                revisions.c.revision_number,
+                revisions.c.title,
+                revisions.c.markdown,
+                revisions.c.source_ids,
+                revisions.c.citation_count,
+                revisions.c.change_summary,
+                revisions.c.created_at,
+            ],
+            revisions,
+            revisions.c.user_id == user_id,
+        ),
+        _projected_table_bytes(
+            [
+                outputs.c.id,
+                outputs.c.output_type,
+                outputs.c.title,
+                outputs.c.status,
+                outputs.c.content,
+                outputs.c.source_ids,
+                outputs.c.wiki_page_id,
+                outputs.c.message,
+                outputs.c.created_at,
+            ],
+            outputs,
+            outputs.c.user_id == user_id,
+        ),
+        _projected_table_bytes(
+            [
+                output_citations.c.source_id,
+                output_citations.c.citation_ref,
+                output_citations.c.source_title,
+                output_citations.c.snippet,
+            ],
+            output_citations.join(outputs, output_citations.c.output_id == outputs.c.id),
+            outputs.c.user_id == user_id,
+        ),
+        _projected_table_bytes(
+            [decks.c.id, decks.c.title, decks.c.description, decks.c.topic_tags],
+            decks,
+            decks.c.user_id == user_id,
+        ),
+        _projected_table_bytes(
+            [
+                cards.c.id,
+                cards.c.question,
+                cards.c.answer,
+                cards.c.topic_tag,
+                cards.c.citation_ref,
+                cards.c.source_title,
+            ],
+            cards.join(decks, cards.c.deck_id == decks.c.id),
+            decks.c.user_id == user_id,
+        ),
+        _projected_table_bytes(
+            [
+                attempts.c.id,
+                attempts.c.deck_id,
+                attempts.c.card_id,
+                attempts.c.is_correct,
+                attempts.c.confidence,
+                attempts.c.created_at,
+            ],
+            attempts,
+            attempts.c.user_id == user_id,
+        ),
+        _projected_table_bytes(
+            [
+                evidence.c.id,
+                evidence.c.evidence_type,
+                evidence.c.topic_tag,
+                evidence.c.is_correct,
+                evidence.c.confidence,
+                evidence.c.citation_ref,
+                evidence.c.occurred_at,
+            ],
+            evidence,
+            evidence.c.user_id == user_id,
+        ),
+        _projected_table_bytes(
+            [papers.c.id, papers.c.filename, papers.c.raw_content],
+            papers,
+            papers.c.user_id == user_id,
+        ),
+        _projected_table_bytes(
+            [
+                questions.c.id,
+                questions.c.question_number,
+                questions.c.question_text,
+                questions.c.awarded_marks,
+                questions.c.available_marks,
+                questions.c.feedback,
+                questions.c.topic_tag,
+                questions.c.confidence,
+                questions.c.reviewed,
+                questions.c.reviewed_at,
+            ],
+            questions.join(papers, questions.c.paper_id == papers.c.id),
+            papers.c.user_id == user_id,
+        ),
+        _projected_table_bytes(
+            [
+                providers.c.provider,
+                providers.c.model,
+                providers.c.endpoint,
+                providers.c.status,
+                providers.c.last_tested_at,
+            ],
+            providers,
+            providers.c.user_id == user_id,
+        ),
+    ]
+    return select(sum(estimates, start=0))
+
+
+async def _preflight_account_export(user_id, db: AsyncSession) -> None:
+    estimated_bytes = await db.scalar(_account_export_preflight_statement(user_id))
+    if estimated_bytes > MAX_ACCOUNT_EXPORT_MEMORY_BYTES:
+        raise WikiBaseError(
+            413, "export_too_large", "Account archive is too large to prepare safely"
+        )
 
 
 def _json_bytes(value) -> bytes:
@@ -38,11 +274,39 @@ def _write(archive: zipfile.ZipFile, name: str, content: bytes, total: list[int]
 
 
 async def export_account(user: User, db: AsyncSession) -> ExportFile:
+    await _preflight_account_export(user.id, db)
+
     sources = list(
         (
             await db.execute(
                 select(Source)
-                .options(selectinload(Source.chunks))
+                .options(
+                    load_only(
+                        Source.id,
+                        Source.source_type,
+                        Source.origin,
+                        Source.title,
+                        Source.source_url,
+                        Source.citation_label,
+                        Source.topic_tags,
+                        Source.status,
+                        Source.course_context,
+                        Source.project_context,
+                        Source.import_error,
+                        Source.created_at,
+                        Source.updated_at,
+                        raiseload=True,
+                    ),
+                    selectinload(Source.chunks)
+                    .load_only(
+                        SourceChunk.chunk_index,
+                        SourceChunk.location_label,
+                        SourceChunk.content,
+                        raiseload=True,
+                    )
+                    .raiseload("*"),
+                    raiseload("*"),
+                )
                 .where(Source.user_id == user.id)
                 .order_by(Source.created_at.asc())
             )
@@ -54,7 +318,20 @@ async def export_account(user: User, db: AsyncSession) -> ExportFile:
         (
             await db.execute(
                 select(WikiPage)
-                .options(selectinload(WikiPage.citations))
+                .options(
+                    load_only(
+                        WikiPage.id,
+                        WikiPage.slug,
+                        WikiPage.title,
+                        WikiPage.updated_at,
+                        WikiPage.source_ids,
+                        WikiPage.citation_count,
+                        WikiPage.backlinks,
+                        WikiPage.markdown,
+                        raiseload=True,
+                    ),
+                    raiseload("*"),
+                )
                 .where(WikiPage.user_id == user.id)
                 .order_by(WikiPage.slug.asc())
             )
@@ -63,13 +340,56 @@ async def export_account(user: User, db: AsyncSession) -> ExportFile:
         .unique()
     )
     revisions = list(
-        (await db.execute(select(WikiRevision).where(WikiRevision.user_id == user.id))).scalars()
+        (
+            await db.execute(
+                select(WikiRevision)
+                .options(
+                    load_only(
+                        WikiRevision.id,
+                        WikiRevision.page_id,
+                        WikiRevision.revision_number,
+                        WikiRevision.title,
+                        WikiRevision.markdown,
+                        WikiRevision.source_ids,
+                        WikiRevision.citation_count,
+                        WikiRevision.change_summary,
+                        WikiRevision.created_at,
+                        raiseload=True,
+                    ),
+                    raiseload("*"),
+                )
+                .where(WikiRevision.user_id == user.id)
+            )
+        ).scalars()
     )
     outputs = list(
         (
             await db.execute(
                 select(StudyOutput)
-                .options(selectinload(StudyOutput.citations))
+                .options(
+                    load_only(
+                        StudyOutput.id,
+                        StudyOutput.output_type,
+                        StudyOutput.title,
+                        StudyOutput.status,
+                        StudyOutput.content,
+                        StudyOutput.source_ids,
+                        StudyOutput.wiki_page_id,
+                        StudyOutput.message,
+                        StudyOutput.created_at,
+                        raiseload=True,
+                    ),
+                    selectinload(StudyOutput.citations)
+                    .load_only(
+                        StudyOutputCitation.source_id,
+                        StudyOutputCitation.citation_ref,
+                        StudyOutputCitation.source_title,
+                        StudyOutputCitation.snippet,
+                        raiseload=True,
+                    )
+                    .raiseload("*"),
+                    raiseload("*"),
+                )
                 .where(StudyOutput.user_id == user.id)
             )
         )
@@ -80,7 +400,27 @@ async def export_account(user: User, db: AsyncSession) -> ExportFile:
         (
             await db.execute(
                 select(FlashcardDeck)
-                .options(selectinload(FlashcardDeck.cards))
+                .options(
+                    load_only(
+                        FlashcardDeck.id,
+                        FlashcardDeck.title,
+                        FlashcardDeck.description,
+                        FlashcardDeck.topic_tags,
+                        raiseload=True,
+                    ),
+                    selectinload(FlashcardDeck.cards)
+                    .load_only(
+                        Flashcard.id,
+                        Flashcard.question,
+                        Flashcard.answer,
+                        Flashcard.topic_tag,
+                        Flashcard.citation_ref,
+                        Flashcard.source_title,
+                        raiseload=True,
+                    )
+                    .raiseload("*"),
+                    raiseload("*"),
+                )
                 .where(FlashcardDeck.user_id == user.id)
             )
         )
@@ -89,19 +429,73 @@ async def export_account(user: User, db: AsyncSession) -> ExportFile:
     )
     attempts = list(
         (
-            await db.execute(select(FlashcardAttempt).where(FlashcardAttempt.user_id == user.id))
+            await db.execute(
+                select(FlashcardAttempt)
+                .options(
+                    load_only(
+                        FlashcardAttempt.id,
+                        FlashcardAttempt.deck_id,
+                        FlashcardAttempt.card_id,
+                        FlashcardAttempt.is_correct,
+                        FlashcardAttempt.confidence,
+                        FlashcardAttempt.created_at,
+                        raiseload=True,
+                    ),
+                    raiseload("*"),
+                )
+                .where(FlashcardAttempt.user_id == user.id)
+            )
         ).scalars()
     )
     evidence = list(
         (
-            await db.execute(select(LearningEvidence).where(LearningEvidence.user_id == user.id))
+            await db.execute(
+                select(LearningEvidence)
+                .options(
+                    load_only(
+                        LearningEvidence.id,
+                        LearningEvidence.evidence_type,
+                        LearningEvidence.topic_tag,
+                        LearningEvidence.is_correct,
+                        LearningEvidence.confidence,
+                        LearningEvidence.citation_ref,
+                        LearningEvidence.occurred_at,
+                        raiseload=True,
+                    ),
+                    raiseload("*"),
+                )
+                .where(LearningEvidence.user_id == user.id)
+            )
         ).scalars()
     )
     papers = list(
         (
             await db.execute(
                 select(MarkedPaper)
-                .options(selectinload(MarkedPaper.questions))
+                .options(
+                    load_only(
+                        MarkedPaper.id,
+                        MarkedPaper.filename,
+                        MarkedPaper.raw_content,
+                        raiseload=True,
+                    ),
+                    selectinload(MarkedPaper.questions)
+                    .load_only(
+                        MarkedPaperQuestion.id,
+                        MarkedPaperQuestion.question_number,
+                        MarkedPaperQuestion.question_text,
+                        MarkedPaperQuestion.awarded_marks,
+                        MarkedPaperQuestion.available_marks,
+                        MarkedPaperQuestion.feedback,
+                        MarkedPaperQuestion.topic_tag,
+                        MarkedPaperQuestion.confidence,
+                        MarkedPaperQuestion.reviewed,
+                        MarkedPaperQuestion.reviewed_at,
+                        raiseload=True,
+                    )
+                    .raiseload("*"),
+                    raiseload("*"),
+                )
                 .where(MarkedPaper.user_id == user.id)
             )
         )
@@ -110,10 +504,43 @@ async def export_account(user: User, db: AsyncSession) -> ExportFile:
     )
     providers = list(
         (
-            await db.execute(select(ProviderSetting).where(ProviderSetting.user_id == user.id))
+            await db.execute(
+                select(ProviderSetting)
+                .options(
+                    load_only(
+                        ProviderSetting.provider,
+                        ProviderSetting.model,
+                        ProviderSetting.endpoint,
+                        ProviderSetting.status,
+                        ProviderSetting.last_tested_at,
+                        raiseload=True,
+                    ),
+                    raiseload("*"),
+                )
+                .where(ProviderSetting.user_id == user.id)
+            )
         ).scalars()
     )
-    preferences = await db.get(UserPreference, user.id)
+    preferences = (
+        await db.execute(
+            select(UserPreference)
+            .options(
+                load_only(
+                    UserPreference.theme,
+                    UserPreference.motion_preference,
+                    UserPreference.default_module_id,
+                    UserPreference.daily_review_target,
+                    UserPreference.reminder_daily_review,
+                    UserPreference.reminder_processing_attention,
+                    UserPreference.reminder_paper_review,
+                    UserPreference.reminder_health_attention,
+                    raiseload=True,
+                ),
+                raiseload("*"),
+            )
+            .where(UserPreference.user_id == user.id)
+        )
+    ).scalar_one_or_none()
 
     output = BytesIO()
     total = [0]
@@ -173,7 +600,7 @@ async def export_account(user: User, db: AsyncSession) -> ExportFile:
             )
             readable = "\n\n".join(
                 f"## {chunk.location_label or f'Chunk {chunk.chunk_index + 1}'}\n\n{chunk.content}"
-                for chunk in source.chunks
+                for chunk in sorted(source.chunks, key=lambda item: item.chunk_index)
             )
             _write(archive, f"{source_dir}/parsed-content.md", readable.encode(), total)
         for page in pages:
@@ -302,7 +729,7 @@ async def export_account(user: User, db: AsyncSession) -> ExportFile:
             base = f"marked-papers/{paper.id}"
             _write(
                 archive,
-                f"{base}/{_safe_component(paper.filename)}",
+                f"{base}/original/{_safe_component(paper.filename)}",
                 paper.raw_content,
                 total,
             )
