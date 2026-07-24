@@ -89,7 +89,7 @@
       try {
         const response = await fetch(form.getAttribute("action") || "/api/settings", {
           method: "POST",
-          headers: { Accept: form.matches("[data-download]") ? "application/zip" : "application/json" },
+          headers: { Accept: form.matches("[data-download]") ? "application/zip, application/json" : "application/json" },
           body: new URLSearchParams(new FormData(form)),
           credentials: "same-origin",
         });

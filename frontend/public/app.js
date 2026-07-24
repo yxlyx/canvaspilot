@@ -350,21 +350,6 @@
       if (focusTarget) focusTarget.focus();
     }
 
-    document.querySelectorAll("[data-source-status]").forEach(function (button) {
-      const initiallySelected = normalizeStatus(button.dataset.sourceStatus) === status;
-      button.classList.toggle("active", initiallySelected);
-      button.setAttribute("aria-pressed", String(initiallySelected));
-      button.addEventListener("click", function (event) {
-        event.preventDefault();
-        status = normalizeStatus(button.dataset.sourceStatus);
-        document.querySelectorAll("[data-source-status]").forEach(function (item) {
-          const selected = item === button;
-          item.classList.toggle("active", selected);
-          item.setAttribute("aria-pressed", String(selected));
-        });
-        applyFilters();
-      });
-    });
     document.querySelectorAll("[data-source-view]").forEach(function (button) {
       button.addEventListener("click", function (event) {
         event.preventDefault();
@@ -379,7 +364,6 @@
       });
     });
     search.addEventListener("input", applyFilters);
-    format.addEventListener("change", applyFilters);
     if (module) module.addEventListener("change", applyFilters);
 
     const clear = document.getElementById("cp-clear-source-filters");
