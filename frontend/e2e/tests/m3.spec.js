@@ -38,6 +38,22 @@ test("Wiki downloads retain the no-JavaScript export form contract", async () =>
   expect(wiki).toContain('name="page_ids"');
 });
 
+test("settings pages share the current immutable script version", async () => {
+  for (const relative of [
+    "app/notifications.zig",
+    "app/settings/index.zig",
+    "app/settings/appearance.zig",
+    "app/settings/learning.zig",
+    "app/settings/notifications.zig",
+    "app/settings/data.zig",
+  ]) {
+    const source = fs.readFileSync(path.join(__dirname, "../..", relative), "utf8");
+    expect(source).toContain("/settings.js?v=20260724-2");
+  }
+  const layout = fs.readFileSync(path.join(__dirname, "../../app/layout.zig"), "utf8");
+  expect(layout).toContain("/app.js?v=wikibase-13");
+});
+
 test("explicit demo renders grounded and insufficient study-guide states", async ({ page }) => {
   await page.goto("/wiki/guides?mock=1");
   await expect(page.getByRole("heading", { name: "Study guides" })).toBeVisible();
@@ -450,10 +466,14 @@ test("Wiki dialog sends every selected page through the enhanced export flow", a
 
 test("account archive downloads only valid ZIP attachments", async ({ page }) => {
   await page.goto("/login");
-  let valid = false;
-  await page.route("**/api/settings", (route) => valid
-    ? route.fulfill({ status: 200, contentType: "application/zip", headers: { "content-disposition": 'attachment; filename="account.zip"' }, body: Buffer.from([0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0]) })
-    : route.fulfill({ status: 200, contentType: "text/html", body: "<html>Sign in</html>" }));
+  let responseMode = "error";
+  let accept = "";
+  await page.route("**/api/settings", (route) => {
+    accept = route.request().headers().accept || "";
+    if (responseMode === "error") return route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "invalid_password", detail: "Current password is incorrect" }) });
+    if (responseMode === "invalid") return route.fulfill({ status: 200, contentType: "text/html", body: "<html>Sign in</html>" });
+    return route.fulfill({ status: 200, contentType: "application/zip", headers: { "content-disposition": 'attachment; filename="account.zip"' }, body: Buffer.from([0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0]) });
+  });
   await page.setContent(`<main><form method="post" action="/api/settings" data-settings-form data-download>
     <input name="action" value="account.export"><input name="current_password" value="secret">
     <button type="submit">Download archive</button><p class="cp-form-status" role="status" tabindex="-1"></p>
@@ -461,14 +481,32 @@ test("account archive downloads only valid ZIP attachments", async ({ page }) =>
   let downloads = 0;
   page.on("download", () => { downloads += 1; });
   await page.getByRole("button", { name: "Download archive" }).click();
+  await expect(page.getByRole("alert")).toHaveText("Current password is incorrect");
+  await expect(page.locator('[name="current_password"]')).toBeFocused();
+  await expect(page.locator('[name="current_password"]')).toHaveAttribute("aria-invalid", "true");
+  expect(accept).toBe("application/zip, application/json");
+  expect(downloads).toBe(0);
+
+  responseMode = "invalid";
+  await page.getByRole("button", { name: "Download archive" }).click();
   await expect(page.getByRole("alert")).toHaveText("The archive response was not a valid ZIP download.");
   expect(downloads).toBe(0);
 
-  valid = true;
+  responseMode = "valid";
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download archive" }).click();
   expect((await download).suggestedFilename()).toBe("account.zip");
   await expect(page.getByText("Archive downloaded.")).toBeVisible();
+});
+
+test("server-backed source status filters navigate before expanding results", async ({ page }) => {
+  await page.goto("/sources?mock=1&status=failed");
+  const filteredCount = await page.locator(".document-card").count();
+  expect(filteredCount).toBeGreaterThan(0);
+
+  await page.getByRole("button", { name: /^All/ }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("status")).not.toBe("failed");
+  await expect.poll(() => page.locator(".document-card").count()).toBeGreaterThan(filteredCount);
 });
 
 test("settings validation focuses and marks the implicated field", async ({ page }) => {

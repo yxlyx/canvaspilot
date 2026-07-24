@@ -21,7 +21,7 @@ pub fn render(req: mer.Request) mer.Response {
     choice(w, "reminder_health_attention", "A health finding needs action", "Warnings and failures affecting evidence quality.", preferences.reminder_health_attention) catch return mer.internalError("notification settings render failed");
     w.writeAll("</fieldset>") catch return mer.internalError("notification settings render failed");
     if (demo) w.writeAll("<p class=\"cp-settings-readonly\">This synthetic preview is read-only.</p>") catch return mer.internalError("notification settings render failed") else w.writeAll("<button class=\"cp-btn cp-btn-primary\" type=\"submit\">Save notifications</button><p class=\"cp-form-status\" role=\"status\" tabindex=\"-1\"></p>") catch return mer.internalError("notification settings render failed");
-    w.writeAll("</form></section></div><script src=\"/settings.js?v=20260724\" defer></script>") catch return mer.internalError("notification settings render failed");
+    w.writeAll("</form></section></div><script src=\"/settings.js?v=20260724-2\" defer></script>") catch return mer.internalError("notification settings render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
