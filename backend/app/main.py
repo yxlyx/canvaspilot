@@ -1,4 +1,5 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,6 +31,7 @@ from app.routers import (
 from app.routers import (
     settings as settings_router,
 )
+from app.worker import run_worker
 
 settings = get_settings()
 
@@ -73,7 +75,14 @@ class RequestBodyLimitMiddleware:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    yield
+    worker_task = asyncio.create_task(run_worker(poll_seconds=0.5))
+    app.state.processing_worker_task = worker_task
+    try:
+        yield
+    finally:
+        worker_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await worker_task
 
 
 app = FastAPI(title="WikiBase API", version="0.1.0", lifespan=lifespan)

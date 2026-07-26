@@ -121,6 +121,25 @@ class DraftAction(BaseModel):
     card_ids: list[uuid.UUID] | None = None
 
 
+class DiscardAction(DraftAction):
+    rejection_reason: str
+
+    @field_validator("rejection_reason")
+    @classmethod
+    def valid_rejection_reason(cls, value: str) -> str:
+        allowed = {
+            "too_generic",
+            "ambiguous_answer",
+            "wrong_concept",
+            "poor_evidence",
+            "duplicate",
+            "other",
+        }
+        if value not in allowed:
+            raise ValueError("Choose a supported flashcard rejection reason")
+        return value
+
+
 class FlashcardAttemptCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     rating: str | None = None

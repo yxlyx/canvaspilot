@@ -2,7 +2,7 @@ import hashlib
 import json
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select
@@ -38,13 +38,18 @@ MIN_CONTEXT_WORDS = 6
 MIN_CONTEXT_CHARS = 35
 GENERATOR_IDENTITY = {
     "kind": "local_deterministic",
-    "version": "1",
+    "version": "2",
     "provider": None,
-    "model": "extractive",
+    "model": "evidence_first",
     "config": {
         "minimum_context_words": MIN_CONTEXT_WORDS,
         "minimum_context_chars": MIN_CONTEXT_CHARS,
-        "card_rotation": ["cloze", "short_answer", "concept_check"],
+        "quality_rules": [
+            "concept_named",
+            "answer_concise",
+            "source_title_excluded",
+            "card_type_evidence_supported",
+        ],
     },
 }
 
@@ -66,12 +71,15 @@ class FlashcardCandidate:
     source_chunk_id: uuid.UUID | None = None
     wiki_page_id: uuid.UUID | None = None
     location_label: str = ""
+    topic_id: uuid.UUID | None = None
+    topic_is_authoritative: bool = False
+    evidence_excerpt: str = ""
 
 
 def _plain_text(value: str) -> str:
     without_citations = re.sub(r"\[[A-Za-z]+\d+\]", "", value)
     without_links = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", without_citations)
-    without_markdown = re.sub(r"[#*_`>\-]+", " ", without_links)
+    without_markdown = re.sub(r"[#*_`>]+", " ", without_links)
     return re.sub(r"\s+", " ", without_markdown).strip()
 
 
@@ -86,13 +94,35 @@ def _sentences(value: str) -> list[str]:
     return sentences
 
 
+def _sentence_score(sentence: str) -> tuple[int, int]:
+    lower = sentence.lower()
+    signals = [
+        " is ",
+        " are ",
+        " refers to ",
+        " means ",
+        " because ",
+        " requires ",
+        " compared ",
+        " difference ",
+        "complexity",
+        "o(",
+    ]
+    score = sum(2 for signal in signals if signal in lower)
+    if 8 <= len(sentence.split()) <= 36:
+        score += 3
+    if sentence.endswith(":") or sentence.lower().startswith(("chapter ", "lecture ")):
+        score -= 3
+    return score, -len(sentence)
+
+
 def _first_usable_sentence(value: str) -> str | None:
     sentences = _sentences(value)
     if sentences:
-        return sentences[0]
+        return max(sentences, key=_sentence_score)
     cleaned = _plain_text(value)
     if len(cleaned) >= MIN_CONTEXT_CHARS and len(cleaned.split()) >= MIN_CONTEXT_WORDS:
-        return cleaned[:240].rstrip()
+        return cleaned[:320].rstrip()
     return None
 
 
@@ -120,6 +150,7 @@ def _candidate_from_chunk(
         source_id=source.id,
         source_chunk_id=chunk.id,
         location_label=chunk.location_label,
+        topic_is_authoritative=topic is not None,
     )
 
 
@@ -160,11 +191,53 @@ def _candidate_from_wiki_citation(page: WikiPage, citation) -> FlashcardCandidat
     )
 
 
-def _cloze_question(sentence: str) -> tuple[str, str]:
-    words = re.findall(r"[A-Za-z][A-Za-z-]{5,}", sentence)
-    keyword = max(words, key=len) if words else sentence.split()[0]
-    question = re.sub(rf"\b{re.escape(keyword)}\b", "_____", sentence, count=1)
-    return f"Fill in the blank: {question}.", keyword
+def _concept_label(candidate: FlashcardCandidate, sentence: str) -> str:
+    topic = _plain_text(candidate.topic_tag).strip(" .:-")
+    if (
+        candidate.topic_is_authoritative
+        and topic
+        and topic.lower()
+        not in {
+            "general",
+            "source",
+            "notes",
+        }
+    ):
+        return topic[:120]
+    procedure = re.match(
+        r"(?:to\s+)?((?:insert|delete|remove|update)\w*\s+[^,.;]+)",
+        sentence,
+        flags=re.IGNORECASE,
+    )
+    if procedure:
+        return procedure.group(1).strip()[:120]
+    subject = re.split(
+        r"\s+(?:is|are|means|refers to|requires?|uses?|has|describes?|measures?|"
+        r"represents?|preserves?|stores?|must|cannot)\s+",
+        sentence,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+    if subject.lower().startswith(("unlike ", "compared ")) and "," in subject:
+        subject = subject.split(",", 1)[1]
+    subject = re.sub(r"^(?:the|a|an)\s+", "", subject, flags=re.IGNORECASE).strip(" .:-")
+    words = subject.split()
+    return " ".join(words[-8:])[:120] if words else "this concept"
+
+
+def _typed_question(concept: str, sentence: str) -> tuple[str, str]:
+    lower = sentence.lower()
+    if "o(" in lower or "complexity" in lower:
+        return f"What complexity does the evidence give for {concept}?", "complexity"
+    if any(term in lower for term in ("compared", "difference", "whereas", "unlike")):
+        return f"What comparison does the evidence make about {concept}?", "comparison"
+    if any(term in lower for term in ("must", "cannot", "never", "instead")):
+        return f"What constraint does the evidence state about {concept}?", "misconception"
+    if any(term in lower for term in ("insert", "delete", "remove", "update", "steps")):
+        return f"What procedure does the evidence describe for {concept}?", "procedure"
+    if re.search(r"\b(?:is|are|means|refers to)\b", lower):
+        return f"How is {concept} defined or described?", "definition"
+    return f"What is the key idea behind {concept}?", "concept_check"
 
 
 def _card_fields(candidate: FlashcardCandidate, order_index: int) -> dict[str, object]:
@@ -172,18 +245,10 @@ def _card_fields(candidate: FlashcardCandidate, order_index: int) -> dict[str, o
     if sentence is None:
         raise ValueError("Candidate does not contain enough context")
 
-    card_type_index = order_index % 3
-    if card_type_index == 1:
-        question = f"What does {candidate.source_title} say about {candidate.topic_tag}?"
-        answer = sentence
-        card_type = "short_answer"
-    elif card_type_index == 2:
-        question = f"Explain the key idea from {candidate.citation_ref}."
-        answer = sentence
-        card_type = "concept_check"
-    else:
-        question, answer = _cloze_question(sentence)
-        card_type = "cloze"
+    concept = _concept_label(candidate, sentence)
+    question, card_type = _typed_question(concept, sentence)
+    answer = sentence[:360].rstrip()
+    excerpt = candidate.evidence_excerpt or sentence
 
     return {
         "source_id": candidate.source_id,
@@ -193,7 +258,8 @@ def _card_fields(candidate: FlashcardCandidate, order_index: int) -> dict[str, o
         "card_type": card_type,
         "question": question,
         "answer": answer,
-        "topic_tag": candidate.topic_tag,
+        "topic_tag": concept,
+        "topic_ids": [candidate.topic_id] if candidate.topic_id else [],
         "citation_ref": candidate.citation_ref,
         "citations": [
             {
@@ -203,6 +269,8 @@ def _card_fields(candidate: FlashcardCandidate, order_index: int) -> dict[str, o
                 ),
                 "wiki_page_id": str(candidate.wiki_page_id) if candidate.wiki_page_id else None,
                 "citation_ref": candidate.citation_ref,
+                "topic_id": str(candidate.topic_id) if candidate.topic_id else None,
+                "excerpt": excerpt[:500],
             }
         ],
         "source_title": candidate.source_title,
@@ -301,6 +369,65 @@ async def _source_candidates(
         for chunk in chunks:
             candidates.append(_candidate_from_chunk(source, chunk, topic))
     return candidates, source_id_list
+
+
+async def _topic_evidence_candidates(
+    user: User,
+    db: AsyncSession,
+    enrollment_id: uuid.UUID,
+    topic_ids: list[uuid.UUID],
+) -> tuple[list[FlashcardCandidate], list[uuid.UUID]]:
+    rows = (
+        await db.execute(
+            select(TopicSourceAssociation, CurriculumTopic)
+            .join(CurriculumTopic, CurriculumTopic.id == TopicSourceAssociation.topic_id)
+            .where(
+                TopicSourceAssociation.enrollment_id == enrollment_id,
+                TopicSourceAssociation.topic_id.in_(topic_ids),
+                TopicSourceAssociation.status == "confirmed",
+                TopicSourceAssociation.stale.is_(False),
+                CurriculumTopic.archived.is_(False),
+            )
+            .order_by(CurriculumTopic.position, TopicSourceAssociation.source_id)
+        )
+    ).all()
+    evidence_units: list[tuple[CurriculumTopic, uuid.UUID, uuid.UUID, dict]] = []
+    for association, topic in rows:
+        for evidence in association.evidence:
+            try:
+                chunk_id = uuid.UUID(str(evidence.get("chunk_id")))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            evidence_units.append((topic, association.source_id, chunk_id, evidence))
+
+    if not evidence_units:
+        return [], []
+    chunk_ids = list(dict.fromkeys(unit[2] for unit in evidence_units))
+    base_candidates, source_ids = await _source_chunk_candidates(user, db, chunk_ids)
+    candidates_by_chunk = {
+        candidate.source_chunk_id: candidate
+        for candidate in base_candidates
+        if candidate.source_chunk_id is not None
+    }
+    candidates: list[FlashcardCandidate] = []
+    for topic, association_source_id, chunk_id, evidence in evidence_units:
+        candidate = candidates_by_chunk.get(chunk_id)
+        if candidate is None or candidate.source_id != association_source_id:
+            continue
+        evidence_excerpt = str(evidence.get("excerpt") or "").strip()
+        if _first_usable_sentence(evidence_excerpt) is None:
+            continue
+        candidates.append(
+            replace(
+                candidate,
+                content=evidence_excerpt,
+                topic_id=topic.id,
+                topic_tag=topic.title,
+                topic_is_authoritative=True,
+                evidence_excerpt=evidence_excerpt,
+            )
+        )
+    return candidates, list(dict.fromkeys(candidate.source_id for candidate in candidates))
 
 
 async def _source_chunk_candidates(
@@ -527,6 +654,12 @@ async def _scope_snapshot(
                 "citation_ref": candidate.citation_ref,
                 "source_title": candidate.source_title,
                 "location_label": candidate.location_label,
+                "topic_id": str(candidate.topic_id) if candidate.topic_id else None,
+                "topic_title": candidate.topic_tag if candidate.topic_id else None,
+                "evidence_excerpt": candidate.evidence_excerpt,
+                "evidence_fingerprint": hashlib.sha256(
+                    candidate.evidence_excerpt.encode()
+                ).hexdigest(),
             }
         )
     return {
@@ -564,20 +697,8 @@ async def generate_flashcard_deck(
         candidates, source_ids = await _wiki_candidates(user, db, payload.wiki_page_id)
     elif enrollment_id is not None:
         if topic_ids:
-            scoped_source_ids = list(
-                (
-                    await db.execute(
-                        select(TopicSourceAssociation.source_id)
-                        .where(
-                            TopicSourceAssociation.topic_id.in_(topic_ids),
-                            TopicSourceAssociation.enrollment_id == enrollment_id,
-                            TopicSourceAssociation.status == "confirmed",
-                            TopicSourceAssociation.stale.is_(False),
-                        )
-                        .distinct()
-                        .order_by(TopicSourceAssociation.source_id)
-                    )
-                ).scalars()
+            candidates, source_ids = await _topic_evidence_candidates(
+                user, db, enrollment_id, topic_ids
             )
         else:
             scoped_source_ids = list(
@@ -590,7 +711,7 @@ async def generate_flashcard_deck(
                     )
                 ).scalars()
             )
-        candidates, source_ids = await _source_candidates(user, db, scoped_source_ids, None)
+            candidates, source_ids = await _source_candidates(user, db, scoped_source_ids, None)
     else:
         candidates, source_ids = await _source_candidates(
             user, db, payload.source_ids, payload.topic
@@ -656,14 +777,14 @@ async def generate_flashcard_deck(
     }
 
     card_fields: list[dict[str, object]] = []
-    seen_answers: set[str] = set()
+    seen_answers: set[tuple[uuid.UUID | None, str]] = set()
     for candidate in candidates:
         if len(card_fields) >= payload.limit:
             break
         sentence = _first_usable_sentence(candidate.content)
         if sentence is None:
             continue
-        answer_key = sentence.lower()
+        answer_key = (candidate.topic_id, sentence.lower())
         if answer_key in seen_answers:
             continue
         seen_answers.add(answer_key)
@@ -701,7 +822,6 @@ async def generate_flashcard_deck(
         Flashcard(
             deck_id=deck.id,
             user_id=user.id,
-            topic_ids=topic_ids,
             **fields,
         )
         for fields in card_fields
@@ -881,18 +1001,29 @@ async def _validate_topics(
 
 
 async def _canonical_citations(
-    deck: FlashcardDeck, citations: list[dict], user: User, db: AsyncSession
+    deck: FlashcardDeck,
+    citations: list[dict],
+    user: User,
+    db: AsyncSession,
+    *,
+    topic_ids: list[uuid.UUID] | None = None,
 ) -> list[dict]:
+    allowed_provenance = [
+        item
+        for item in deck.scope_snapshot.get("ordered_provenance", [])
+        if item.get("source_id") and item.get("source_chunk_id")
+    ]
     allowed_citations = {
         (
             uuid.UUID(item["source_id"]),
             uuid.UUID(item["source_chunk_id"]),
             uuid.UUID(item["wiki_page_id"]) if item.get("wiki_page_id") else None,
         )
-        for item in deck.scope_snapshot.get("ordered_provenance", [])
-        if item.get("source_id") and item.get("source_chunk_id")
+        for item in allowed_provenance
     }
     canonical = []
+    requested_topic_values = {str(topic_id) for topic_id in topic_ids or []}
+    covered_topic_values: set[str] = set()
     for citation in citations:
         source_id = uuid.UUID(str(citation["source_id"]))
         chunk_id = citation.get("source_chunk_id")
@@ -901,8 +1032,39 @@ async def _canonical_citations(
         parsed_chunk_id = uuid.UUID(str(chunk_id))
         wiki_id = citation.get("wiki_page_id")
         parsed_wiki_id = uuid.UUID(str(wiki_id)) if wiki_id is not None else None
-        if (source_id, parsed_chunk_id, parsed_wiki_id) not in allowed_citations:
+        citation_key = (source_id, parsed_chunk_id, parsed_wiki_id)
+        if citation_key not in allowed_citations:
             raise WikiBaseError(422, "citation_out_of_scope", "Citation is outside the draft scope")
+        matching_provenance = [
+            item
+            for item in allowed_provenance
+            if (
+                uuid.UUID(item["source_id"]),
+                uuid.UUID(item["source_chunk_id"]),
+                uuid.UUID(item["wiki_page_id"]) if item.get("wiki_page_id") else None,
+            )
+            == citation_key
+        ]
+        scoped_matches = [
+            item for item in matching_provenance if item.get("topic_id") in requested_topic_values
+        ]
+        covered_topic_values.update(
+            str(item["topic_id"]) for item in scoped_matches if item.get("topic_id")
+        )
+        if requested_topic_values and not scoped_matches:
+            raise WikiBaseError(
+                422,
+                "citation_out_of_scope",
+                "Citation does not support any selected canonical topic",
+            )
+        immutable_provenance = scoped_matches[0] if scoped_matches else matching_provenance[0]
+        scoped_excerpts = list(
+            dict.fromkeys(
+                str(item.get("evidence_excerpt") or "").strip()
+                for item in scoped_matches
+                if str(item.get("evidence_excerpt") or "").strip()
+            )
+        )
         try:
             source = (await _lock_ready_sources(user, db, [source_id]))[0]
         except NotFoundError as exc:
@@ -945,8 +1107,16 @@ async def _canonical_citations(
                 "location_label": (
                     wiki_citation.location_label if wiki_citation else chunk.location_label
                 ),
-                "excerpt": chunk.content,
+                "excerpt": "\n\n".join(scoped_excerpts)
+                or immutable_provenance.get("evidence_excerpt")
+                or chunk.content,
             }
+        )
+    if requested_topic_values - covered_topic_values:
+        raise WikiBaseError(
+            422,
+            "citation_out_of_scope",
+            "Citations do not support every selected canonical topic",
         )
     return canonical
 
@@ -989,11 +1159,11 @@ async def update_draft_card(
     citations = values.get("citations", card.citations)
     manual_note = values.get("manual_note", card.manual_note)
     _validate_supported(citations, manual_note)
-    citations = await _canonical_citations(deck, citations, user, db)
-    if "citations" in values:
-        values["citations"] = citations
     topic_ids = values.get("topic_ids", card.topic_ids)
     await _validate_topics(deck, topic_ids, user, db)
+    citations = await _canonical_citations(deck, citations, user, db, topic_ids=topic_ids)
+    if "citations" in values:
+        values["citations"] = citations
     for field, value in values.items():
         setattr(card, field, value)
     if "citations" in values:
@@ -1024,7 +1194,9 @@ async def add_draft_card(
     _draft(deck, payload.expected_revision)
     requested_citations = [citation.model_dump(mode="json") for citation in payload.citations]
     _validate_supported(requested_citations, payload.manual_note)
-    citations = await _canonical_citations(deck, requested_citations, user, db)
+    citations = await _canonical_citations(
+        deck, requested_citations, user, db, topic_ids=payload.topic_ids
+    )
     await _validate_topics(deck, payload.topic_ids, user, db)
     before = _deck_state(deck)
     first_citation = citations[0] if citations else {}
@@ -1072,6 +1244,8 @@ async def mutate_draft_cards(
     card_ids: list[uuid.UUID] | None,
     expected_revision: int,
     db: AsyncSession,
+    *,
+    rejection_reason: str | None = None,
 ) -> FlashcardDeck:
     deck = await _lock_owned_deck(user, deck_id, db)
     _draft(deck, expected_revision)
@@ -1106,13 +1280,19 @@ async def mutate_draft_cards(
         for card_id in card_ids:
             cards[card_id].state = state
             cards[card_id].approved = False
+            if action == "discard" and rejection_reason is not None:
+                cards[card_id].tags = [
+                    tag for tag in cards[card_id].tags if not tag.startswith("rejected:")
+                ] + [f"rejected:{rejection_reason}"]
     elif action == "approve":
         for card_id in card_ids:
             card = cards[card_id]
             if card.state != "active":
                 raise WikiBaseError(422, "discarded_card", "Discarded cards cannot be approved")
             _validate_supported(card.citations, card.manual_note)
-            card.citations = await _canonical_citations(deck, card.citations, user, db)
+            card.citations = await _canonical_citations(
+                deck, card.citations, user, db, topic_ids=card.topic_ids
+            )
             await _validate_topics(deck, card.topic_ids, user, db)
             card.approved = True
     deck.card_count = sum(card.state == "active" for card in deck.cards)
@@ -1141,7 +1321,9 @@ async def transition_flashcard_deck(
             if not card.approved:
                 raise WikiBaseError(422, "card_not_approved", "All active cards must be approved")
             _validate_supported(card.citations, card.manual_note)
-            card.citations = await _canonical_citations(deck, card.citations, user, db)
+            card.citations = await _canonical_citations(
+                deck, card.citations, user, db, topic_ids=card.topic_ids
+            )
             await _validate_topics(deck, card.topic_ids, user, db)
         before = _deck_state(deck)
         await db.flush()
@@ -1287,7 +1469,7 @@ async def list_learning_evidence(
 ) -> list[LearningEvidence]:
     statement = select(LearningEvidence).where(LearningEvidence.user_id == user.id)
     if topic_tag:
-        statement = statement.where(LearningEvidence.topic_tag == topic_tag)
+        statement = statement.where(func.lower(LearningEvidence.topic_tag) == topic_tag.lower())
     statement = statement.order_by(LearningEvidence.occurred_at.desc()).limit(limit)
     result = await db.execute(statement)
     return list(result.scalars().all())

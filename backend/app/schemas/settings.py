@@ -104,6 +104,9 @@ class ActivityEntryResponse(BaseModel):
         "study_guide",
         "processing_failure",
         "processing_event",
+        "processing_attention",
+        "processing_completed",
+        "processing_recovered",
     ]
     category: Literal["content", "evidence", "study_guides"]
     title: str

@@ -19,7 +19,7 @@ from app.models.user import User
 from app.models.wiki import WikiCitation, WikiPage
 from app.schemas.flashcards import FlashcardAttemptCreate, FlashcardGenerateRequest
 from app.schemas.sources import SourceCreate
-from app.services.flashcards import _candidate_from_wiki_citation
+from app.services.flashcards import FlashcardCandidate, _candidate_from_wiki_citation, _card_fields
 from app.services.sources import create_or_update_source
 
 
@@ -234,6 +234,56 @@ def test_wiki_candidate_uses_cited_section_when_citation_snippet_is_too_short():
     assert candidate.source_chunk_id == chunk_id
 
 
+@pytest.mark.parametrize(
+    ("sentence", "expected_type", "question_fragment"),
+    [
+        (
+            "Searching an unsorted linked list has O(n) time complexity.",
+            "complexity",
+            "What complexity",
+        ),
+        (
+            "An array is contiguous storage for elements of the same type.",
+            "definition",
+            "defined or described",
+        ),
+        (
+            "To insert a node, update the new node and then the head pointer.",
+            "procedure",
+            "What procedure",
+        ),
+        (
+            "Unlike arrays, linked lists store nodes in non-contiguous memory.",
+            "comparison",
+            "What comparison",
+        ),
+        (
+            "A tail pointer must never reference a removed node after deletion.",
+            "misconception",
+            "What constraint",
+        ),
+    ],
+)
+def test_typed_questions_ask_only_for_the_supported_relation(
+    sentence, expected_type, question_fragment
+):
+    fields = _card_fields(
+        FlashcardCandidate(
+            content=sentence,
+            citation_ref="Section 1",
+            source_title="DATA STRUCTURES DIGITAL NOTES",
+            topic_tag="general",
+        ),
+        1,
+    )
+
+    assert fields["card_type"] == expected_type
+    assert question_fragment in fields["question"]
+    assert fields["answer"] == sentence.rstrip(".")
+    assert "DATA STRUCTURES DIGITAL NOTES" not in fields["question"]
+    assert "Section 1" not in fields["question"]
+
+
 @pytest.mark.asyncio
 async def test_generate_flashcards_from_sources_preserves_citations(flashcard_client):
     client, session, user, _ = flashcard_client
@@ -252,13 +302,17 @@ async def test_generate_flashcards_from_sources_preserves_citations(flashcard_cl
     assert deck["generation_scope"] == "sources"
     assert deck["source_ids"] == [str(source.id)]
     assert deck["card_count"] == 2
-    assert {card["card_type"] for card in deck["cards"]} == {"short_answer", "concept_check"}
+    assert {card["card_type"] for card in deck["cards"]} == {"concept_check"}
     first_card = deck["cards"][0]
     assert first_card["source_id"] == str(source.id)
     assert first_card["source_chunk_id"] == str(chunks[0].id)
     assert first_card["citation_ref"] == "Limits Notes Citation: Section 1"
-    assert first_card["topic_tag"] == "calculus"
+    assert first_card["topic_tag"] == "Limits"
+    assert first_card["question"] == "What is the key idea behind Limits?"
+    assert source.title not in first_card["question"]
+    assert first_card["citation_ref"] not in first_card["question"]
     assert "Limits describe" in first_card["answer"]
+    assert first_card["citations"][0]["excerpt"] == first_card["answer"]
 
     stored_cards = (
         (await session.execute(select(Flashcard).where(Flashcard.deck_id == uuid.UUID(deck["id"]))))
@@ -289,7 +343,7 @@ async def test_generate_flashcards_from_selected_source_chunks_only(flashcard_cl
     ]
     assert [card["order_index"] for card in deck["cards"]] == [1, 2]
     assert deck["cards"][0]["citation_ref"] == chunks[1].citation_ref
-    assert "One sided limits" in deck["cards"][0]["answer"]
+    assert "One-sided limits" in deck["cards"][0]["answer"]
 
 
 @pytest.mark.asyncio
@@ -417,7 +471,7 @@ async def test_attempt_logging_creates_learning_evidence(flashcard_client):
     assert attempt["confidence"] == 3
     evidence = attempt["evidence"]
     assert evidence["evidence_type"] == "flashcard_attempt"
-    assert evidence["topic_tag"] == "calculus"
+    assert evidence["topic_tag"] == "Limits"
     assert evidence["source_id"] == str(source.id)
     assert evidence["source_chunk_id"] == str(chunks[0].id)
     assert evidence["flashcard_id"] == card["id"]
@@ -428,9 +482,7 @@ async def test_attempt_logging_creates_learning_evidence(flashcard_client):
     ).scalar_one()
     assert stored_evidence.flashcard_attempt_id == uuid.UUID(attempt["id"])
 
-    evidence_response = await client.get(
-        "/api/flashcards/evidence", params={"topic_tag": "calculus"}
-    )
+    evidence_response = await client.get("/api/flashcards/evidence", params={"topic_tag": "limits"})
     assert evidence_response.status_code == 200
     assert evidence_response.json()[0]["id"] == evidence["id"]
 

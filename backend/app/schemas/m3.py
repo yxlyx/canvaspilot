@@ -292,7 +292,7 @@ class MarkedPaperPageResponse(BaseModel):
 
 
 class ProviderAuthMethodDescriptor(BaseModel):
-    kind: Literal["oauth_code", "api_key", "managed"]
+    kind: Literal["oauth_code", "api_key", "managed", "local_cli"]
     label: str
     recommended: bool = False
     enabled: bool = True

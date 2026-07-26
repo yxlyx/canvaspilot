@@ -7,6 +7,7 @@ from app.db.database import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
 from app.schemas.flashcards import (
+    DiscardAction,
     DraftAction,
     DraftCardAdd,
     DraftCardUpdate,
@@ -160,11 +161,19 @@ async def reorder_cards(
 @router.post("/drafts/{deck_id}/discard", response_model=FlashcardDeckResponse)
 async def discard_cards(
     deck_id: uuid.UUID,
-    payload: DraftAction,
+    payload: DiscardAction,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await _card_action(deck_id, "discard", payload, user, db)
+    return await mutate_draft_cards(
+        user,
+        deck_id,
+        "discard",
+        payload.card_ids,
+        payload.expected_revision,
+        db,
+        rejection_reason=payload.rejection_reason,
+    )
 
 
 @router.post("/drafts/{deck_id}/restore", response_model=FlashcardDeckResponse)

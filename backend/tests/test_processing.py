@@ -26,6 +26,7 @@ from app.models.source import Source, SourceKind, SourceStatus
 from app.models.source_chunk import SourceChunk
 from app.models.user import User
 from app.schemas.m3 import StudyOutputGenerateRequest
+from app.services.activity import activity_entries
 from app.services.curriculum import _source_chunks_fingerprint
 from app.services.curriculum_coverage import _chunks_by_source
 from app.services.flashcards import _source_candidates
@@ -511,6 +512,114 @@ async def test_processing_status_api_is_user_scoped(processing_session):
     assert response.status_code == 404
     assert listing.status_code == 200
     assert all(item["id"] != str(run.id) for item in listing.json())
+
+
+@pytest.mark.asyncio
+async def test_latest_processing_runs_returns_one_run_per_source(processing_session):
+    session, user, _ = processing_session
+    first_source = await _source(session, user, "Versioned notes")
+    first_run = await _enqueue(
+        session,
+        user,
+        first_source,
+        "The first source version contains enough durable evidence for processing.",
+    )
+    latest_run = await _enqueue(
+        session,
+        user,
+        first_source,
+        "The replacement source version contains different durable evidence for processing.",
+    )
+    second_source = await _source(session, user, "Other notes")
+    other_run = await _enqueue(
+        session,
+        user,
+        second_source,
+        "A separate source contains enough durable evidence for its own processing run.",
+    )
+
+    async def current_user():
+        return user
+
+    async def current_db():
+        yield session
+
+    app.dependency_overrides[get_current_user] = current_user
+    app.dependency_overrides[get_db] = current_db
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/processing/runs?latest_per_source=true")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    ids = {item["id"] for item in response.json()}
+    assert ids == {str(latest_run.id), str(other_run.id)}
+    assert str(first_run.id) not in ids
+
+
+@pytest.mark.asyncio
+async def test_activity_groups_interruption_and_recovery_without_duplicate_failure(
+    processing_session,
+):
+    session, user, _ = processing_session
+    source = await _source(session, user, "Recovered notes")
+    run = await _enqueue(
+        session,
+        user,
+        source,
+        "Recovered source content contains enough durable evidence for processing.",
+    )
+    failed_at = datetime.now(UTC) - timedelta(minutes=5)
+    ready_at = datetime.now(UTC)
+    session.add_all(
+        [
+            ProcessingEvent(
+                run_id=run.id,
+                user_id=user.id,
+                event_type="stage_failed",
+                dedupe_key="activity:failed",
+                payload={"error_code": "temporary_failure"},
+                created_at=failed_at,
+            ),
+            ProcessingEvent(
+                run_id=run.id,
+                user_id=user.id,
+                event_type="run_ready",
+                dedupe_key="activity:ready",
+                payload={"status": "ready"},
+                created_at=ready_at,
+            ),
+        ]
+    )
+    run.status = "ready"
+    run.updated_at = ready_at
+    source.status = SourceStatus.READY
+    await session.commit()
+
+    entries = await activity_entries(user, session, 20)
+    processing_entries = [entry for entry in entries if str(entry["resource_id"]) == str(source.id)]
+
+    assert len(processing_entries) == 1
+    assert processing_entries[0]["event_type"] == "processing_recovered"
+    assert processing_entries[0]["title"] == "Source processing recovered"
+    assert "earlier interruption" in processing_entries[0]["summary"].lower()
+
+    async def current_user():
+        return user
+
+    async def current_db():
+        yield session
+
+    app.dependency_overrides[get_current_user] = current_user
+    app.dependency_overrides[get_db] = current_db
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/wiki/activity")
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 200
+    assert any(item["event_type"] == "processing_recovered" for item in response.json())
 
 
 @pytest.mark.asyncio

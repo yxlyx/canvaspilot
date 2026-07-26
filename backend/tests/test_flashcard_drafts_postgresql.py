@@ -189,14 +189,25 @@ async def test_draft_review_lifecycle_snapshots_counts_and_attempts(draft_client
     )
     _error(outside_scope, 422, "citation_out_of_scope")
 
-    discarded = await client.post(
+    missing_rejection_reason = await client.post(
         f"/api/flashcards/drafts/{deck['id']}/discard",
         json={"expected_revision": deck["revision"], "card_ids": [generated_card["id"]]},
+    )
+    assert missing_rejection_reason.status_code == 422
+
+    discarded = await client.post(
+        f"/api/flashcards/drafts/{deck['id']}/discard",
+        json={
+            "expected_revision": deck["revision"],
+            "card_ids": [generated_card["id"]],
+            "rejection_reason": "too_generic",
+        },
     )
     assert discarded.status_code == 200
     deck = discarded.json()
     assert deck["card_count"] == 0
     assert deck["cards"][0]["state"] == "discarded"
+    assert "rejected:too_generic" in deck["cards"][0]["tags"]
     stale_revision = await client.patch(
         f"/api/flashcards/drafts/{deck['id']}",
         json={"expected_revision": deck["revision"] - 1, "title": "Stale title"},
@@ -238,7 +249,11 @@ async def test_draft_review_lifecycle_snapshots_counts_and_attempts(draft_client
 
     discarded_after_reorder = await client.post(
         f"/api/flashcards/drafts/{deck['id']}/discard",
-        json={"expected_revision": deck["revision"], "card_ids": [manual_card["id"]]},
+        json={
+            "expected_revision": deck["revision"],
+            "card_ids": [manual_card["id"]],
+            "rejection_reason": "duplicate",
+        },
     )
     assert discarded_after_reorder.status_code == 200
     deck = discarded_after_reorder.json()
@@ -273,7 +288,11 @@ async def test_draft_review_lifecycle_snapshots_counts_and_attempts(draft_client
     )
     discarded_for_publication = await client.post(
         f"/api/flashcards/drafts/{deck['id']}/discard",
-        json={"expected_revision": deck["revision"], "card_ids": [discarded_card["id"]]},
+        json={
+            "expected_revision": deck["revision"],
+            "card_ids": [discarded_card["id"]],
+            "rejection_reason": "other",
+        },
     )
     assert discarded_for_publication.status_code == 200
     deck = discarded_for_publication.json()
@@ -479,7 +498,7 @@ async def test_wiki_draft_accepts_only_snapshotted_chunk_page_pairs(draft_client
 @pytest.mark.asyncio
 async def test_topic_order_returns_same_draft_and_fingerprint(draft_client):
     client, session, user = draft_client
-    source, _chunks = await _ready_source(session, user)
+    source, chunks = await _ready_source(session, user)
     suffix = uuid.uuid4().hex[:8].upper()
     catalog = CatalogModule(
         institution="Test University",
@@ -545,7 +564,14 @@ async def test_topic_order_returns_same_draft_and_fingerprint(draft_client):
                 rule_hash="c" * 64,
                 source_fingerprint="d" * 64,
                 topic_fingerprint="e" * 64,
-                evidence=[],
+                evidence=[
+                    {
+                        "chunk_id": str(chunks[0].id),
+                        "citation": chunks[0].citation_ref,
+                        "excerpt": chunks[0].content[:80],
+                        "location": chunks[0].location_label,
+                    }
+                ],
                 reason_code="manual_confirmation",
                 reviewed_at=datetime.now(UTC),
                 reviewer_id=user.id,
@@ -557,20 +583,59 @@ async def test_topic_order_returns_same_draft_and_fingerprint(draft_client):
 
     first = await client.post(
         "/api/flashcards/decks/generate",
-        json={"topic_ids": [str(topics[0].id), str(topics[1].id)], "limit": 1},
+        json={"topic_ids": [str(topics[0].id), str(topics[1].id)], "limit": 2},
     )
     assert first.status_code == 200, first.text
     first_deck = first.json()["deck"]
 
     reversed_order = await client.post(
         "/api/flashcards/decks/generate",
-        json={"topic_ids": [str(topics[1].id), str(topics[0].id)], "limit": 1},
+        json={"topic_ids": [str(topics[1].id), str(topics[0].id)], "limit": 2},
     )
     assert reversed_order.status_code == 200, reversed_order.text
     reversed_deck = reversed_order.json()["deck"]
 
     assert reversed_deck["id"] == first_deck["id"]
     assert reversed_deck["input_fingerprint"] == first_deck["input_fingerprint"]
+    assert [card["topic_ids"] for card in first_deck["cards"]] == [
+        [str(topics[0].id)],
+        [str(topics[1].id)],
+    ]
+    assert [card["topic_tag"] for card in first_deck["cards"]] == [
+        topics[0].title,
+        topics[1].title,
+    ]
+    assert all(
+        card["citations"][0]["excerpt"] == chunks[0].content[:80] for card in first_deck["cards"]
+    )
+    approved = await client.post(
+        f"/api/flashcards/drafts/{first_deck['id']}/approve",
+        json={
+            "expected_revision": first_deck["revision"],
+            "card_ids": [card["id"] for card in first_deck["cards"]],
+        },
+    )
+    assert approved.status_code == 200, approved.text
+    published = await client.post(
+        f"/api/flashcards/decks/{first_deck['id']}/publish",
+        json={"expected_revision": approved.json()["revision"]},
+    )
+    assert published.status_code == 200, published.text
+    assert all(
+        card["citations"][0]["excerpt"] == chunks[0].content[:80]
+        for card in published.json()["cards"]
+    )
+
+    topics[0].title = "Lock ordering"
+    await session.commit()
+    renamed_topic = await client.post(
+        "/api/flashcards/decks/generate",
+        json={"topic_ids": [str(topics[0].id), str(topics[1].id)], "limit": 2},
+    )
+    assert renamed_topic.status_code == 200
+    renamed_deck = renamed_topic.json()["deck"]
+    assert renamed_deck["id"] != first_deck["id"]
+    assert renamed_deck["input_fingerprint"] != first_deck["input_fingerprint"]
 
     await session.delete(enrollment)
     await session.flush()

@@ -7,11 +7,13 @@ from typing import Any
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AuthenticationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.exceptions import WikiBaseError
 from app.models.user import User
 from app.schemas.chat import ChatMessage
 from app.services.providers import (
     GenerationProvider,
     force_refresh_generation_provider,
+    mark_local_codex_unavailable,
     resolve_generation_provider,
 )
 from app.services.retrieval import RetrievedChunk
@@ -58,6 +60,23 @@ async def prepare_rag_stream(
     for msg in history[-10:]:
         messages.append({"role": msg.role, "content": msg.content})
     messages.append({"role": "user", "content": query})
+    if provider.transport == "codex_cli":
+        from app.services.local_codex import generate_with_local_codex
+
+        transcript = "\n\n".join(
+            f"{message['role'].upper()}:\n{message['content']}" for message in messages
+        )
+        prompt = (
+            "Answer the academic question below. Return only the final answer text. "
+            "Do not inspect local files, run commands, or use tools.\n\n"
+            f"{transcript}"
+        )
+        try:
+            answer = await generate_with_local_codex(prompt, provider.model)
+        except WikiBaseError as exc:
+            await mark_local_codex_unavailable(user, db, exc.error, exc.detail)
+            raise
+        return PreparedRagStream(provider=provider, stream=answer)
     client = _provider_client(provider)
     if provider.transport == "responses":
         headers = {"originator": "canvaspilot"}
@@ -113,7 +132,12 @@ async def stream_rag_response(
     stream = prepared.stream
     full_response = ""
 
-    if provider.transport == "responses":
+    if provider.transport == "codex_cli":
+        full_response = str(stream)
+        for start in range(0, len(full_response), 256):
+            text = full_response[start : start + 256]
+            yield {"event": "token", "data": json.dumps({"text": text})}
+    elif provider.transport == "responses":
         async for event in stream:
             if getattr(event, "type", "") != "response.output_text.delta":
                 continue

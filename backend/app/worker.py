@@ -13,8 +13,17 @@ logger = logging.getLogger(__name__)
 async def run_worker(*, once: bool = False, poll_seconds: float = 1.0) -> None:
     worker_id = f"{socket.gethostname()}:{uuid.uuid4()}"
     while True:
-        async with async_session_factory() as db:
-            run = await work_once(db, worker_id)
+        try:
+            async with async_session_factory() as db:
+                run = await work_once(db, worker_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if once:
+                raise
+            logger.exception("processing worker iteration failed; retrying")
+            await asyncio.sleep(poll_seconds)
+            continue
         if once:
             return
         if run is None:

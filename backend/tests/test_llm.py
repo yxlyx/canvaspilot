@@ -3,7 +3,7 @@ import json
 import pytest
 
 from app.schemas.chat import ChatMessage
-from app.services import llm
+from app.services import llm, local_codex
 from app.services.providers import GenerationProvider
 from app.services.retrieval import RetrievedChunk
 
@@ -180,3 +180,58 @@ async def test_stream_rag_response_uses_chatgpt_responses_transport(monkeypatch)
     }
     assert captured["model"] == "gpt-test-codex"
     assert "messages" not in captured
+
+
+@pytest.mark.asyncio
+async def test_stream_rag_response_uses_local_codex_without_credentials(monkeypatch):
+    captured = None
+
+    async def generate(prompt: str, model: str):
+        nonlocal captured
+        captured = (prompt, model)
+        return "Grounded local answer [1]."
+
+    monkeypatch.setattr(local_codex, "generate_with_local_codex", generate)
+    provider = GenerationProvider(
+        provider="chatgpt",
+        model="gpt-5-codex",
+        endpoint="local://codex-cli",
+        api_key="",
+        auth_method="local_cli",
+        transport="codex_cli",
+    )
+    chunks = [
+        RetrievedChunk(
+            content="Verified source text",
+            score=0.9,
+            source_title="Local source",
+            source_url="",
+            source_type="file",
+        )
+    ]
+
+    prepared = await llm.prepare_rag_stream(
+        "Question",
+        "[1] Verified source text",
+        [],
+        None,
+        None,
+        provider,
+    )
+    events = [
+        event
+        async for event in llm.stream_rag_response(
+            query="Question",
+            context="[1] Verified source text",
+            chunks=chunks,
+            history=[],
+            provider=provider,
+            prepared=prepared,
+        )
+    ]
+
+    assert captured is not None
+    assert captured[1] == "gpt-5-codex"
+    assert "Verified source text" in captured[0]
+    assert json.loads(events[0]["data"]) == {"text": "Grounded local answer [1]."}
+    assert events[1]["event"] == "citations"
