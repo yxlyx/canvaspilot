@@ -58,6 +58,42 @@ test("chat sends the selected local enrollment and opens the exact source record
   await expect(page.locator(".citation > span")).toHaveText(["5", "2", "4", "1"]);
 });
 
+test("chat distinguishes no evidence, provider attention, and retryable retrieval", async ({ page }) => {
+  let mode = "no_evidence";
+  let retrievalCalls = 0;
+  await page.route("**/api/chat", async (route) => {
+    if (mode === "no_evidence") return route.fulfill({ status: 200, json: { message: "No relevant content found in your workspace sources.", citations: [], grounded: false, confidence: 0, outcome: "no_evidence" } });
+    if (mode === "provider") return route.fulfill({ status: 409, json: { error: "provider_unavailable", detail: "The answer provider needs attention. Your sources remain available." } });
+    retrievalCalls += 1;
+    if (retrievalCalls === 1) return route.fulfill({ status: 503, json: { error: "retrieval_unavailable", detail: "Source retrieval stopped before an answer was created." } });
+    return route.fulfill({ status: 200, json: { message: "Recovered grounded response.", citations: [], grounded: true } });
+  });
+  await loadChat(page, true);
+
+  await page.locator("#cp-chat-input").fill("Question with no evidence");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByText("No matching evidence", { exact: true })).toBeVisible();
+  await expect(page.locator(".student-turn")).toHaveCount(1);
+
+  await page.getByRole("button", { name: "Clear conversation" }).click();
+  mode = "provider";
+  await page.locator("#cp-chat-input").fill("Question needing a provider");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByText("Answer provider unavailable", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open provider settings" })).toHaveAttribute("href", "/settings/providers");
+  await expect(page.locator("#cp-chat-input")).toHaveValue("Question needing a provider");
+
+  await page.getByRole("button", { name: "Clear conversation" }).click();
+  mode = "retrieval";
+  await page.locator("#cp-chat-input").fill("Retry this question");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByText("Retrieval interrupted", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByText("Recovered grounded response.")).toBeVisible();
+  await expect(page.locator(".student-turn")).toHaveCount(1);
+  expect(retrievalCalls).toBe(2);
+});
+
 test("chat all-source mode sends no enrollment scope", async ({ page }) => {
   const requests = [];
   await page.route("**/api/chat", async (route) => {

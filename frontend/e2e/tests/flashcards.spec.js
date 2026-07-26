@@ -85,6 +85,22 @@ test("approve, publish, and retire remain explicit draft lifecycle actions", asy
   await expect.poll(() => requests.some((item) => item.action === "retire")).toBe(true);
 });
 
+test("discard requires and submits a card quality reason", async ({ page }) => {
+  let requestBody;
+  await page.route("**/api/flashcards", async (route) => {
+    requestBody = route.request().postDataJSON();
+    return route.fulfill({ status: 200, json: { revision: 5 } });
+  });
+  await loadScript(page, `<main data-draft-review data-deck-id="123e4567-e89b-12d3-a456-426614174000" data-revision="4" data-lifecycle="draft"><div data-draft-status></div><ol data-card-list><li data-card-id="223e4567-e89b-12d3-a456-426614174000" data-discarded="false"><select data-rejection-reason><option value="">Choose a reason</option><option value="too_generic">Too generic</option></select><button type="button" data-discard>Discard</button></li></ol></main>`);
+  await page.getByRole("button", { name: "Discard" }).click();
+  await expect(page.locator("[data-draft-status]")).toContainText("Choose why this card is not useful");
+  expect(requestBody).toBeUndefined();
+  await page.locator("[data-rejection-reason]").selectOption("too_generic");
+  await page.getByRole("button", { name: "Discard" }).click();
+  await expect.poll(() => requestBody && requestBody.payload.rejection_reason).toBe("too_generic");
+  expect(requestBody.payload.card_ids).toEqual(["223e4567-e89b-12d3-a456-426614174000"]);
+});
+
 test("generation sends exactly one stable scope and opens review rather than study", async ({ page }) => {
   const requests = [];
   await page.route("**/flashcards/drafts/**", (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<h1>Review draft</h1>" }));

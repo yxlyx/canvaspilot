@@ -134,6 +134,8 @@ fn formPayload(req: mer.Request, action: []const u8) !?std.json.Value {
         if (std.mem.eql(u8, action, "paper.updateQuestion")) try object.put(req.allocator, "reviewed", .{ .bool = formValue(req, "reviewed") != null });
     } else if (std.mem.eql(u8, action, "provider.auth.start")) {
         try object.put(req.allocator, "return_path", .{ .string = try requiredFormValue(req, "return_path") });
+    } else if (std.mem.eql(u8, action, "provider.local.connect")) {
+        // The authenticated backend derives local CLI configuration server-side.
     } else if (std.mem.eql(u8, action, "provider.save")) {
         const provider = try requiredFormValue(req, "provider");
         try object.put(req.allocator, "provider", .{ .string = provider });
@@ -171,6 +173,8 @@ fn formMutation(req: mer.Request) !FormMutation {
         "/sources/health"
     else if (std.mem.eql(u8, action, "provider.auth.start") and id != null and safeSegment(id.?))
         try std.fmt.allocPrint(req.allocator, "/settings/providers?provider={s}&auth=failed", .{id.?})
+    else if (std.mem.eql(u8, action, "provider.local.connect"))
+        "/settings/providers?provider=chatgpt"
     else if (std.mem.startsWith(u8, action, "provider."))
         "/settings/providers"
     else if (std.mem.eql(u8, action, "wiki.export"))
@@ -195,6 +199,7 @@ fn route(allocator: std.mem.Allocator, envelope: Envelope) !struct { std.http.Me
     if (std.mem.eql(u8, action, "health.run")) return .{ .POST, "/api/workspace/health", false };
     if (std.mem.eql(u8, action, "paper.upload")) return .{ .POST, "/api/marked-papers", false };
     if (std.mem.eql(u8, action, "provider.save")) return .{ .PUT, "/api/providers/settings", false };
+    if (std.mem.eql(u8, action, "provider.local.connect")) return .{ .POST, "/api/providers/chatgpt/local-cli/connect", false };
     if (std.mem.eql(u8, action, "provider.auth.start")) {
         const provider = envelope.id orelse return error.InvalidRoute;
         if (!safeSegment(provider)) return error.InvalidRoute;
@@ -280,6 +285,17 @@ pub fn render(req: mer.Request) mer.Response {
 
 test "M3 proxy allowlist rejects arbitrary paths" {
     try std.testing.expectError(error.InvalidRoute, route(std.testing.allocator, .{ .action = "fetch", .idempotency_key = "12345678-1234-1234-1234-123456789012", .id = "https://evil.example" }));
+}
+
+test "local Codex connection uses the fixed authenticated backend route" {
+    const target = try route(std.testing.allocator, .{
+        .action = "provider.local.connect",
+        .idempotency_key = "12345678-1234-1234-1234-123456789012",
+        .id = "chatgpt",
+    });
+    try std.testing.expectEqual(.POST, target[0]);
+    try std.testing.expectEqualStrings("/api/providers/chatgpt/local-cli/connect", target[1]);
+    try std.testing.expect(!target[2]);
 }
 
 test "form fallback builds the canonical study-output payload" {

@@ -103,7 +103,9 @@ pub fn render(req: mer.Request) mer.Response {
         const clear_path = if (enrollment_scope.len > 0) std.fmt.allocPrint(req.allocator, "/wiki?enrollment={s}", .{enrollment_scope}) catch "/wiki" else "/wiki";
         const clear_href = lib.m3.demoHref(req.allocator, req, clear_path) catch return mer.internalError("wiki index render failed");
         if (topic_count == 0 and query.len == 0 and filter_module.len == 0) {
-            w.writeAll("<div class=\"empty-state surface\"><h2>No wiki pages have been generated yet.</h2><p>Import sources, then generate a source-grounded page.</p></div>") catch return mer.internalError("wiki index render failed");
+            const processing_path = if (enrollment_scope.len > 0) std.fmt.allocPrint(req.allocator, "/sources?enrollment_id={s}#processing", .{enrollment_scope}) catch "/sources#processing" else "/sources#processing";
+            const processing_href = lib.m3.demoHref(req.allocator, req, processing_path) catch return mer.internalError("wiki index render failed");
+            w.print("<div class=\"empty-state surface\"><h2>No Wiki pages yet</h2><p>A source may still be processing. Check its saved run, or add evidence before compiling a cited page.</p><a class=\"button button-secondary\" href=\"{s}\">Check source processing</a></div>", .{processing_href}) catch return mer.internalError("wiki index render failed");
         } else {
             w.print("<div class=\"empty-state wiki-empty-state surface\"><div><h2>No connected topics found</h2><p>Try another module or search term.</p></div><a class=\"button button-secondary\" href=\"{s}\">Clear search</a></div>", .{clear_href}) catch return mer.internalError("wiki index render failed");
         }

@@ -167,6 +167,7 @@ test("authenticated live chat reports backend unavailability without demo fallba
 
   expect(result.status).toBe(502);
   expect(result.body).toEqual({
-    error: "live chat is unavailable; no demo answer was substituted",
+    error: "backend_unavailable",
+    detail: "WikiBase could not reach the local backend. Your question and source data are safe.",
   });
 });

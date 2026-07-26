@@ -8,6 +8,7 @@ pub fn render(req: mer.Request) mer.Response {
     if (lib.m3.gate(req, "Activity")) |response| return response;
     const use_mock = lib.m3.isExplicitDemo(req);
     const selected = req.queryParam("type") orelse "all";
+    const now_secs = lib.time.nowSecs();
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
     lib.m3.demoMarker(req, w) catch return mer.internalError("activity render failed");
@@ -24,17 +25,19 @@ pub fn render(req: mer.Request) mer.Response {
         for (lib.mock.history_changes) |entry| {
             if (!std.mem.eql(u8, selected, "all") and !std.mem.eql(u8, selected, "content")) continue;
             shown += 1;
-            w.print("<li><article class=\"wb-m3-history-card\"><time>{s}</time><div><p class=\"eyebrow\">Content</p><h2>{s}</h2><p>{s}</p><details class=\"cp-activity-diff\"><summary>Review bounded diff</summary><pre aria-label=\"Unified diff\">", .{ lib.ui.escapeSafe(req.allocator, entry.changed_at), lib.ui.escapeSafe(req.allocator, entry.subject_title), lib.ui.escapeSafe(req.allocator, entry.summary) }) catch return mer.internalError("activity render failed");
+            const relative = lib.time.formatRelative(req.allocator, entry.changed_at, now_secs) catch "—";
+            const absolute = lib.time.formatAbsolute(req.allocator, entry.changed_at) catch "—";
+            w.print("<li><article class=\"wb-m3-history-card\"><time datetime=\"{s}\" title=\"{s}\">{s}</time><div><p class=\"eyebrow\">Content</p><h2>{s}</h2><p>{s}</p><details class=\"cp-activity-diff\"><summary>Review bounded diff</summary><pre aria-label=\"Unified diff\">", .{ lib.ui.escapeSafe(req.allocator, entry.changed_at), lib.ui.escapeSafe(req.allocator, absolute), lib.ui.escapeSafe(req.allocator, relative), lib.ui.escapeSafe(req.allocator, entry.subject_title), lib.ui.escapeSafe(req.allocator, entry.summary) }) catch return mer.internalError("activity render failed");
             for (entry.diff) |line| w.print("<span class=\"cp-diff-{s}\">{s}</span>\n", .{ @tagName(line.kind), lib.ui.escapeSafe(req.allocator, line.text) }) catch return mer.internalError("activity render failed");
             w.writeAll("</pre></details></div></article></li>") catch return mer.internalError("activity render failed");
         }
         if (std.mem.eql(u8, selected, "all") or std.mem.eql(u8, selected, "evidence")) {
             shown += 1;
-            w.writeAll("<li><article class=\"wb-m3-history-card\"><time>2026-05-17T18:25:00Z</time><div><p class=\"eyebrow\">Flashcard review</p><h2>Balanced trees evidence recorded</h2><p>Reviewed 8 cards with 75% recall; the result now contributes to the topic estimate.</p></div></article></li>") catch return mer.internalError("activity render failed");
+            w.writeAll("<li><article class=\"wb-m3-history-card\"><time datetime=\"2026-05-17T18:25:00Z\">recently</time><div><p class=\"eyebrow\">Flashcard review</p><h2>Balanced trees evidence recorded</h2><p>Reviewed 8 cards with 75% recall; the result now contributes to the topic estimate.</p></div></article></li>") catch return mer.internalError("activity render failed");
         }
         if (std.mem.eql(u8, selected, "all") or std.mem.eql(u8, selected, "study_guides")) {
             shown += 1;
-            w.writeAll("<li><article class=\"wb-m3-history-card\"><time>2026-05-16T11:10:00Z</time><div><p class=\"eyebrow\">Study guide</p><h2>AVL rotations revision guide</h2><p>Generated from three indexed sources with citations retained.</p></div></article></li>") catch return mer.internalError("activity render failed");
+            w.writeAll("<li><article class=\"wb-m3-history-card\"><time datetime=\"2026-05-16T11:10:00Z\">recently</time><div><p class=\"eyebrow\">Study guide</p><h2>AVL rotations revision guide</h2><p>Generated from three indexed sources with citations retained.</p></div></article></li>") catch return mer.internalError("activity render failed");
         }
     } else {
         const result = lib.backend.activity(req.allocator, lib.session.fromRequest(req).token);
@@ -43,7 +46,9 @@ pub fn render(req: mer.Request) mer.Response {
             if (!std.mem.eql(u8, selected, "all") and !std.mem.eql(u8, selected, entry.category)) continue;
             shown += 1;
             const href = lib.m3.safeInternalHref(entry.href, "/wiki/activity");
-            w.print("<li><article class=\"wb-m3-history-card\"><time>{s}</time><div><p class=\"eyebrow\">{s}</p><h2><a href=\"{s}\">{s}</a></h2><p>{s}</p></div></article></li>", .{ lib.ui.escapeSafe(req.allocator, entry.created_at), eventLabel(entry.event_type), lib.ui.escapeSafe(req.allocator, href), lib.ui.escapeSafe(req.allocator, entry.title), lib.ui.escapeSafe(req.allocator, entry.summary) }) catch return mer.internalError("activity render failed");
+            const relative = lib.time.formatRelative(req.allocator, entry.created_at, now_secs) catch "—";
+            const absolute = lib.time.formatAbsolute(req.allocator, entry.created_at) catch "—";
+            w.print("<li><article class=\"wb-m3-history-card\"><time datetime=\"{s}\" title=\"{s}\">{s}</time><div><p class=\"eyebrow\">{s}</p><h2><a href=\"{s}\">{s}</a></h2><p>{s}</p></div></article></li>", .{ lib.ui.escapeSafe(req.allocator, entry.created_at), lib.ui.escapeSafe(req.allocator, absolute), lib.ui.escapeSafe(req.allocator, relative), eventLabel(entry.event_type), lib.ui.escapeSafe(req.allocator, href), lib.ui.escapeSafe(req.allocator, entry.title), lib.ui.escapeSafe(req.allocator, entry.summary) }) catch return mer.internalError("activity render failed");
         }
     }
     if (shown == 0) w.writeAll("<li class=\"cp-empty\"><div><h2>No activity in this view</h2><p>Durable changes and reviewed evidence will appear here.</p></div></li>") catch return mer.internalError("activity render failed");
@@ -60,8 +65,11 @@ fn eventLabel(event_type: []const u8) []const u8 {
     if (std.mem.eql(u8, event_type, "source_change")) return "Source change";
     if (std.mem.eql(u8, event_type, "paper_evidence")) return "Paper evidence";
     if (std.mem.eql(u8, event_type, "flashcard_evidence")) return "Flashcard review";
-    if (std.mem.eql(u8, event_type, "processing_failure")) return "Processing failure";
-    return event_type;
+    if (std.mem.eql(u8, event_type, "processing_failure")) return "Processing needs attention";
+    if (std.mem.eql(u8, event_type, "processing_attention")) return "Processing needs attention";
+    if (std.mem.eql(u8, event_type, "processing_completed")) return "Processing completed";
+    if (std.mem.eql(u8, event_type, "processing_recovered")) return "Processing recovered";
+    return "Workspace update";
 }
 
 fn renderRevisions(req: mer.Request, w: *std.Io.Writer, page_id: []const u8) !void {
@@ -71,8 +79,12 @@ fn renderRevisions(req: mer.Request, w: *std.Io.Writer, page_id: []const u8) !vo
         return;
     }
     const revisions = result.value.?.value;
+    const now_secs = lib.time.nowSecs();
     try w.writeAll("<section class=\"cp-document-ledger cp-activity-revisions\"><header><p class=\"eyebrow\">Expanded revision</p><h2>Page revisions</h2></header>");
-    for (revisions) |revision| try w.print("<article><div><h3>Revision {d} · {s}</h3><p>{s}</p></div><span class=\"cp-state status-pill\">{d} citations</span><strong>{s}</strong></article>", .{ revision.revision_number, lib.ui.escapeSafe(req.allocator, revision.title), lib.ui.escapeSafe(req.allocator, revision.change_summary), revision.citation_count, lib.ui.escapeSafe(req.allocator, revision.created_at) });
+    for (revisions) |revision| {
+        const relative = lib.time.formatRelative(req.allocator, revision.created_at, now_secs) catch "—";
+        try w.print("<article><div><h3>Revision {d} · {s}</h3><p>{s}</p></div><span class=\"cp-state status-pill\">{d} citations</span><time datetime=\"{s}\">{s}</time></article>", .{ revision.revision_number, lib.ui.escapeSafe(req.allocator, revision.title), lib.ui.escapeSafe(req.allocator, revision.change_summary), revision.citation_count, lib.ui.escapeSafe(req.allocator, revision.created_at), lib.ui.escapeSafe(req.allocator, relative) });
+    }
     if (revisions.len == 0) try w.writeAll("<div class=\"cp-empty\"><div><h3>No archived revisions</h3><p>This page only has its current version.</p></div></div>");
     if (revisions.len >= 2) {
         const from = revisions[1].revision_number;

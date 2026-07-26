@@ -83,10 +83,11 @@ pub fn render(req: mer.Request) mer.Response {
         return mer.typedJson(req.allocator, reply);
     } else |e| {
         log.warn("chat: authenticated backend error: {s}", .{@errorName(e)});
-        return .{
-            .status = .bad_gateway,
-            .content_type = .json,
-            .body = "{\"error\":\"live chat is unavailable; no demo answer was substituted\"}",
+        return switch (e) {
+            error.AuthFailed => .{ .status = .unauthorized, .content_type = .json, .body = "{\"error\":\"session_expired\",\"detail\":\"Your session has expired. Sign in again; your question remains in the composer.\"}" },
+            error.ProviderUnavailable => .{ .status = .conflict, .content_type = .json, .body = "{\"error\":\"provider_unavailable\",\"detail\":\"The answer provider needs attention. Your sources remain available.\"}" },
+            error.BackendUnreachable => .{ .status = .bad_gateway, .content_type = .json, .body = "{\"error\":\"backend_unavailable\",\"detail\":\"WikiBase could not reach the local backend. Your question and source data are safe.\"}" },
+            else => .{ .status = .service_unavailable, .content_type = .json, .body = "{\"error\":\"retrieval_unavailable\",\"detail\":\"Source retrieval stopped before an answer was created.\"}" },
         };
     }
 }
@@ -96,9 +97,27 @@ pub fn render(req: mer.Request) mer.Response {
 const BackendError = error{
     BackendUnreachable,
     BackendBadStatus,
+    ProviderUnavailable,
     SerializeFailed,
     AuthFailed,
 };
+
+const ErrorEnvelope = struct {
+    @"error": []const u8 = "",
+    detail: ?[]const u8 = null,
+};
+
+fn isProviderError(allocator: std.mem.Allocator, body: []const u8) bool {
+    const parsed = std.json.parseFromSlice(ErrorEnvelope, allocator, body, .{
+        .ignore_unknown_fields = true,
+    }) catch return false;
+    defer parsed.deinit();
+    const code = parsed.value.@"error";
+    return std.mem.eql(u8, code, "reauth_required") or
+        std.mem.eql(u8, code, "credential_unavailable") or
+        std.mem.startsWith(u8, code, "local_codex_") or
+        std.mem.eql(u8, code, "provider_unavailable");
+}
 
 fn callBackend(
     allocator: std.mem.Allocator,
@@ -134,6 +153,7 @@ fn callBackend(
     defer res.deinit(allocator);
 
     const status_int: u16 = @intFromEnum(res.status);
+    if (isProviderError(allocator, res.body)) return error.ProviderUnavailable;
     if (status_int == 401 or status_int == 403) return error.AuthFailed;
     if (status_int >= 400) {
         log.warn("chat: backend returned HTTP {d}", .{status_int});
@@ -141,6 +161,14 @@ fn callBackend(
     }
 
     return try lib.chat.aggregateSse(allocator, res.body);
+}
+
+test "provider error envelopes are distinguished from session and retrieval errors" {
+    const allocator = std.testing.allocator;
+    try std.testing.expect(isProviderError(allocator, "{\"error\":\"reauth_required\",\"detail\":\"Reconnect\"}"));
+    try std.testing.expect(isProviderError(allocator, "{\"error\":\"local_codex_unavailable\"}"));
+    try std.testing.expect(!isProviderError(allocator, "{\"error\":\"authentication_required\"}"));
+    try std.testing.expect(!isProviderError(allocator, "{\"error\":\"retrieval_failed\"}"));
 }
 
 // ── SSE aggregator ──────────────────────────────────────────────────────────

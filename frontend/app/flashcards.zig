@@ -112,7 +112,7 @@ fn renderCreateArea(req: mer.Request, w: *std.Io.Writer, demo: bool, enrollments
 fn renderEmptyPage(w: *std.Io.Writer) !void {
     try renderPageStart(w);
     try renderDeckFooter(w, "/wiki");
-    try w.writeAll("<div class=\"flash-empty surface\">No flashcard decks have been generated yet.</div></section><aside class=\"review-evidence surface\"><p class=\"eyebrow\">Session evidence</p><p>No review evidence yet.</p></aside></div>");
+    try w.writeAll("<div class=\"flash-empty surface\"><h2>No review draft yet</h2><p>Drafts become available after a ready source is processed, or you can create one from the evidence scope above.</p><a class=\"cp-btn cp-btn-ghost\" href=\"/sources#processing\">Check source processing</a></div></section><aside class=\"review-evidence surface\"><p class=\"eyebrow\">Session evidence</p><p>No review evidence yet. Recall appears only after you study published cards.</p></aside></div>");
 }
 
 fn renderDeckNotFound(req: mer.Request, w: *std.Io.Writer) !void {

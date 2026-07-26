@@ -101,10 +101,25 @@ pub fn render(req: mer.Request) mer.Response {
         } else {
             return lib.m3.liveError(req, "Source library", result.status);
         }
-        const run_result = lib.backend.listProcessingRuns(req.allocator, session.token, null, 20);
+        const run_result = lib.backend.latestProcessingRuns(req.allocator, session.token);
         if (run_result.value) |parsed| {
             processing_runs = parsed.value;
             processing_loaded = true;
+            if (selected_run.len > 0) {
+                var selected_present = false;
+                for (processing_runs) |run| if (std.mem.eql(u8, run.id, selected_run)) {
+                    selected_present = true;
+                    break;
+                };
+                if (!selected_present) {
+                    const selected_result = lib.backend.processingRun(req.allocator, session.token, selected_run);
+                    const selected = if (selected_result.value) |item| item.value else return lib.m3.liveError(req, "Processing run", selected_result.status);
+                    const merged = req.allocator.alloc(lib.types.ProcessingRunResponse, processing_runs.len + 1) catch return mer.internalError("sources render failed");
+                    @memcpy(merged[0..processing_runs.len], processing_runs);
+                    merged[processing_runs.len] = selected;
+                    processing_runs = merged;
+                }
+            }
         }
     }
 
@@ -191,7 +206,7 @@ pub fn render(req: mer.Request) mer.Response {
         for (items) |source| {
             if (!matchesType(source.source_type, filter_type)) continue;
             if (!matchesStatus(source.status, filter_status)) continue;
-            renderLiveSource(req, w, source, now_secs, std.mem.eql(u8, source.id, source_id)) catch return mer.internalError("sources render failed");
+            renderLiveSource(req, w, source, latestRunForSource(processing_runs, source.id), now_secs, std.mem.eql(u8, source.id, source_id)) catch return mer.internalError("sources render failed");
         }
     } else {
         for (lib.mock.sources) |source| {
@@ -214,7 +229,7 @@ pub fn render(req: mer.Request) mer.Response {
     w.print("</span><p><strong>Every answer keeps its evidence close.</strong> Imported documents are parsed into topics while preserving links from wiki claims and answers back to the source.</p><a href=\"{s}\">Open generated wiki ", .{wiki_href}) catch return mer.internalError("sources render failed");
     w.writeAll(ICON_ARROW) catch return mer.internalError("sources render failed");
     w.writeAll("</a></div></section></div></section>") catch return mer.internalError("sources render failed");
-    if (!processing_loaded and !use_mock) w.writeAll("<section class=\"cp-processing-panel surface\" aria-labelledby=\"processing-title\"><h2 id=\"processing-title\">Durable processing</h2><p class=\"cp-inline-error\" role=\"alert\">Run status is temporarily unavailable. Source records above are preserved; reload to try again.</p></section>") catch return mer.internalError("sources render failed") else lib.processing_ui.render(req.allocator, w, processing_runs, selected_run, use_mock) catch return mer.internalError("sources render failed");
+    if (!processing_loaded and !use_mock) w.writeAll("<section class=\"cp-processing-panel surface\" id=\"processing\" aria-labelledby=\"processing-title\"><h2 id=\"processing-title\">Durable processing</h2><p class=\"cp-inline-error\" role=\"alert\">Run status is temporarily unavailable. Source records above are preserved; reload to try again.</p></section>") catch return mer.internalError("sources render failed") else lib.processing_ui.render(req.allocator, w, processing_runs, selected_run, use_mock) catch return mer.internalError("sources render failed");
     w.writeAll("</div>") catch return mer.internalError("sources render failed");
     renderDialogs(w, use_mock) catch return mer.internalError("sources render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
@@ -275,7 +290,12 @@ fn sourceDisplayFormat(source_type: []const u8) []const u8 {
     return "Source";
 }
 
-fn renderLiveSource(req: mer.Request, w: *std.Io.Writer, source: lib.types.SourceResponse, now_secs: i64, focused: bool) !void {
+fn latestRunForSource(runs: []const lib.types.ProcessingRunResponse, source_id: []const u8) ?lib.types.ProcessingRunResponse {
+    for (runs) |run| if (std.mem.eql(u8, run.source_id, source_id)) return run;
+    return null;
+}
+
+fn renderLiveSource(req: mer.Request, w: *std.Io.Writer, source: lib.types.SourceResponse, run: ?lib.types.ProcessingRunResponse, now_secs: i64, focused: bool) !void {
     const safe_title = lib.ui.escapeSafe(req.allocator, source.title);
     const display_format = sourceDisplayFormat(source.source_type);
     const safe_status = lib.ui.escapeSafe(req.allocator, source.status);
@@ -290,7 +310,12 @@ fn renderLiveSource(req: mer.Request, w: *std.Io.Writer, source: lib.types.Sourc
     const safe_error = lib.ui.escapeSafe(req.allocator, error_raw);
     const imported_raw = source.last_imported_at orelse "Not imported yet";
     const safe_imported = lib.ui.escapeSafe(req.allocator, imported_raw);
-    try w.print("<article id=\"source-{s}\" class=\"document-card{s}\" data-source-id=\"{s}\" tabindex=\"-1\" data-title=\"{s}\" data-module=\"{s}\" data-format=\"{s}\" data-status=\"{s}\" data-display-status=\"{s}\" data-tags=\"{s}\"><header><div><h3>{s}</h3><p>{s} · {s} · updated {s}</p></div><button class=\"document-menu\" type=\"button\" aria-label=\"More actions for {s}\">{s}</button></header><button class=\"document-preview-button\" data-source-preview type=\"button\" aria-label=\"Preview {s}\"><div class=\"document-paper\"><div class=\"paper-running-head\"><span>{s}</span><span>{s}</span></div><span class=\"paper-kicker\">SOURCE PREVIEW</span><h3>{s}</h3><p class=\"paper-lede\">{s}</p><div class=\"paper-rule\"></div><p><strong>Import:</strong> {s}</p><p><strong>Status:</strong> {s}</p><span class=\"paper-page\">Updated {s}</span></div></button><footer><div><span class=\"status-pill status-{s}\">{s}</span><span class=\"document-tags\">", .{ lib.ui.escapeSafe(req.allocator, source.id), if (focused) " is-focused" else "", lib.ui.escapeSafe(req.allocator, source.id), safe_title, safe_module, display_format, safe_status, display_status, safe_label, safe_title, safe_module, display_format, when, safe_title, ICON_MORE, safe_title, safe_module, safe_status, safe_title, safe_label, safe_imported, safe_error, when, if (std.mem.eql(u8, display_status, "Ready")) "good" else if (std.mem.eql(u8, display_status, "Pending") or std.mem.eql(u8, display_status, "Importing")) "info" else "warn", display_status });
+    const processing_stage = if (run) |item| lib.processing_ui.stageLabel(item.current_stage) else if (std.ascii.eqlIgnoreCase(source.source_type, "link")) "No indexing required" else if (std.ascii.eqlIgnoreCase(source.status, "ready")) "Completed processing" else if (std.ascii.eqlIgnoreCase(source.status, "failed")) "Processing needs attention" else "Waiting for processing run";
+    const safe_processing_stage = lib.ui.escapeSafe(req.allocator, processing_stage);
+    const processing_when = if (run) |item| lib.time.formatRelative(req.allocator, item.updated_at, now_secs) catch "—" else when;
+    const processing_status = if (run) |item| item.status else source.status;
+    const latest_run_id = if (run) |item| item.id else "";
+    try w.print("<article id=\"source-{s}\" class=\"document-card{s}\" data-source-id=\"{s}\" data-latest-run-id=\"{s}\" tabindex=\"-1\" data-title=\"{s}\" data-module=\"{s}\" data-format=\"{s}\" data-status=\"{s}\" data-display-status=\"{s}\" data-tags=\"{s}\"><header><div><h3>{s}</h3><p>{s} · {s} · updated {s}</p></div><button class=\"document-menu\" type=\"button\" aria-label=\"More actions for {s}\">{s}</button></header><button class=\"document-preview-button\" data-source-preview type=\"button\" aria-label=\"Preview {s}\"><div class=\"document-paper\"><div class=\"paper-running-head\"><span>{s}</span><span>{s}</span></div><span class=\"paper-kicker\">SOURCE PREVIEW</span><h3>{s}</h3><p class=\"paper-lede\">{s}</p><div class=\"paper-rule\"></div><p><strong>Import:</strong> {s}</p><p><strong>Status:</strong> {s}</p><p data-source-processing><strong>Processing:</strong> <span data-source-stage>{s}</span> · <span data-source-run-status>{s}</span> · updated <span data-source-run-updated>{s}</span></p><span class=\"paper-page\">Updated {s}</span></div></button><footer><div><span class=\"status-pill status-{s}\">{s}</span><span class=\"document-tags\">", .{ lib.ui.escapeSafe(req.allocator, source.id), if (focused) " is-focused" else "", lib.ui.escapeSafe(req.allocator, source.id), lib.ui.escapeSafe(req.allocator, latest_run_id), safe_title, safe_module, display_format, safe_status, display_status, safe_label, safe_title, safe_module, display_format, when, safe_title, ICON_MORE, safe_title, safe_module, safe_status, safe_title, safe_label, safe_imported, safe_error, safe_processing_stage, lib.ui.escapeSafe(req.allocator, processing_status), processing_when, when, if (std.mem.eql(u8, display_status, "Ready")) "good" else if (std.mem.eql(u8, display_status, "Pending") or std.mem.eql(u8, display_status, "Importing")) "info" else "warn", display_status });
     for (source.topic_tags) |topic| try w.print("<span>{s}</span> ", .{lib.ui.escapeSafe(req.allocator, topic)});
     try w.print("</span></div><div><button data-source-preview type=\"button\">Preview</button><a href=\"{s}\">{s} {s}</a></div></footer></article>", .{ safe_href, if (std.mem.startsWith(u8, href, "/")) "Ask with source" else "Open source", ICON_ARROW });
 }

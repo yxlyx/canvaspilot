@@ -93,8 +93,11 @@ test("navigation is keyboard reachable at narrow viewport and preserves demo mod
   await menu.locator("summary").focus();
   await page.keyboard.press("Enter");
   await expect(menu.getByRole("navigation", { name: "Mobile menu" })).toBeVisible();
-  await expect(menu.getByRole("link", { name: "Wiki" })).toHaveAttribute("aria-current", "page");
-  await menu.getByRole("link", { name: "Workspace" }).click();
+  await expect(menu.getByRole("link", { name: "Notifications" })).toBeVisible();
+  await expect(menu.getByRole("link", { name: "Settings" })).toBeVisible();
+  await expect(menu.getByRole("link", { name: /Workspace|Sources|Wiki|Ask|Flashcards/ })).toHaveCount(0);
+  await expect(primary.getByRole("link", { name: "Wiki" })).toHaveAttribute("aria-current", "page");
+  await primary.getByRole("link", { name: "Workspace" }).click();
   await expect(page).toHaveURL(/\/dashboard\?mock=1$/);
   await expect(page.locator('[data-cp-demo="true"]')).toHaveCount(1);
   const layout = await page.evaluate(() => ({
@@ -102,6 +105,27 @@ test("navigation is keyboard reachable at narrow viewport and preserves demo mod
     barFits: document.querySelector(".cp-bottomnav").scrollWidth <= document.querySelector(".cp-bottomnav").clientWidth,
   }));
   expect(layout).toEqual({ pageFits: true, barFits: true });
+});
+
+test("approved shell stays neutral and uses one 256px desktop rail", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/dashboard?mock=1");
+  const shell = page.locator(".cp-app-shell");
+  const sidebar = page.locator(".cp-sidebar");
+  const active = page.locator(".cp-tab-active");
+  await expect(sidebar).toBeVisible();
+  const geometry = await shell.evaluate((node) => ({
+    columns: getComputedStyle(node).gridTemplateColumns,
+    overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  }));
+  expect(Number.parseFloat(geometry.columns)).toBe(256);
+  expect(geometry.overflow).toBe(false);
+  const emphasis = await active.evaluate((node) => ({ shadow: getComputedStyle(node).boxShadow, color: getComputedStyle(node).color }));
+  expect(emphasis.shadow).toBe("none");
+  expect(emphasis.color).not.toBe("rgb(36, 79, 120)");
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await expect(sidebar).toBeVisible();
+  expect(Number.parseFloat(await shell.evaluate((node) => getComputedStyle(node).gridTemplateColumns))).toBe(256);
 });
 
 test("mobile Ask keeps module scope and source evidence discoverable", async ({ page }) => {
@@ -223,9 +247,18 @@ test("provider form contracts preserve optional keys and safe external authoriza
   expect(proxy).toContain('putOptionalString(req.allocator, &object, "api_key"');
   expect(proxy).toContain('https://auth.openai.com/oauth/authorize?');
   expect(proxy).toContain('provider.auth.start');
+  expect(proxy).toContain('provider.local.connect');
+  expect(proxy).toContain('/api/providers/chatgpt/local-cli/connect');
   expect(proxy).toContain("providerAuthCookie(req.allocator, session_id, browser_binding)");
   const providerPage = fs.readFileSync(path.join(__dirname, "../../app/settings/providers.zig"), "utf8");
   expect(providerPage).toContain("workspace questions and sources are not sent");
+  expect(providerPage).toContain("Use local Codex CLI");
+  expect(providerPage).toContain("does not read or store its tokens");
+  expect(providerPage).toContain("Capabilities, billing, and data use");
+  const styles = fs.readFileSync(path.join(__dirname, "../../app/_styles.css"), "utf8");
+  expect(styles).toContain(".cp-provider-browser{order:1");
+  expect(styles).toContain(".cp-provider-prefer-local .cp-provider-local{order:1}");
+  expect(providerPage).toContain("prefer_local");
 });
 
 test("signup mode has matching title, heading, active tab, and focused server errors", async ({ page }) => {
@@ -307,6 +340,8 @@ test("legacy dashboard module links show the workspace wiki instead of a false e
 test("Knowledge recommendations retain contextual destinations", async ({ page }) => {
   await page.goto("/wiki/knowledge?mock=1");
   await expect(page.getByText("Collect more recursion evidence")).toBeVisible();
+  await expect(page.getByText("Legacy topic signals")).toHaveCount(0);
+  await expect(page.getByText(/legacy_meter_non_authoritative|source_count|self_reported_confidence/)).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Review wiki notes" })).toHaveAttribute("href", /\/wiki\/immutable-lists\?mock=1$/);
   await expect(page.getByRole("link", { name: "Practice cited cards" })).toHaveAttribute("href", /\/flashcards\?deck=deck-streams&mock=1$/);
   await expect(page.getByRole("link", { name: "Review paper evidence" })).toHaveAttribute("href", /\/sources\/papers\/demo-paper-functional-midterm\?mock=1$/);

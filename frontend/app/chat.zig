@@ -21,7 +21,7 @@ pub fn render(req: mer.Request) mer.Response {
     const use_mock = lib.m3.isExplicitDemo(req);
     const chat_endpoint: []const u8 = if (use_mock) "/api/chat?mock=1" else "/api/chat";
     const selected_scope = req.queryParam("enrollment") orelse req.queryParam("module") orelse "";
-    const sources_href = lib.m3.demoHref(req.allocator, req, "/sources") catch return mer.internalError("ask render failed");
+    const sources_href = lib.m3.demoHref(req.allocator, req, "/sources#processing") catch return mer.internalError("ask render failed");
 
     const modules_slice: []const lib.types.Module = if (use_mock) lib.mock.modules else &.{};
     var enrollments: []const lib.types.EnrollmentResponse = &.{};
@@ -82,7 +82,7 @@ pub fn render(req: mer.Request) mer.Response {
             \\    </div>
         ) catch return mer.internalError("ask render failed");
     } else {
-        w.print("    <div class=\"context-sources\"><div class=\"section-title\"><div><h2>Evidence in scope</h2><p>Current indexed sources</p></div></div><a href=\"{s}\">Browse the source library</a></div>\n", .{sources_href}) catch return mer.internalError("ask render failed");
+        w.print("    <div class=\"context-sources\"><div class=\"section-title\"><div><h2>Evidence in scope</h2><p>Current indexed sources</p></div></div><a href=\"{s}\">Check source and processing status</a></div>\n", .{sources_href}) catch return mer.internalError("ask render failed");
     }
     w.writeAll("    <div class=\"grounding-note\"><span>") catch return mer.internalError("ask render failed");
     w.writeAll(ICON_SHIELD) catch return mer.internalError("ask render failed");
