@@ -17,7 +17,42 @@ test("draft review summarizes generation details instead of printing snapshot JS
   expect(pageSource).toContain("evidence passage");
   expect(pageSource).toContain("generator_snapshot, \"provider\"");
   expect(styles).toContain(".cp-provenance { display: grid");
-  expect(styles).toContain(".cp-draft-card > form");
+  expect(styles).toContain(".cp-card-editor {");
+  expect(pageSource).toContain("cp-card-disclosure");
+  expect(pageSource).toContain("cp-history-ledger");
+  expect(pageSource).not.toContain("card.order_index + 1");
+  expect(pageSource).toContain('std.mem.eql(u8, action, "publish")');
+  expect(pageSource).toContain('std.mem.eql(u8, action, "retired")');
+  expect(styles).toContain(".cp-citation-detail > a { width: fit-content; min-height: 44px;");
+});
+
+test("flashcard workspace renders only the active minimalist view", async ({ page }) => {
+  await page.goto("/flashcards?mock=1");
+  await expect(page.getByRole("heading", { name: "Evidence-backed review" })).toBeVisible();
+  await expect(page.locator("#cp-flash-review")).toBeVisible();
+  await expect(page.locator("[data-flash-create]")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Study", exact: true })).toHaveAttribute("aria-current", "page");
+
+  await page.goto("/flashcards?mock=1&view=create");
+  await expect(page.getByRole("heading", { name: "Create flashcards" })).toBeVisible();
+  await expect(page.locator("[data-flash-create]")).toBeVisible();
+  await expect(page.locator("#cp-flash-review")).toHaveCount(0);
+
+  await page.goto("/flashcards?mock=1&view=drafts");
+  await expect(page.getByRole("heading", { name: "Drafts & published decks" })).toBeVisible();
+  await expect(page.locator(".cp-deck-history")).toBeVisible();
+  await expect(page.locator("#cp-flash-review, [data-flash-create]")).toHaveCount(0);
+});
+
+test("creation prefers an available stable scope and disables inactive controls", () => {
+  const root = path.resolve(__dirname, "../..");
+  const pageSource = fs.readFileSync(path.join(root, "app/flashcards.zig"), "utf8");
+  const script = fs.readFileSync(path.join(root, "public/app.js"), "utf8");
+
+  expect(pageSource).toContain('if (has_enrollment) "enrollment_id" else if (has_source) "source_ids"');
+  expect(pageSource).toContain('" selected"');
+  expect(script).toContain("control.disabled = !active");
+  expect(script).toContain("control.required = active");
 });
 
 test("draft review remains readable without horizontal overflow on mobile", async ({ page }) => {
@@ -72,12 +107,38 @@ test("skip advances locally, persists the cursor, and records no rating", async 
 
 test("draft conflict preserves fields and exposes explicit reload/reapply", async ({ page }) => {
   await page.route("**/api/flashcards", (route) => route.fulfill({ status: 409, json: { detail: "revision changed" } }));
-  await loadScript(page, `<main data-draft-review data-deck-id="123e4567-e89b-12d3-a456-426614174000" data-revision="4" data-lifecycle="draft"><div data-draft-status></div><form data-deck-form><input name="title" value="Original"><button>Save title</button></form><ol data-card-list><li data-card-id="223e4567-e89b-12d3-a456-426614174000" data-discarded="false"><form data-card-form><textarea name="question">Prompt</textarea><textarea name="answer">Answer</textarea><input name="tags"><input name="topic_ids"><input type="radio" name="evidence_kind" value="personal" checked><select name="citation_choice"><option value="">No citation</option></select><button>Save card</button></form></li></ol></main>`);
+  await loadScript(page, `<main data-draft-review data-deck-id="123e4567-e89b-12d3-a456-426614174000" data-revision="4" data-lifecycle="draft"><div data-draft-status></div><form data-deck-form data-recovery-key="deck"><input name="title" value="Original"><button>Save title</button></form><ol data-card-list><li data-card-id="223e4567-e89b-12d3-a456-426614174000" data-discarded="false"><form data-card-form data-recovery-key="card:223e4567-e89b-12d3-a456-426614174000"><textarea name="question">Prompt</textarea><textarea name="answer">Answer</textarea><input name="tags"><input name="topic_ids"><input type="radio" name="evidence_kind" value="personal" checked><select name="citation_choice"><option value="">No citation</option></select><button>Save card</button></form></li></ol></main>`);
   await page.locator('[name="title"]').fill("Unsaved local title");
   await page.getByRole("button", { name: "Save title" }).click();
   await expect(page.getByText(/changed elsewhere/i)).toBeVisible();
   await expect(page.locator('[name="title"]')).toHaveValue("Unsaved local title");
-  await expect(page.getByRole("button", { name: /reload latest and reapply/i })).toBeVisible();
+  const reload = page.getByRole("button", { name: /reload latest and reapply/i });
+  await expect(reload).toBeVisible();
+  await reload.click();
+  await page.waitForLoadState();
+  const recovery = await page.evaluate(() => JSON.parse(sessionStorage.getItem("flashcard-draft-reapply-123e4567-e89b-12d3-a456-426614174000")));
+  expect(recovery.deck.title).toBe("Unsaved local title");
+});
+
+test("recovered edits survive restoring a card discarded by another reviewer", async ({ page }) => {
+  let requestBody;
+  await page.route("**/api/flashcards", async (route) => {
+    requestBody = route.request().postDataJSON();
+    return route.fulfill({ status: 200, json: { revision: 6 } });
+  });
+  await page.goto("/login");
+  await page.evaluate(() => sessionStorage.setItem("flashcard-draft-reapply-123e4567-e89b-12d3-a456-426614174000", JSON.stringify({
+    "card:223e4567-e89b-12d3-a456-426614174000": { question: "Recovered prompt", answer: "Recovered answer" },
+  })));
+  await page.setContent(`<main data-draft-review data-deck-id="123e4567-e89b-12d3-a456-426614174000" data-revision="5" data-lifecycle="draft"><div data-draft-status></div><ol data-card-list><li data-card-id="223e4567-e89b-12d3-a456-426614174000" data-discarded="true"><form data-card-form data-recovery-key="card:223e4567-e89b-12d3-a456-426614174000"><textarea name="question" disabled>Server prompt</textarea><textarea name="answer" disabled>Server answer</textarea></form><button type="button" data-restore>Restore card</button></li></ol></main>`);
+  await page.addScriptTag({ url: "/app.js" });
+
+  await expect(page.locator('[name="question"]')).toHaveValue("Recovered prompt");
+  await page.getByRole("button", { name: "Restore card" }).click();
+  await expect.poll(() => requestBody && requestBody.action).toBe("restore");
+  await page.waitForLoadState();
+  const recovery = await page.evaluate(() => JSON.parse(sessionStorage.getItem("flashcard-draft-reapply-123e4567-e89b-12d3-a456-426614174000")));
+  expect(recovery["card:223e4567-e89b-12d3-a456-426614174000"].question).toBe("Recovered prompt");
 });
 
 test("draft review changes the selected snapshotted citation", async ({ page }) => {
@@ -99,9 +160,10 @@ test("approve, publish, and retire remain explicit draft lifecycle actions", asy
     requests.push(route.request().postDataJSON());
     await route.fulfill({ status: 200, json: { revision: 6 } });
   });
-  await loadScript(page, `<main data-draft-review data-deck-id="123e4567-e89b-12d3-a456-426614174000" data-revision="5" data-lifecycle="draft"><div data-draft-status></div><ol data-card-list><li data-card-id="223e4567-e89b-12d3-a456-426614174000" data-discarded="false"></li></ol><button data-approve-all>Approve all supported</button></main>`);
+  await loadScript(page, `<main data-draft-review data-deck-id="123e4567-e89b-12d3-a456-426614174000" data-revision="5" data-lifecycle="draft"><div data-draft-status></div><ol data-card-list><li data-card-id="223e4567-e89b-12d3-a456-426614174000" data-discarded="false" data-approvable="true"></li></ol><button data-approve-all>Approve all supported</button></main>`);
   await page.getByRole("button", { name: "Approve all supported" }).click();
   await expect.poll(() => requests.some((item) => item.action === "approve")).toBe(true);
+  expect(requests.find((item) => item.action === "approve").payload.card_ids).toEqual(["223e4567-e89b-12d3-a456-426614174000"]);
 
   await loadScript(page, `<main data-draft-review data-deck-id="123e4567-e89b-12d3-a456-426614174000" data-revision="6" data-lifecycle="draft"><div data-draft-status></div><ol data-card-list></ol><button data-publish>Publish approved snapshot</button></main>`);
   await page.getByRole("button", { name: "Publish approved snapshot" }).click();
@@ -127,6 +189,23 @@ test("discard requires and submits a card quality reason", async ({ page }) => {
   await page.getByRole("button", { name: "Discard" }).click();
   await expect.poll(() => requestBody && requestBody.payload.rejection_reason).toBe("too_generic");
   expect(requestBody.payload.card_ids).toEqual(["223e4567-e89b-12d3-a456-426614174000"]);
+});
+
+test("reorder submits only active cards when discarded rows remain visible", async ({ page }) => {
+  let requestBody;
+  await page.route("**/api/flashcards", async (route) => {
+    requestBody = route.request().postDataJSON();
+    return route.fulfill({ status: 200, json: { revision: 6 } });
+  });
+  await loadScript(page, `<main data-draft-review data-deck-id="123e4567-e89b-12d3-a456-426614174000" data-revision="5" data-lifecycle="draft"><div data-draft-status></div><ol data-card-list><li data-card-id="223e4567-e89b-12d3-a456-426614174000" data-discarded="false"><button type="button" data-move="down">Move down</button></li><li data-card-id="323e4567-e89b-12d3-a456-426614174000" data-discarded="true"></li><li data-card-id="423e4567-e89b-12d3-a456-426614174000" data-discarded="false"></li></ol></main>`);
+
+  await page.getByRole("button", { name: "Move down" }).click();
+
+  await expect.poll(() => requestBody && requestBody.action).toBe("reorder");
+  expect(requestBody.payload.card_ids).toEqual([
+    "423e4567-e89b-12d3-a456-426614174000",
+    "223e4567-e89b-12d3-a456-426614174000",
+  ]);
 });
 
 test("generation links to provider settings when no answer provider is available", async ({ page }) => {
