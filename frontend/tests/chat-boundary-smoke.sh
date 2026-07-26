@@ -391,15 +391,23 @@ assert_status 502
 assert_json_field error 'live chat is unavailable; no demo answer was substituted'
 assert_backend_count 13
 
-for auth_failure in unauthorized forbidden; do
-    request "$BASE_URL/api/chat" \
-        --header 'Cookie: cp_session=chat-boundary' \
-        --header 'Content-Type: application/json' \
-        --data "{\"message\":\"$auth_failure live boundary\"}"
-    assert_status 401
-    assert_json_field error 'authentication required'
-    grep -Eiq '^set-cookie:[[:space:]]*cp_session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax[[:space:]]*\r?$' "$HEADERS" || fail "$auth_failure chat auth failure did not expire the session cookie"
-done
+request "$BASE_URL/api/chat" \
+    --header 'Cookie: cp_session=chat-boundary' \
+    --header 'Content-Type: application/json' \
+    --data '{"message":"unauthorized live boundary"}'
+assert_status 401
+assert_json_field error 'authentication required'
+grep -Eiq '^set-cookie:[[:space:]]*cp_session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax[[:space:]]*\r?$' "$HEADERS" || fail 'unauthorized chat failure did not expire the session cookie'
+
+request "$BASE_URL/api/chat" \
+    --header 'Cookie: cp_session=chat-boundary' \
+    --header 'Content-Type: application/json' \
+    --data '{"message":"forbidden live boundary"}'
+assert_status 403
+assert_json_field error 'chat access forbidden'
+if grep -Eiq '^set-cookie:' "$HEADERS"; then
+    fail 'forbidden chat response expired a valid session cookie'
+fi
 assert_backend_count 15
 
 request "$BASE_URL/api/sync" --header 'Cookie: cp_session=chat-boundary' --data 'action=sync'
