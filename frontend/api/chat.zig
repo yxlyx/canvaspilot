@@ -78,6 +78,17 @@ pub fn render(req: mer.Request) mer.Response {
         return mer.typedJson(req.allocator, reply);
     } else |e| {
         log.warn("chat: authenticated backend error: {s}", .{@errorName(e)});
+        if (e == error.AuthFailed) {
+            const cookies = req.allocator.alloc(mer.SetCookie, 1) catch {
+                return mer.internalError("could not clear session cookie");
+            };
+            cookies[0] = lib.session.clearCookie();
+            return mer.withCookies(.{
+                .status = .unauthorized,
+                .content_type = .json,
+                .body = "{\"error\":\"authentication required\"}",
+            }, cookies);
+        }
         return .{
             .status = .bad_gateway,
             .content_type = .json,
