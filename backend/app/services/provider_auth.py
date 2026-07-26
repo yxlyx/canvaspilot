@@ -741,6 +741,16 @@ async def complete_authorization(
             ProviderSetting.provider == "chatgpt",
         )
     )
+    if setting is not None and setting.auth_method != "oauth_code":
+        auth_session.status = "failed"
+        auth_session.error_code = "disconnect_required"
+        auth_session.error_message = (
+            "Disconnect the local Codex CLI before connecting a browser account."
+        )
+        auth_session.consumed_at = now
+        auth_session.encrypted_pkce_verifier = None
+        await db.commit()
+        return _result_path(auth_session.return_path, "failed")
     if setting is not None and (
         (setting.provider_account_id is not None and setting.provider_account_id != account_id)
         or (setting.provider_subject_id is not None and setting.provider_subject_id != subject_id)
