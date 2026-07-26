@@ -511,6 +511,8 @@ async def test_account_export_includes_readable_data_and_excludes_secrets(accoun
             "provider": "openai",
             "model": "gpt-test",
             "endpoint": "https://api.example.test",
+            "auth_method": "api_key",
+            "provider_account_label": None,
             "status": "configured",
             "last_tested_at": None,
         }

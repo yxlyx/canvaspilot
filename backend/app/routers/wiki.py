@@ -1,3 +1,5 @@
+import uuid
+
 from fastapi import APIRouter, Body, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,16 +25,18 @@ async def compile_wiki(
 
 @router.get("/pages", response_model=list[WikiPageResponse])
 async def list_pages(
+    enrollment_id: uuid.UUID | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await list_wiki_pages(user, db)
+    return await list_wiki_pages(user, db, enrollment_id)
 
 
 @router.get("/pages/{slug}", response_model=WikiPageResponse)
 async def get_page(
     slug: str,
+    enrollment_id: uuid.UUID | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await get_wiki_page(user, slug, db)
+    return await get_wiki_page(user, slug, db, enrollment_id)

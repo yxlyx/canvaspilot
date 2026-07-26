@@ -30,6 +30,7 @@ class WikiPage(TimestampMixin, Base):
         server_default=text("'{}'::uuid[]"),
     )
     citation_count: Mapped[int] = mapped_column(Integer, default=0)
+    input_fingerprint: Mapped[str | None] = mapped_column(String(64))
     backlinks: Mapped[list[str]] = mapped_column(
         ARRAY(String(255)),
         default=list,

@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 from app.models.source import SourceKind, SourceStatus
 
@@ -19,6 +20,7 @@ def normalize_topic_tags(tags: list[str]) -> list[str]:
 
 
 class SourceCreate(BaseModel):
+    enrollment_id: uuid.UUID | None = None
     source_type: SourceKind
     origin: str
     external_id: str | None = None
@@ -59,6 +61,7 @@ class SourceCreate(BaseModel):
 
 
 class SourceUpdate(BaseModel):
+    enrollment_id: uuid.UUID | None = None
     title: str | None = None
     source_url: str | None = None
     citation_label: str | None = None
@@ -96,6 +99,7 @@ class SourceResponse(BaseModel):
 
     id: uuid.UUID
     user_id: uuid.UUID
+    enrollment_id: uuid.UUID | None = None
     source_type: SourceKind
     origin: str
     external_id: str | None
@@ -110,3 +114,51 @@ class SourceResponse(BaseModel):
     import_error: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class SourceIntakeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["upload", "link", "paste"]
+    title: str = Field(min_length=1, max_length=1000)
+    enrollment_id: uuid.UUID | None = None
+    course_context: str | None = Field(default=None, max_length=255)
+    source_type: Literal["pdf", "image", "markdown", "plain_text", "link"]
+    filename: str | None = Field(default=None, max_length=255)
+    source_url: HttpUrl | None = Field(default=None, max_length=2048)
+    content: str | None = Field(default=None, max_length=2_000_000)
+    content_base64: str | None = Field(default=None, max_length=14_000_000)
+
+    @field_validator("title", "course_context", "filename", "content", mode="before")
+    @classmethod
+    def strip_intake_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    @model_validator(mode="after")
+    def validate_mode_payload(self):
+        if self.mode == "link":
+            if self.source_type != "link" or self.source_url is None:
+                raise ValueError("A valid public link is required")
+        elif self.mode == "paste":
+            if self.source_type not in {"markdown", "plain_text"} or not self.content:
+                raise ValueError("Pasted Markdown or plain text is required")
+        elif self.mode == "upload":
+            if self.source_type in {"pdf", "image"}:
+                if not self.filename or not self.content_base64:
+                    raise ValueError("A PDF or image file is required")
+            elif self.source_type in {"markdown", "plain_text"}:
+                if not self.filename or not self.content:
+                    raise ValueError("A Markdown or text file is required")
+            else:
+                raise ValueError("Upload a PDF, PNG, JPEG, Markdown, or text file")
+        return self
+
+
+class SourceIntakeResponse(BaseModel):
+    source: SourceResponse
+    job_id: uuid.UUID | None = None
+    import_status: Literal["saved", "queued", "running", "paused", "completed", "failed"]
+    duplicate: bool = False

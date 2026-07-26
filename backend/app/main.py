@@ -13,11 +13,14 @@ from app.routers import (
     activity,
     auth,
     chat,
+    curriculum,
     flashcards,
     ingestion_jobs,
     m3,
     modules,
     notifications,
+    nusmods,
+    processing,
     search,
     sources,
     sync,
@@ -98,7 +101,10 @@ app.include_router(settings_router.router, prefix="/api")
 app.include_router(notifications.router, prefix="/api")
 app.include_router(activity.router, prefix="/api")
 app.include_router(modules.router, prefix="/api")
+app.include_router(nusmods.router, prefix="/api")
+app.include_router(curriculum.router, prefix="/api")
 app.include_router(sources.router, prefix="/api")
+app.include_router(processing.router, prefix="/api")
 app.include_router(search.router, prefix="/api")
 app.include_router(ingestion_jobs.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")

@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.flashcard import LearningEvidence
 from app.models.m3 import SourceChange, StudyOutput, WikiRevision
+from app.models.processing import ProcessingEvent, ProcessingRun
 from app.models.source import Source, SourceStatus
 from app.models.user import User
 
@@ -48,6 +49,20 @@ async def activity_entries(user: User, db: AsyncSession, limit: int) -> list[dic
                 .limit(per_source)
             )
         ).scalars()
+    )
+    processing_events = list(
+        (
+            await db.execute(
+                select(ProcessingEvent, ProcessingRun.source_id)
+                .join(ProcessingRun, ProcessingRun.id == ProcessingEvent.run_id)
+                .where(
+                    ProcessingEvent.user_id == user.id,
+                    ProcessingEvent.event_type.in_(["run_ready", "stage_failed", "stage_paused"]),
+                )
+                .order_by(ProcessingEvent.created_at.desc())
+                .limit(per_source)
+            )
+        ).all()
     )
     failed_sources = list(
         (
@@ -117,6 +132,23 @@ async def activity_entries(user: User, db: AsyncSession, limit: int) -> list[dic
             "created_at": item.created_at,
         }
         for item in outputs
+    ]
+    entries += [
+        {
+            "id": item.id,
+            "event_type": "processing_event",
+            "category": "content",
+            "title": item.event_type.replace("_", " ").title(),
+            "summary": str(
+                item.payload.get("status")
+                or item.payload.get("error_code")
+                or "Source pipeline updated"
+            ),
+            "href": f"/sources?run={item.run_id}",
+            "resource_id": source_id,
+            "created_at": item.created_at,
+        }
+        for item, source_id in processing_events
     ]
     entries += [
         {

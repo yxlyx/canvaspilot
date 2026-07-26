@@ -4,6 +4,7 @@ import pytest
 
 from app.schemas.chat import ChatMessage
 from app.services import llm
+from app.services.providers import GenerationProvider
 from app.services.retrieval import RetrievedChunk
 
 
@@ -41,10 +42,13 @@ async def test_stream_rag_response_formats_events_and_citations(settings, monkey
         completions = FakeCompletions()
 
     class FakeOpenAI:
-        def __init__(self, api_key: str):
+        def __init__(self, api_key: str, **kwargs):
             self.chat = FakeChat()
 
-    monkeypatch.setattr(llm, "get_settings", lambda: settings)
+    async def selected_provider(user, db):
+        return GenerationProvider("openai", "gpt-4o", "https://api.openai.com/v1", "key")
+
+    monkeypatch.setattr(llm, "resolve_generation_provider", selected_provider)
     monkeypatch.setattr(llm, "AsyncOpenAI", FakeOpenAI)
 
     chunks = [
@@ -86,10 +90,13 @@ async def test_stream_rag_response_done_without_citations(settings, monkeypatch)
         completions = FakeCompletions()
 
     class FakeOpenAI:
-        def __init__(self, api_key: str):
+        def __init__(self, api_key: str, **kwargs):
             self.chat = FakeChat()
 
-    monkeypatch.setattr(llm, "get_settings", lambda: settings)
+    async def selected_provider(user, db):
+        return GenerationProvider("openai", "gpt-4o", "https://api.openai.com/v1", "key")
+
+    monkeypatch.setattr(llm, "resolve_generation_provider", selected_provider)
     monkeypatch.setattr(llm, "AsyncOpenAI", FakeOpenAI)
 
     events = [
@@ -104,3 +111,72 @@ async def test_stream_rag_response_done_without_citations(settings, monkeypatch)
 
     assert not any(event["event"] == "citations" for event in events)
     assert json.loads(events[-1]["data"]) == {"grounded": False, "confidence": 0}
+
+
+@pytest.mark.asyncio
+async def test_stream_rag_response_uses_chatgpt_responses_transport(monkeypatch):
+    captured = None
+
+    class Event:
+        def __init__(self, event_type: str, delta: str = ""):
+            self.type = event_type
+            self.delta = delta
+
+    async def response_stream():
+        yield Event("response.created")
+        yield Event("response.output_text.delta", "Grounded [1].")
+        yield Event("response.completed")
+
+    class FakeResponses:
+        async def create(self, **kwargs):
+            nonlocal captured
+            captured = kwargs
+            return response_stream()
+
+    class FakeOpenAI:
+        def __init__(self, api_key: str, **kwargs):
+            assert api_key == "oauth-access"
+            assert kwargs["base_url"] == "https://chatgpt.test/backend-api/codex"
+            self.responses = FakeResponses()
+
+    async def selected_provider(user, db):
+        return GenerationProvider(
+            provider="chatgpt",
+            model="gpt-test-codex",
+            endpoint="https://chatgpt.test/backend-api/codex",
+            api_key="oauth-access",
+            auth_method="oauth_code",
+            account_id="acct-123",
+            transport="responses",
+        )
+
+    monkeypatch.setattr(llm, "resolve_generation_provider", selected_provider)
+    monkeypatch.setattr(llm, "AsyncOpenAI", FakeOpenAI)
+    chunks = [
+        RetrievedChunk(
+            content="Verified source text",
+            score=0.9,
+            source_title="Local source",
+            source_url="",
+            source_type="file",
+        )
+    ]
+
+    events = [
+        event
+        async for event in llm.stream_rag_response(
+            query="Question",
+            context="[1] Verified source text",
+            chunks=chunks,
+            history=[],
+        )
+    ]
+
+    assert json.loads(events[0]["data"]) == {"text": "Grounded [1]."}
+    assert events[1]["event"] == "citations"
+    assert captured["extra_headers"] == {
+        "originator": "canvaspilot",
+        "chatgpt-account-id": "acct-123",
+    }
+    assert captured["model"] == "gpt-test-codex"
+    assert "messages" not in captured

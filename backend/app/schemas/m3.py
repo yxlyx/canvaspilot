@@ -157,12 +157,13 @@ class MeterSignal(BaseModel):
 class TopicMeterResponse(BaseModel):
     topic: str
     estimated_completion: float | None
-    evidence_confidence: float
+    evidence_confidence: float | None
     evidence_count: int
     state: Literal["measured", "uncertain", "stale"]
     stale: bool
     signals: list[MeterSignal]
     recommendation: str
+    reason_code: str | None = None
 
 
 class MutationAck(BaseModel):
@@ -290,20 +291,85 @@ class MarkedPaperPageResponse(BaseModel):
     next_cursor: str | None
 
 
+class ProviderAuthMethodDescriptor(BaseModel):
+    kind: Literal["oauth_code", "api_key", "managed"]
+    label: str
+    recommended: bool = False
+    enabled: bool = True
+    unavailable_reason: str | None = None
+
+
 class ProviderDescriptor(BaseModel):
     id: str
     name: str
     models: list[str]
     endpoint: str
+    description: str = ""
+    capabilities: list[str] = Field(default_factory=list)
+    auth_methods: list[ProviderAuthMethodDescriptor] = Field(default_factory=list)
+    setup_url: str = ""
+    billing_note: str = ""
+    endpoint_mode: Literal["fixed", "custom"] = "fixed"
+    supports_generation: bool = True
+    supports_embeddings: bool = False
 
 
 class ProviderConfigureRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider: Literal["openai", "openai_compatible", "azure_openai", "google_gemini"]
-    api_key: str = Field(min_length=8, max_length=4096)
+    api_key: str | None = Field(default=None, min_length=8, max_length=4096)
     model: str = Field(min_length=1, max_length=100)
     endpoint: HttpUrl | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def normalize_optional_key(self):
+        if self.api_key is not None:
+            self.api_key = self.api_key.strip() or None
+        return self
+
+
+class ProviderAuthorizationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    return_path: str = Field(default="/settings/providers?provider=chatgpt", max_length=500)
+
+    @field_validator("return_path")
+    @classmethod
+    def safe_return_path(cls, value: str) -> str:
+        if not value.startswith("/") or value.startswith("//") or "\\" in value:
+            raise ValueError("return_path must be a local path")
+        return value
+
+
+class ProviderOAuthCallbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state: str = Field(min_length=20, max_length=500)
+    code: str | None = Field(default=None, max_length=4096)
+    error: str | None = Field(default=None, max_length=200)
+    browser_binding: str = Field(min_length=32, max_length=200)
+
+    @model_validator(mode="after")
+    def require_code_or_error(self):
+        if not self.code and not self.error:
+            raise ValueError("code or error is required")
+        return self
+
+
+class ProviderOAuthCallbackResponse(BaseModel):
+    return_path: str
+
+
+class ProviderAuthorizationSessionResponse(BaseModel):
+    id: uuid.UUID
+    provider: str
+    status: Literal["pending", "completed", "failed", "expired", "cancelled"]
+    authorization_url: str | None = None
+    browser_binding: str | None = None
+    expires_at: datetime
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 class ProviderStatusResponse(BaseModel):
@@ -312,7 +378,14 @@ class ProviderStatusResponse(BaseModel):
     provider: str
     model: str
     endpoint: str
+    auth_method: str = "api_key"
     status: str
+    active_for_generation: bool = False
+    provider_account_label: str | None = None
+    access_token_expires_at: datetime | None = None
+    last_error_code: str | None = None
+    last_error: str | None = None
     credential: str = "********"
     last_tested_at: datetime | None
+    last_refreshed_at: datetime | None = None
     updated_at: datetime

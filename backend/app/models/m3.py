@@ -184,7 +184,44 @@ class ProviderSetting(TimestampMixin, Base):
     provider: Mapped[str] = mapped_column(String(50))
     model: Mapped[str] = mapped_column(String(100))
     endpoint: Mapped[str] = mapped_column(String(500))
-    encrypted_api_key: Mapped[bytes] = mapped_column(LargeBinary)
+    auth_method: Mapped[str] = mapped_column(String(30), default="api_key")
+    encrypted_api_key: Mapped[bytes | None] = mapped_column(LargeBinary)
+    encrypted_access_token: Mapped[bytes | None] = mapped_column(LargeBinary)
+    encrypted_refresh_token: Mapped[bytes | None] = mapped_column(LargeBinary)
     encryption_key_id: Mapped[str] = mapped_column(String(100))
+    access_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_account_id: Mapped[str | None] = mapped_column(String(255))
+    provider_subject_id: Mapped[str | None] = mapped_column(String(255))
+    provider_account_label: Mapped[str | None] = mapped_column(String(320))
+    granted_scopes: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(50), default="configured")
+    active_for_generation: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    last_error_code: Mapped[str | None] = mapped_column(String(100))
     last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ProviderAuthorizationSession(Base):
+    __tablename__ = "provider_authorization_sessions"
+    __table_args__ = (
+        Index("ix_provider_auth_sessions_user_created", "user_id", "created_at"),
+        Index("ix_provider_auth_sessions_expires", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=gen_uuid)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    provider: Mapped[str] = mapped_column(String(50))
+    auth_method: Mapped[str] = mapped_column(String(30))
+    state_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    encrypted_pkce_verifier: Mapped[bytes | None] = mapped_column(LargeBinary)
+    encryption_key_id: Mapped[str] = mapped_column(String(100))
+    nonce_hash: Mapped[str] = mapped_column(String(64))
+    browser_binding_hash: Mapped[str] = mapped_column(String(64))
+    return_path: Mapped[str] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="now()")

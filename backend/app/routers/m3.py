@@ -2,11 +2,15 @@ import uuid
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Header, Query, Response, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
 from app.dependencies import get_current_user
+from app.exceptions import NotFoundError
+from app.models.curriculum import ModuleEnrollment
 from app.models.user import User
+from app.schemas.curriculum import EnrollmentLearningMetricsResponse
 from app.schemas.m3 import (
     HealthFindingResponse,
     HistoryEntryResponse,
@@ -17,8 +21,12 @@ from app.schemas.m3 import (
     MarkedPaperUploadRequest,
     MutationAck,
     MutationResult,
+    ProviderAuthorizationRequest,
+    ProviderAuthorizationSessionResponse,
     ProviderConfigureRequest,
     ProviderDescriptor,
+    ProviderOAuthCallbackRequest,
+    ProviderOAuthCallbackResponse,
     ProviderStatusResponse,
     RevisionDiffResponse,
     SourceChangeResponse,
@@ -31,6 +39,7 @@ from app.schemas.m3 import (
 )
 from app.services.exports import export_page, export_workspace
 from app.services.idempotency import execute_idempotent
+from app.services.learning_metrics import enrollment_learning_metrics
 from app.services.marked_papers import (
     create_question,
     delete_marked_paper,
@@ -42,11 +51,18 @@ from app.services.marked_papers import (
     upload_marked_paper,
 )
 from app.services.meters import topic_meters
+from app.services.provider_auth import (
+    cancel_authorization_session,
+    complete_authorization,
+    create_authorization_session,
+    get_authorization_session,
+)
 from app.services.providers import (
-    PROVIDERS,
+    activate_provider,
     configure_provider,
     disconnect_provider,
     list_settings,
+    provider_descriptors,
     test_provider,
 )
 from app.services.study_outputs import (
@@ -241,6 +257,23 @@ async def meters(user: User = Depends(get_current_user), db: AsyncSession = Depe
     return await topic_meters(user, db)
 
 
+@router.get("/m3/meters", response_model=EnrollmentLearningMetricsResponse)
+async def legacy_meters(
+    enrollment_id: uuid.UUID = Query(),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    enrollment = await db.scalar(
+        select(ModuleEnrollment).where(
+            ModuleEnrollment.id == enrollment_id,
+            ModuleEnrollment.user_id == user.id,
+        )
+    )
+    if enrollment is None:
+        raise NotFoundError("Enrollment not found")
+    return await enrollment_learning_metrics(enrollment, db)
+
+
 @router.post("/marked-papers", response_model=MutationAck, status_code=status.HTTP_201_CREATED)
 async def create_marked_paper(
     payload: MarkedPaperUploadRequest,
@@ -379,7 +412,77 @@ async def remove_marked_paper(
 
 @router.get("/providers", response_model=list[ProviderDescriptor])
 async def supported_providers():
-    return list(PROVIDERS.values())
+    return provider_descriptors()
+
+
+@router.post(
+    "/providers/{provider}/auth-sessions",
+    response_model=ProviderAuthorizationSessionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def start_provider_authorization(
+    provider: str,
+    payload: ProviderAuthorizationRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await create_authorization_session(user, provider, payload, db)
+
+
+@router.get(
+    "/providers/auth-sessions/{session_id}",
+    response_model=ProviderAuthorizationSessionResponse,
+)
+async def provider_authorization_status(
+    session_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await get_authorization_session(user, session_id, db)
+
+
+@router.delete(
+    "/providers/auth-sessions/{session_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def cancel_provider_authorization(
+    session_id: uuid.UUID,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await execute_idempotent(
+        db=db,
+        user=user,
+        key=idempotency_key,
+        operation=f"provider.auth.cancel:{session_id}",
+        payload=None,
+        status_code=status.HTTP_204_NO_CONTENT,
+        response_type=type(None),
+        execute=lambda: cancel_authorization_session(user, session_id, db),
+    )
+
+
+@router.post(
+    "/providers/chatgpt/oauth/callback",
+    response_model=ProviderOAuthCallbackResponse,
+    include_in_schema=False,
+)
+async def provider_oauth_callback(
+    payload: ProviderOAuthCallbackRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return {
+        "return_path": await complete_authorization(
+            user,
+            payload.state,
+            payload.code,
+            payload.error,
+            payload.browser_binding,
+            db,
+        )
+    }
 
 
 @router.get("/providers/settings", response_model=list[ProviderStatusResponse])
@@ -424,6 +527,25 @@ async def validate_provider(
         status_code=status.HTTP_200_OK,
         response_type=ProviderStatusResponse,
         execute=lambda: test_provider(user, provider, db),
+    )
+
+
+@router.post("/providers/{provider}/activate", response_model=ProviderStatusResponse)
+async def select_provider(
+    provider: str,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await execute_idempotent(
+        db=db,
+        user=user,
+        key=idempotency_key,
+        operation=f"provider.activate:{provider}",
+        payload=None,
+        status_code=status.HTTP_200_OK,
+        response_type=ProviderStatusResponse,
+        execute=lambda: activate_provider(user, provider, db),
     )
 
 
