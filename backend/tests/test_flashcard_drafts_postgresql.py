@@ -481,7 +481,7 @@ async def test_wiki_draft_accepts_only_snapshotted_chunk_page_pairs(draft_client
 @pytest.mark.asyncio
 async def test_topic_order_returns_same_draft_and_fingerprint(draft_client):
     client, session, user = draft_client
-    source, _chunks = await _ready_source(session, user)
+    source, chunks = await _ready_source(session, user)
     suffix = uuid.uuid4().hex[:8].upper()
     catalog = CatalogModule(
         institution="Test University",
@@ -547,12 +547,17 @@ async def test_topic_order_returns_same_draft_and_fingerprint(draft_client):
                 rule_hash="c" * 64,
                 source_fingerprint="d" * 64,
                 topic_fingerprint="e" * 64,
-                evidence=[],
+                evidence=[
+                    {
+                        "chunk_id": str(chunks[position].id),
+                        "excerpt": chunks[position].content,
+                    }
+                ],
                 reason_code="manual_confirmation",
                 reviewed_at=datetime.now(UTC),
                 reviewer_id=user.id,
             )
-            for topic in topics
+            for position, topic in enumerate(topics)
         ]
     )
     await session.commit()
