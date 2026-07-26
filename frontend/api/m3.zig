@@ -4,8 +4,8 @@ const lib = @import("lib");
 
 const ProviderAuthorizationStart = struct {
     id: []const u8,
-    authorization_url: []const u8,
-    browser_binding: []const u8,
+    authorization_url: ?[]const u8 = null,
+    browser_binding: ?[]const u8 = null,
 };
 const ProviderAuthorizationPublic = struct { authorization_url: []const u8 };
 
@@ -134,6 +134,8 @@ fn formPayload(req: mer.Request, action: []const u8) !?std.json.Value {
         if (std.mem.eql(u8, action, "paper.updateQuestion")) try object.put(req.allocator, "reviewed", .{ .bool = formValue(req, "reviewed") != null });
     } else if (std.mem.eql(u8, action, "provider.auth.start")) {
         try object.put(req.allocator, "return_path", .{ .string = try requiredFormValue(req, "return_path") });
+    } else if (std.mem.eql(u8, action, "provider.auth.poll")) {
+        // The session identifier is carried in the route envelope.
     } else if (std.mem.eql(u8, action, "provider.local.connect")) {
         // The authenticated backend derives local CLI configuration server-side.
     } else if (std.mem.eql(u8, action, "provider.save")) {
@@ -141,7 +143,7 @@ fn formPayload(req: mer.Request, action: []const u8) !?std.json.Value {
         try object.put(req.allocator, "provider", .{ .string = provider });
         try putOptionalString(req.allocator, &object, "api_key", formValue(req, "api_key"));
         try object.put(req.allocator, "model", .{ .string = try requiredFormValue(req, "model") });
-        if (!std.mem.eql(u8, provider, "openai") and !std.mem.eql(u8, provider, "google_gemini")) {
+        if (!std.mem.eql(u8, provider, "codegraff") and !std.mem.eql(u8, provider, "openai") and !std.mem.eql(u8, provider, "google_gemini")) {
             if (formValue(req, "endpoint")) |endpoint| {
                 if (endpoint.len > 0) try object.put(req.allocator, "endpoint", .{ .string = endpoint }) else try object.put(req.allocator, "endpoint", .null);
             } else try object.put(req.allocator, "endpoint", .null);
@@ -173,6 +175,8 @@ fn formMutation(req: mer.Request) !FormMutation {
         "/sources/health"
     else if (std.mem.eql(u8, action, "provider.auth.start") and id != null and safeSegment(id.?))
         try std.fmt.allocPrint(req.allocator, "/settings/providers?provider={s}&auth=failed", .{id.?})
+    else if (std.mem.eql(u8, action, "provider.auth.poll") and id != null and safeSegment(id.?))
+        try std.fmt.allocPrint(req.allocator, "/settings/providers?provider=codegraff&session={s}", .{id.?})
     else if (std.mem.eql(u8, action, "provider.local.connect"))
         "/settings/providers?provider=chatgpt"
     else if (std.mem.startsWith(u8, action, "provider."))
@@ -213,6 +217,7 @@ fn route(allocator: std.mem.Allocator, envelope: Envelope) !struct { std.http.Me
     }
     const id = envelope.id orelse return error.InvalidRoute;
     if (!safeSegment(id)) return error.InvalidRoute;
+    if (std.mem.eql(u8, action, "provider.auth.poll")) return .{ .POST, try std.fmt.allocPrint(allocator, "/api/providers/auth-sessions/{s}/poll", .{id}), false };
     if (std.mem.eql(u8, action, "paper.delete")) return .{ .DELETE, try std.fmt.allocPrint(allocator, "/api/marked-papers/{s}", .{id}), false };
     if (std.mem.eql(u8, action, "paper.addQuestion")) return .{ .POST, try std.fmt.allocPrint(allocator, "/api/marked-papers/{s}/questions", .{id}), false };
     if (std.mem.eql(u8, action, "provider.test")) return .{ .POST, try std.fmt.allocPrint(allocator, "/api/providers/{s}/test", .{id}), false };
@@ -257,8 +262,13 @@ pub fn render(req: mer.Request) mer.Response {
     if (std.mem.eql(u8, envelope.action, "provider.auth.start") and result.status >= 200 and result.status < 300) {
         const parsed = std.json.parseFromSlice(ProviderAuthorizationStart, req.allocator, result.body, .{ .ignore_unknown_fields = true }) catch return if (form) |value| formRedirect(req, value.redirect_path, false) else .{ .status = .bad_gateway, .content_type = .json, .body = "{\"error\":\"invalid provider authorization response\"}" };
         const session_id = parsed.value.id;
-        const authorization_url = parsed.value.authorization_url;
-        const browser_binding = parsed.value.browser_binding;
+        if (envelope.id != null and std.mem.eql(u8, envelope.id.?, "codegraff")) {
+            if (!safeSegment(session_id)) return if (form) |value| formRedirect(req, value.redirect_path, false) else .{ .status = .bad_gateway, .content_type = .json, .body = "{\"error\":\"invalid provider authorization response\"}" };
+            if (form != null) return mer.redirect(std.fmt.allocPrint(req.allocator, "/settings/providers?provider=codegraff&session={s}", .{session_id}) catch "/settings/providers?provider=codegraff&error=1", .see_other);
+            return .{ .status = .ok, .content_type = .json, .body = result.body };
+        }
+        const authorization_url = parsed.value.authorization_url orelse return if (form) |value| formRedirect(req, value.redirect_path, false) else .{ .status = .bad_gateway, .content_type = .json, .body = "{\"error\":\"invalid provider authorization response\"}" };
+        const browser_binding = parsed.value.browser_binding orelse return if (form) |value| formRedirect(req, value.redirect_path, false) else .{ .status = .bad_gateway, .content_type = .json, .body = "{\"error\":\"invalid provider authorization response\"}" };
         if (!safeSegment(session_id) or !std.mem.startsWith(u8, authorization_url, "https://auth.openai.com/oauth/authorize?") or std.mem.indexOfAny(u8, authorization_url, "\\\r\n") != null or browser_binding.len < 32 or browser_binding.len > 200 or !safeSegment(browser_binding)) return if (form) |value| formRedirect(req, value.redirect_path, false) else .{ .status = .bad_gateway, .content_type = .json, .body = "{\"error\":\"invalid provider authorization response\"}" };
         const cookies = req.allocator.alloc(mer.SetCookie, 1) catch return mer.internalError("provider authorization cookie failed");
         cookies[0] = lib.session.providerAuthCookie(req.allocator, session_id, browser_binding) catch return mer.internalError("provider authorization cookie failed");

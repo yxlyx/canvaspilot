@@ -9,6 +9,9 @@ export SESSION_SECRET=test-session-secret-with-at-least-32-bytes
 export CANVAS_TOKEN_SECRET=eE-4RX-m39GFpdZXEDBtsaKZoOlMC7EpNlV9XiFrOO8=
 export PROVIDER_ENCRYPTION_SECRET=XRoe-9icgC8y3-AtmJVDwhbrRraWTUXCsSu013nHztY=
 export SECURE_COOKIES=false
+if [[ -n "${TEST_DATABASE_URL:-}" ]]; then
+    export DATABASE_URL="$TEST_DATABASE_URL"
+fi
 
 # Every request is bounded so a half-open local service cannot stall the smoke
 # indefinitely inside an otherwise bounded readiness loop.
@@ -146,8 +149,8 @@ register_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
     --header "Origin: $FRONTEND_URL" --header 'Sec-Fetch-Site: same-origin' \
     --data-urlencode 'name=Full Stack Smoke' \
     --data-urlencode "email=$email" \
-    --data-urlencode 'password=smoke-password' \
-    --data-urlencode 'confirm_password=smoke-password' \
+    --data-urlencode 'password=Smoke-password1' \
+    --data-urlencode 'confirm_password=Smoke-password1' \
     "$FRONTEND_URL/api/auth/register")
 [[ "$register_status" == 303 ]]
 registered_me=$(curl --fail --silent --cookie "$COOKIE_JAR" "$FRONTEND_URL/api/me")
@@ -159,7 +162,7 @@ signin_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
     --cookie "$COOKIE_JAR" --cookie-jar "$COOKIE_JAR" \
     --header "Origin: $FRONTEND_URL" --header 'Sec-Fetch-Site: same-origin' \
     --data-urlencode "email=$email" \
-    --data-urlencode 'password=smoke-password' \
+    --data-urlencode 'password=Smoke-password1' \
     "$FRONTEND_URL/api/auth/signin")
 [[ "$signin_status" == 303 ]]
 

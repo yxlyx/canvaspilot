@@ -29,11 +29,20 @@ pub fn render(req: mer.Request) mer.Response {
     } else {
         const result = lib.backend.notifications(req.allocator, lib.session.fromRequest(req).token, unread_only);
         const page = if (result.value) |parsed| parsed.value else return lib.m3.liveError(req, "Notifications", result.status);
-        for (page.items) |item| notification(w, lib.ui.escapeSafe(req.allocator, item.title), lib.ui.escapeSafe(req.allocator, item.body), lib.m3.safeInternalHref(item.href, "/notifications"), lib.ui.escapeSafe(req.allocator, item.kind), item.read_at == null, item.id) catch return mer.internalError("notifications render failed");
+        for (page.items) |item| notification(w, lib.ui.escapeSafe(req.allocator, item.title), lib.ui.escapeSafe(req.allocator, item.body), lib.m3.safeInternalHref(item.href, "/notifications"), notificationKindLabel(item.kind), item.read_at == null, item.id) catch return mer.internalError("notifications render failed");
         if (page.items.len == 0) w.writeAll("<div class=\"cp-empty\"><div><h2>You are caught up</h2><p>New actionable reminders will appear here.</p></div></div>") catch return mer.internalError("notifications render failed");
     }
     w.writeAll("</section><script src=\"/settings.js?v=20260728-1\" defer></script>") catch return mer.internalError("notifications render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
+}
+
+fn notificationKindLabel(kind: []const u8) []const u8 {
+    if (std.ascii.eqlIgnoreCase(kind, "daily_review")) return "Daily review";
+    if (std.ascii.eqlIgnoreCase(kind, "processing_attention")) return "Source needs attention";
+    if (std.ascii.eqlIgnoreCase(kind, "processing_complete")) return "Source ready";
+    if (std.ascii.eqlIgnoreCase(kind, "paper_review")) return "Paper ready for review";
+    if (std.ascii.eqlIgnoreCase(kind, "health_attention")) return "Health finding";
+    return "Workspace update";
 }
 
 fn notification(w: *std.Io.Writer, title: []const u8, body: []const u8, href: []const u8, kind: []const u8, unread: bool, id: ?[]const u8) !void {

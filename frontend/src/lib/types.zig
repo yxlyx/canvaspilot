@@ -519,7 +519,23 @@ pub const ProviderDescriptor = struct {
     endpoint_mode: []const u8 = "fixed",
     supports_generation: bool = true,
     supports_embeddings: bool = false,
+    recommended: bool = false,
+    catalog_mode: []const u8 = "static",
+    legacy: bool = false,
 };
+pub const ProviderAuthorizationSessionResponse = struct {
+    id: []const u8,
+    provider: []const u8,
+    status: []const u8,
+    expires_at: []const u8,
+    error_code: ?[]const u8 = null,
+    error_message: ?[]const u8 = null,
+    verification_uri: ?[]const u8 = null,
+    verification_uri_complete: ?[]const u8 = null,
+    user_code: ?[]const u8 = null,
+    poll_interval_seconds: ?usize = null,
+};
+pub const ProviderModelOption = struct { id: []const u8, label: []const u8 };
 pub const ProviderStatusResponse = struct {
     provider: []const u8,
     model: []const u8,

@@ -346,19 +346,20 @@ for route in /sources /flashcards /chat; do
         fail "$route: live failure rendered fixture sentinels"
     fi
 done
-assert_backend_count 9
+assert_backend_count 8
 
 # Authenticated live requests contact the backend and never substitute demo output.
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
     --header 'Content-Type: application/json' \
     --data '{"message":"live unavailable boundary"}'
-assert_status 502
-assert_json_field error 'live chat is unavailable; no demo answer was substituted'
+assert_status 503
+assert_json_field error 'retrieval_unavailable'
+assert_json_field detail 'Source retrieval stopped before an answer was created.'
 assert_json_absent source
 assert_json_absent message
 assert_json_absent citations
-assert_backend_count 10
+assert_backend_count 9
 
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
@@ -367,30 +368,31 @@ request "$BASE_URL/api/chat" \
 assert_status 200
 assert_json_field source backend
 assert_json_field message 'Grounded live reply'
-assert_backend_count 11
+assert_backend_count 10
 
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
     --header 'Content-Type: application/json' \
     --data '{"message":"truncated live boundary"}'
-assert_status 502
-assert_json_field error 'live chat is unavailable; no demo answer was substituted'
+assert_status 503
+assert_json_field error 'retrieval_unavailable'
+assert_json_field detail 'Source retrieval stopped before an answer was created.'
 assert_json_absent message
-assert_contains 'no demo answer was substituted'
-assert_backend_count 12
+assert_backend_count 11
 
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
     --header 'Content-Type: application/json' \
     --data '{"message":"oversized response boundary"}'
 assert_status 502
-assert_json_field error 'live chat is unavailable; no demo answer was substituted'
-assert_backend_count 13
+assert_json_field error 'backend_unavailable'
+assert_json_field detail 'WikiBase could not reach the local backend. Your question and source data are safe.'
+assert_backend_count 12
 
 request "$BASE_URL/api/sync" --header 'Cookie: cp_session=chat-boundary' --data 'action=sync'
 assert_status 303
 grep -Eiq '^location:[[:space:]]*/dashboard\?synced=1[[:space:]]*\r?$' "$HEADERS" || fail 'authenticated live sync did not return its success redirect'
-assert_backend_count 14
+assert_backend_count 13
 [[ "$(grep -Fxc '/api/chat' "$BACKEND_RECORD")" == "4" ]] || fail 'unexpected live chat backend request count'
 [[ "$(grep -Fxc '/api/modules/sync' "$BACKEND_RECORD")" == "1" ]] || fail 'unexpected live sync backend request count'
 
@@ -421,7 +423,7 @@ request "$BASE_URL/api/sources" \
     --header 'X-Forwarded-Proto: https' \
     --data "$source_payload"
 assert_status 403
-assert_backend_count 14
+assert_backend_count 13
 
 # A configured public origin works behind a proxy without trusting forwarding headers.
 for case in 'unauthorized source:401' 'forbidden source:403' 'invalid source:422' 'oversized source response:502'; do
@@ -451,7 +453,7 @@ request "$BASE_URL/api/sources" \
     --data '{"source_type":"link","origin":"test","title":"created source","source_url":"https://example.com"}'
 assert_status 201
 assert_json_field title 'created source'
-assert_backend_count 19
+assert_backend_count 18
 [[ "$(grep -Fxc '/api/sources' "$BACKEND_RECORD")" == "7" ]] || fail 'unexpected live source backend request count'
 
 printf 'chat-boundary-smoke: all assertions passed at %s\n' "$BASE_URL"

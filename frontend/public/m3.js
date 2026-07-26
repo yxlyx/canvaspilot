@@ -57,7 +57,7 @@
       if (scope === "source_ids" && payload.source_ids) payload.source_ids = [payload.source_ids];
     }
     if (action === "provider.save") {
-      if (["openai", "google_gemini"].includes(payload.provider)) delete payload.endpoint;
+      if (["codegraff", "openai", "google_gemini"].includes(payload.provider)) delete payload.endpoint;
       else if (!payload.endpoint) payload.endpoint = null;
     }
     if (action === "paper.updateQuestion") ["awarded_marks", "available_marks"].forEach((key) => { if (!data.get(key)) payload[key] = null; });
@@ -107,6 +107,11 @@
       if (!response.ok) { let message = "Request failed (" + response.status + ")."; try { message = errorMessage(await response.json(), message); } catch (_) {} throw new Error(message); }
       if (body.action === "provider.auth.start") {
         const result = await response.json();
+        if (result.provider === "codegraff" && result.id) {
+          status(form, "One-time code created. Opening approval steps…", false);
+          window.location.assign("/settings/providers?provider=codegraff&session=" + encodeURIComponent(result.id));
+          return;
+        }
         if (!result.authorization_url) throw new Error("The provider did not return a sign-in URL.");
         status(form, "Opening secure browser sign-in…", false);
         window.location.assign(result.authorization_url);
@@ -129,6 +134,36 @@
     if (scope) { scope.addEventListener("change", () => updateScope(form)); updateScope(form); }
     form.addEventListener("submit", (event) => { event.preventDefault(); if (form.dataset.inFlight !== "true") submit(form, envelope(form)); });
   });
+
+  document.querySelectorAll("[data-copy-code]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const code = button.closest("[data-device-session]")?.querySelector("[data-user-code]")?.textContent?.trim();
+      if (!code) return;
+      try { await navigator.clipboard.writeText(code); button.textContent = "Copied"; }
+      catch (_) { button.closest("[data-device-session]")?.querySelector("[data-user-code]")?.focus(); }
+    });
+  });
+
+  const deviceSession = document.querySelector("[data-device-session][data-session-status='pending']");
+  if (deviceSession) {
+    const id = deviceSession.dataset.deviceSession;
+    const interval = Math.max(2, Number(deviceSession.dataset.pollInterval || 5)) * 1000;
+    const poll = async () => {
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ action: "provider.auth.poll", id, idempotency_key: idempotencyKey() }),
+        });
+        if (!response.ok) return window.setTimeout(poll, interval);
+        const result = await response.json();
+        if (result.status === "pending") return window.setTimeout(poll, Math.max(2, Number(result.poll_interval_seconds || interval / 1000)) * 1000);
+        window.location.reload();
+      } catch (_) { window.setTimeout(poll, interval); }
+    };
+    window.setTimeout(poll, interval);
+  }
 
   const upload = document.querySelector("[data-paper-upload]");
   if (upload) upload.addEventListener("submit", async (event) => {

@@ -242,7 +242,7 @@ test("provider callback requires the initiating signed-in browser and fails clos
   await expect(page).toHaveURL(/\/settings\/providers\?provider=chatgpt&auth=failed$/);
 });
 
-test("provider form contracts preserve optional keys and safe external authorization redirects", async () => {
+test("provider form contracts preserve direct keys and the Codegraff device flow", async () => {
   const proxy = fs.readFileSync(path.join(__dirname, "../../api/m3.zig"), "utf8");
   expect(proxy).toContain('putOptionalString(req.allocator, &object, "api_key"');
   expect(proxy).toContain('https://auth.openai.com/oauth/authorize?');
@@ -250,15 +250,18 @@ test("provider form contracts preserve optional keys and safe external authoriza
   expect(proxy).toContain('provider.local.connect');
   expect(proxy).toContain('/api/providers/chatgpt/local-cli/connect');
   expect(proxy).toContain("providerAuthCookie(req.allocator, session_id, browser_binding)");
+  expect(proxy).toContain('provider.auth.poll');
+  expect(proxy).toContain('/api/providers/auth-sessions/{s}/poll');
   const providerPage = fs.readFileSync(path.join(__dirname, "../../app/settings/providers.zig"), "utf8");
-  expect(providerPage).toContain("workspace questions and sources are not sent");
-  expect(providerPage).toContain("Use local Codex CLI");
-  expect(providerPage).toContain("does not read or store its tokens");
-  expect(providerPage).toContain("Capabilities, billing, and data use");
+  expect(providerPage).toContain("Your sources remain available when no provider is connected");
+  expect(providerPage).toContain("question, recent chat context, and selected source excerpts");
+  expect(providerPage).toContain("WikiBase encrypts the gateway credential");
+  expect(providerPage).toContain("Other providers");
+  expect(providerPage).toContain("Existing browser connections remain usable until disconnected");
   const styles = fs.readFileSync(path.join(__dirname, "../../app/_styles.css"), "utf8");
-  expect(styles).toContain(".cp-provider-browser{order:1");
-  expect(styles).toContain(".cp-provider-prefer-local .cp-provider-local{order:1}");
-  expect(providerPage).toContain("prefer_local");
+  expect(styles).toContain(".cp-provider-page{width:min(100%,880px)");
+  expect(styles).toContain(".cp-device-steps>li");
+  expect(styles).toContain(".cp-model-ledger");
 });
 
 test("signup mode has matching title, heading, active tab, and focused server errors", async ({ page }) => {
