@@ -89,6 +89,13 @@ pub fn render(req: mer.Request) mer.Response {
                 .body = "{\"error\":\"authentication required\"}",
             }, cookies);
         }
+        if (e == error.Forbidden) {
+            return .{
+                .status = .forbidden,
+                .content_type = .json,
+                .body = "{\"error\":\"chat access forbidden\"}",
+            };
+        }
         return .{
             .status = .bad_gateway,
             .content_type = .json,
@@ -104,6 +111,7 @@ const BackendError = error{
     BackendBadStatus,
     SerializeFailed,
     AuthFailed,
+    Forbidden,
 };
 
 fn callBackend(
@@ -140,7 +148,8 @@ fn callBackend(
     defer res.deinit(allocator);
 
     const status_int: u16 = @intFromEnum(res.status);
-    if (status_int == 401 or status_int == 403) return error.AuthFailed;
+    if (status_int == 401) return error.AuthFailed;
+    if (status_int == 403) return error.Forbidden;
     if (status_int >= 400) {
         log.warn("chat: backend returned HTTP {d}", .{status_int});
         return error.BackendBadStatus;
