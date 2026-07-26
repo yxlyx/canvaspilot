@@ -90,6 +90,17 @@ def test_production_accepts_independent_strong_secrets():
     assert settings.environment == "production"
 
 
+def test_codegraff_gateway_rejects_trailing_slash():
+    with pytest.raises(ValidationError, match="CODEGRAFF_GATEWAY_URL"):
+        Settings(
+            environment="test",
+            session_secret="a-strong-independent-session-secret-1234",
+            canvas_token_secret=Fernet.generate_key().decode(),
+            provider_encryption_secret=Fernet.generate_key().decode(),
+            codegraff_gateway_url="https://gateway.codegraff.com/",
+        )
+
+
 @pytest.mark.parametrize("environment", ["production", "staging"])
 def test_deployed_environment_allows_default_chatgpt_redirect_when_oauth_disabled(environment):
     settings = Settings(

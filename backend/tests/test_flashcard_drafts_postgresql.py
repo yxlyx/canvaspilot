@@ -191,14 +191,25 @@ async def test_draft_review_lifecycle_snapshots_counts_and_attempts(draft_client
     )
     _error(outside_scope, 422, "citation_out_of_scope")
 
-    discarded = await client.post(
+    missing_reason = await client.post(
         f"/api/flashcards/drafts/{deck['id']}/discard",
         json={"expected_revision": deck["revision"], "card_ids": [generated_card["id"]]},
+    )
+    _error(missing_reason, 422, "rejection_reason_required")
+
+    discarded = await client.post(
+        f"/api/flashcards/drafts/{deck['id']}/discard",
+        json={
+            "expected_revision": deck["revision"],
+            "card_ids": [generated_card["id"]],
+            "rejection_reason": "too_generic",
+        },
     )
     assert discarded.status_code == 200
     deck = discarded.json()
     assert deck["card_count"] == 0
     assert deck["cards"][0]["state"] == "discarded"
+    assert "rejected:too_generic" in deck["cards"][0]["tags"]
     stale_revision = await client.patch(
         f"/api/flashcards/drafts/{deck['id']}",
         json={"expected_revision": deck["revision"] - 1, "title": "Stale title"},
@@ -240,7 +251,11 @@ async def test_draft_review_lifecycle_snapshots_counts_and_attempts(draft_client
 
     discarded_after_reorder = await client.post(
         f"/api/flashcards/drafts/{deck['id']}/discard",
-        json={"expected_revision": deck["revision"], "card_ids": [manual_card["id"]]},
+        json={
+            "expected_revision": deck["revision"],
+            "card_ids": [manual_card["id"]],
+            "rejection_reason": "other",
+        },
     )
     assert discarded_after_reorder.status_code == 200
     deck = discarded_after_reorder.json()
@@ -275,7 +290,11 @@ async def test_draft_review_lifecycle_snapshots_counts_and_attempts(draft_client
     )
     discarded_for_publication = await client.post(
         f"/api/flashcards/drafts/{deck['id']}/discard",
-        json={"expected_revision": deck["revision"], "card_ids": [discarded_card["id"]]},
+        json={
+            "expected_revision": deck["revision"],
+            "card_ids": [discarded_card["id"]],
+            "rejection_reason": "poor_evidence",
+        },
     )
     assert discarded_for_publication.status_code == 200
     deck = discarded_for_publication.json()

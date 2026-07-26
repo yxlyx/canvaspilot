@@ -137,6 +137,27 @@ def _generated_wording_is_low_signal(wording: GeneratedFlashcardWording) -> bool
     return _looks_like_source_metadata(wording.question) or len(wording.answer.split()) > 80
 
 
+def _question_exposes_citation_reference(question: str, citation_ref: str) -> bool:
+    normalized_question = _plain_text(question).casefold()
+    normalized_ref = _plain_text(citation_ref).casefold()
+    if not normalized_ref or normalized_ref not in normalized_question:
+        return False
+    if (
+        ":" in normalized_ref
+        or "§" in normalized_ref
+        or re.search(
+            r"\b(?:citation|section|page|chapter|slide|paragraph|appendix|lecture)\b",
+            normalized_ref,
+        )
+        is not None
+    ):
+        return True
+    return any(
+        f"{cue} {normalized_ref}" in normalized_question
+        for cue in ("according to", "according to the", "cited in", "from", "in the")
+    )
+
+
 def _sentences(value: str) -> list[str]:
     cleaned = _plain_text(value)
     parts = re.split(r"(?<=[.!?])\s+", cleaned)
@@ -419,7 +440,6 @@ async def _generate_card_fields(
         evidence = re.sub(r"\s+", " ", candidate.content).strip().casefold()
         support = re.sub(r"\s+", " ", wording.support_quote).strip().casefold()
         answer = re.sub(r"\s+", " ", wording.answer).strip().casefold()
-        question = wording.question.casefold()
         if _generated_wording_is_low_signal(wording):
             raise WikiBaseError(
                 502,
@@ -432,10 +452,7 @@ async def _generate_card_fields(
                 "provider_invalid_response",
                 "The answer provider returned a flashcard without exact evidence support",
             )
-        if (
-            candidate.source_title.casefold() in question
-            or candidate.citation_ref.casefold() in question
-        ):
+        if _question_exposes_citation_reference(wording.question, candidate.citation_ref):
             raise WikiBaseError(
                 502,
                 "provider_invalid_response",

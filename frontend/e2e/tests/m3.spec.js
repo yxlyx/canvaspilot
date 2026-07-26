@@ -258,6 +258,15 @@ test("provider form contracts preserve direct keys and the Codegraff device flow
   expect(providerPage).toContain("WikiBase encrypts the gateway credential");
   expect(providerPage).toContain("Other providers");
   expect(providerPage).toContain("Existing browser connections remain usable until disconnected");
+  expect(providerPage).toContain("data-provider-activate");
+  expect(providerPage).toContain("active_for_generation else false");
+  expect(providerPage).toContain("Use for answers");
+  expect(providerPage).toContain("model catalog is temporarily unavailable");
+  expect(providerPage).toContain("data-session-expires");
+  const script = fs.readFileSync(path.join(__dirname, "../../public/m3.js"), "utf8");
+  expect(script).toContain('action: "provider.activate"');
+  expect(script).toContain('response.status === 401');
+  expect(script).toContain("transientFailures > 5");
   const styles = fs.readFileSync(path.join(__dirname, "../../app/_styles.css"), "utf8");
   expect(styles).toContain(".cp-provider-page{width:min(100%,880px)");
   expect(styles).toContain(".cp-device-steps>li");

@@ -123,6 +123,11 @@
         if (!tested.ok) { let message = "The connection test failed (" + tested.status + ")."; try { message = errorMessage(await tested.json(), message); } catch (_) {} throw new Error(message); }
         const result = await tested.json();
         if (result.status !== "connected") throw new Error(result.last_error || "The provider rejected the key, endpoint, or model.");
+        if (form.hasAttribute("data-provider-activate")) {
+          status(form, "Connection tested. Making it the answer provider…", false);
+          const activated = await request(form, { action: "provider.activate", id: body.payload.provider, idempotency_key: idempotencyKey() }, release);
+          if (!activated.ok) { let message = "The provider could not be selected (" + activated.status + ")."; try { message = errorMessage(await activated.json(), message); } catch (_) {} throw new Error(message); }
+        }
       }
       status(form, "Saved.", false);
       const target = form.dataset.success;
@@ -148,6 +153,24 @@
   if (deviceSession) {
     const id = deviceSession.dataset.deviceSession;
     const interval = Math.max(2, Number(deviceSession.dataset.pollInterval || 5)) * 1000;
+    const expiresAt = Date.parse(deviceSession.dataset.sessionExpires || "");
+    const pollStatus = deviceSession.querySelector("[data-device-poll-status]");
+    let transientFailures = 0;
+    const stop = (message) => {
+      if (!pollStatus) return;
+      pollStatus.textContent = message;
+      pollStatus.classList.add("cp-error");
+      pollStatus.setAttribute("role", "alert");
+    };
+    const retry = (delay) => {
+      if (Number.isFinite(expiresAt) && Date.now() >= expiresAt) return stop("This one-time code expired. Start the connection again.");
+      window.setTimeout(poll, delay);
+    };
+    const retryTransient = () => {
+      transientFailures += 1;
+      if (transientFailures > 5) return stop("Automatic checking stopped after repeated connection errors. Use Check connection to try again.");
+      retry(Math.min(interval * (2 ** transientFailures), 30000));
+    };
     const poll = async () => {
       try {
         const response = await fetch(endpoint, {
@@ -156,13 +179,20 @@
           credentials: "same-origin",
           body: JSON.stringify({ action: "provider.auth.poll", id, idempotency_key: idempotencyKey() }),
         });
-        if (!response.ok) return window.setTimeout(poll, interval);
+        if (response.status === 401) return window.location.assign("/login");
+        if (!response.ok) {
+          if (response.status === 429 || response.status >= 500) return retryTransient();
+          let message = "Authorization can no longer be checked. Start the connection again.";
+          try { message = errorMessage(await response.json(), message); } catch (_) {}
+          return stop(message);
+        }
         const result = await response.json();
-        if (result.status === "pending") return window.setTimeout(poll, Math.max(2, Number(result.poll_interval_seconds || interval / 1000)) * 1000);
+        transientFailures = 0;
+        if (result.status === "pending") return retry(Math.max(2, Number(result.poll_interval_seconds || interval / 1000)) * 1000);
         window.location.reload();
-      } catch (_) { window.setTimeout(poll, interval); }
+      } catch (_) { retryTransient(); }
     };
-    window.setTimeout(poll, interval);
+    retry(interval);
   }
 
   const upload = document.querySelector("[data-paper-upload]");

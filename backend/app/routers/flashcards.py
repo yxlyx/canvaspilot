@@ -1,4 +1,8 @@
+import base64
+import binascii
+import json
 import uuid
+import zlib
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -71,6 +75,28 @@ async def generate_deck(
             message=outcome.message,
         )
 
+    def stored_response_value(response_body):
+        serialized = json.dumps(response_body, ensure_ascii=False, separators=(",", ":")).encode()
+        return {
+            "encoding": "zlib+base64",
+            "body": base64.b64encode(zlib.compress(serialized, level=9)).decode(),
+        }
+
+    async def replay_response_value(stored_response):
+        if "deck" in stored_response:
+            return stored_response
+        try:
+            if stored_response.get("encoding") != "zlib+base64":
+                raise ValueError
+            compressed = base64.b64decode(stored_response["body"], validate=True)
+            return json.loads(zlib.decompress(compressed))
+        except (binascii.Error, KeyError, TypeError, ValueError, zlib.error) as exc:
+            raise WikiBaseError(
+                500,
+                "idempotency_record_invalid",
+                "The stored mutation response could not be restored",
+            ) from exc
+
     if idempotency_key is not None:
         return await execute_idempotent(
             db=db,
@@ -82,6 +108,8 @@ async def generate_deck(
             response_type=FlashcardGenerateResponse,
             execute=lambda: generate(False),
             response_value=response_value,
+            stored_response_value=stored_response_value,
+            replay_response_value=replay_response_value,
         )
     return response_value(await generate(True))
 
@@ -174,8 +202,26 @@ async def _card_action(
     user: User,
     db: AsyncSession,
 ):
+    if action == "discard" and payload.rejection_reason is None:
+        raise WikiBaseError(
+            422,
+            "rejection_reason_required",
+            "Choose a rejection reason before discarding cards",
+        )
+    if action != "discard" and payload.rejection_reason is not None:
+        raise WikiBaseError(
+            422,
+            "invalid_rejection_reason",
+            "A rejection reason can only be recorded when discarding cards",
+        )
     return await mutate_draft_cards(
-        user, deck_id, action, payload.card_ids, payload.expected_revision, db
+        user,
+        deck_id,
+        action,
+        payload.card_ids,
+        payload.expected_revision,
+        db,
+        rejection_reason=payload.rejection_reason,
     )
 
 

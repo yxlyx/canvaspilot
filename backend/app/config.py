@@ -143,7 +143,7 @@ class Settings(BaseSettings):
                 or parsed.port not in (None, 443)
                 or parsed.username
                 or parsed.password
-                or parsed.path.rstrip("/") != path
+                or parsed.path != path
                 or parsed.query
                 or parsed.fragment
             ):

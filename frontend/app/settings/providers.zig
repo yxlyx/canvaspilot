@@ -38,7 +38,7 @@ fn renderLive(req: mer.Request) mer.Response {
     renderCurrent(req, w, active) catch return mer.internalError("providers render failed");
     renderCodegraff(req, w, codegraff, codegraff_setting, session, models) catch return mer.internalError("providers render failed");
     renderOtherProviders(req, w, descriptors, settings) catch return mer.internalError("providers render failed");
-    w.writeAll("</div><script src=\"/m3.js?v=20260802\" defer></script>") catch return mer.internalError("providers render failed");
+    w.writeAll("</div><script src=\"/m3.js?v=20260803\" defer></script>") catch return mer.internalError("providers render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
@@ -49,7 +49,11 @@ fn renderCurrent(req: mer.Request, w: anytype, active: ?lib.types.ProviderStatus
         const tested_absolute = if (setting.last_tested_at) |value| lib.time.formatAbsolute(req.allocator, value) catch "—" else "";
         try w.print("<dl class=\"cp-provider-summary\"><div><dt>Provider</dt><dd>{s}</dd></div><div><dt>Model</dt><dd>{s}</dd></div><div><dt>Connection</dt><dd><span class=\"cp-status-dot\" aria-hidden=\"true\"></span>{s}</dd></div><div><dt>Last successful test</dt><dd>", .{ lib.ui.escapeSafe(req.allocator, providerName(setting.provider)), lib.ui.escapeSafe(req.allocator, setting.model), liveStatusLabel(setting) });
         if (setting.last_tested_at) |value| try w.print("<time datetime=\"{s}\" title=\"{s}\">{s}</time>", .{ lib.ui.escapeSafe(req.allocator, value), lib.ui.escapeSafe(req.allocator, tested_absolute), lib.ui.escapeSafe(req.allocator, tested_relative) }) else try w.writeAll("Not tested yet");
-        try w.print("</dd></div></dl><div class=\"cp-provider-actions\"><form class=\"wb-m3-form\" method=\"post\" action=\"/api/m3\" data-m3-form data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"provider.test\"><input type=\"hidden\" name=\"id\" value=\"{s}\"><button class=\"cp-btn cp-btn-ghost\" type=\"submit\">Test connection</button></form><a class=\"cp-btn cp-btn-ghost\" href=\"#choose-model\">Change model</a>", .{lib.ui.escapeSafe(req.allocator, setting.provider)});
+        try w.print("</dd></div></dl><div class=\"cp-provider-actions\"><form class=\"wb-m3-form\" method=\"post\" action=\"/api/m3\" data-m3-form data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"provider.test\"><input type=\"hidden\" name=\"id\" value=\"{s}\"><button class=\"cp-btn cp-btn-ghost\" type=\"submit\">Test connection</button></form>", .{lib.ui.escapeSafe(req.allocator, setting.provider)});
+        if (std.mem.eql(u8, setting.provider, "codegraff"))
+            try w.writeAll("<a class=\"cp-btn cp-btn-ghost\" href=\"#choose-model\">Change model</a>")
+        else
+            try w.print("<a class=\"cp-btn cp-btn-ghost\" href=\"/settings/providers?provider={s}#provider-{s}\">Change model</a>", .{ lib.ui.escapeSafe(req.allocator, setting.provider), lib.ui.escapeSafe(req.allocator, setting.provider) });
         if (std.mem.eql(u8, setting.provider, "codegraff")) try w.writeAll("<a class=\"cp-btn cp-btn-ghost\" href=\"https://codegraff.com/\" target=\"_blank\" rel=\"noopener noreferrer\">Manage credits ↗</a>");
         try w.print("<form class=\"wb-m3-form\" method=\"post\" action=\"/api/m3\" data-m3-form data-confirm=\"Disconnect this provider and remove its stored WikiBase credential?\" data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"provider.disconnect\"><input type=\"hidden\" name=\"id\" value=\"{s}\"><button class=\"cp-btn cp-btn-danger\" type=\"submit\">Disconnect</button></form></div>", .{lib.ui.escapeSafe(req.allocator, setting.provider)});
     } else {
@@ -65,7 +69,9 @@ fn renderCodegraff(req: mer.Request, w: anytype, descriptor: ?lib.types.Provider
     } else if (setting == null) {
         try w.writeAll("<form class=\"wb-m3-form cp-provider-connect\" method=\"post\" action=\"/api/m3\" data-m3-form><input type=\"hidden\" name=\"action\" value=\"provider.auth.start\"><input type=\"hidden\" name=\"id\" value=\"codegraff\"><input type=\"hidden\" name=\"return_path\" value=\"/settings/providers?provider=codegraff\"><button class=\"cp-btn cp-btn-primary\" type=\"submit\">Connect Codegraff</button><p class=\"cp-form-status\" role=\"status\"></p></form>");
     } else {
-        try renderModelChoices(req, w, descriptor, setting.?, models);
+        const current = setting.?;
+        try renderModelChoices(req, w, descriptor, current, models);
+        if (models.len == 0 and std.mem.eql(u8, current.status, "connected") and !current.active_for_generation) try w.writeAll("<form class=\"wb-m3-form cp-provider-connect\" method=\"post\" action=\"/api/m3\" data-m3-form data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"provider.activate\"><input type=\"hidden\" name=\"id\" value=\"codegraff\"><button class=\"cp-btn cp-btn-primary\" type=\"submit\">Use current model for answers</button><p class=\"cp-form-status\" role=\"status\"></p></form>");
     }
     if (setting) |current| if (current.last_error) |reason| try w.print("<div class=\"notice notice-warn cp-provider-error\" role=\"status\"><strong>Connection needs attention</strong><span>{s}</span></div>", .{lib.ui.escapeSafe(req.allocator, reason)});
     try w.writeAll("</section>");
@@ -73,7 +79,7 @@ fn renderCodegraff(req: mer.Request, w: anytype, descriptor: ?lib.types.Provider
 
 fn renderDeviceSession(req: mer.Request, w: anytype, session: lib.types.ProviderAuthorizationSessionResponse) !void {
     if (std.mem.eql(u8, session.status, "pending")) {
-        try w.print("<div class=\"cp-device-session\" data-device-session=\"{s}\" data-session-status=\"pending\" data-poll-interval=\"{d}\" aria-live=\"polite\"><ol class=\"cp-device-steps\"><li><span>1</span><div><strong>Open Codegraff</strong><p>Use the secure approval page in a new tab.</p></div></li><li><span>2</span><div><strong>Confirm this one-time code</strong><div class=\"cp-device-code-row\"><code tabindex=\"0\" data-user-code>{s}</code><button class=\"cp-btn cp-btn-ghost\" type=\"button\" data-copy-code>Copy</button></div></div></li><li><span>3</span><div><strong>Return to WikiBase</strong><p>This page checks the connection automatically.</p></div></li></ol><div class=\"cp-provider-actions\"><a class=\"cp-btn cp-btn-primary\" href=\"{s}\" target=\"_blank\" rel=\"noopener noreferrer\">Open Codegraff ↗</a><form class=\"wb-m3-form\" method=\"post\" action=\"/api/m3\" data-m3-form data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"provider.auth.poll\"><input type=\"hidden\" name=\"id\" value=\"{s}\"><button class=\"cp-btn cp-btn-ghost\" type=\"submit\">Check connection</button></form></div></div>", .{ lib.ui.escapeSafe(req.allocator, session.id), session.poll_interval_seconds orelse 5, lib.ui.escapeSafe(req.allocator, session.user_code orelse "Code unavailable"), lib.ui.escapeSafe(req.allocator, session.verification_uri_complete orelse session.verification_uri orelse "https://codegraff.com/cli/auth"), lib.ui.escapeSafe(req.allocator, session.id) });
+        try w.print("<div class=\"cp-device-session\" data-device-session=\"{s}\" data-session-status=\"pending\" data-poll-interval=\"{d}\" data-session-expires=\"{s}\" aria-live=\"polite\"><ol class=\"cp-device-steps\"><li><span>1</span><div><strong>Open Codegraff</strong><p>Use the secure approval page in a new tab.</p></div></li><li><span>2</span><div><strong>Confirm this one-time code</strong><div class=\"cp-device-code-row\"><code tabindex=\"0\" data-user-code>{s}</code><button class=\"cp-btn cp-btn-ghost\" type=\"button\" data-copy-code>Copy</button></div></div></li><li><span>3</span><div><strong>Return to WikiBase</strong><p>This page checks the connection automatically.</p></div></li></ol><div class=\"cp-provider-actions\"><a class=\"cp-btn cp-btn-primary\" href=\"{s}\" target=\"_blank\" rel=\"noopener noreferrer\">Open Codegraff ↗</a><form class=\"wb-m3-form\" method=\"post\" action=\"/api/m3\" data-m3-form data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"provider.auth.poll\"><input type=\"hidden\" name=\"id\" value=\"{s}\"><button class=\"cp-btn cp-btn-ghost\" type=\"submit\">Check connection</button></form></div><p class=\"cp-form-status\" data-device-poll-status role=\"status\"></p></div>", .{ lib.ui.escapeSafe(req.allocator, session.id), session.poll_interval_seconds orelse 5, lib.ui.escapeSafe(req.allocator, session.expires_at), lib.ui.escapeSafe(req.allocator, session.user_code orelse "Code unavailable"), lib.ui.escapeSafe(req.allocator, session.verification_uri_complete orelse session.verification_uri orelse "https://codegraff.com/cli/auth"), lib.ui.escapeSafe(req.allocator, session.id) });
     } else if (std.mem.eql(u8, session.status, "completed")) {
         try w.writeAll("<div class=\"notice notice-success\" role=\"status\"><strong>Codegraff is connected</strong><span>Choose a model below, then test it before using it for answers.</span></div><a class=\"cp-btn cp-btn-primary\" href=\"/settings/providers?provider=codegraff#choose-model\">Choose model</a>");
     } else {
@@ -82,7 +88,7 @@ fn renderDeviceSession(req: mer.Request, w: anytype, session: lib.types.Provider
 }
 
 fn renderModelChoices(req: mer.Request, w: anytype, descriptor: ?lib.types.ProviderDescriptor, setting: lib.types.ProviderStatusResponse, models: []const lib.types.ProviderModelOption) !void {
-    try w.writeAll("<form id=\"choose-model\" class=\"wb-m3-form cp-provider-model-form\" method=\"post\" action=\"/api/m3\" data-m3-form data-provider-save data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"provider.save\"><input type=\"hidden\" name=\"provider\" value=\"codegraff\"><fieldset><legend>Choose a model preset</legend><p class=\"cp-muted-copy\">The test sends a minimal request and may use a negligible amount of credit.</p><div class=\"cp-model-ledger\">");
+    try w.writeAll("<form id=\"choose-model\" class=\"wb-m3-form cp-provider-model-form\" method=\"post\" action=\"/api/m3\" data-m3-form data-provider-save data-provider-activate data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"provider.save\"><input type=\"hidden\" name=\"provider\" value=\"codegraff\"><fieldset><legend>Choose a model preset</legend><p class=\"cp-muted-copy\">The test sends a minimal request and may use a negligible amount of credit.</p><div class=\"cp-model-ledger\">");
     const labels = [_][]const u8{ "Balanced", "Thorough", "Economy" };
     var shown: usize = 0;
     if (descriptor) |item| for (item.models, 0..) |model, index| {
@@ -97,7 +103,12 @@ fn renderModelChoices(req: mer.Request, w: anytype, descriptor: ?lib.types.Provi
         if (is_preset) continue;
         try w.print("<label><input type=\"radio\" name=\"model\" value=\"{s}\"{s}><span>{s}</span></label>", .{ lib.ui.escapeSafe(req.allocator, model.id), if (std.mem.eql(u8, setting.model, model.id)) " checked" else "", lib.ui.escapeSafe(req.allocator, model.label) });
     }
-    try w.writeAll("</div><p><a href=\"https://codegraff.com/\" target=\"_blank\" rel=\"noopener noreferrer\">View current Codegraff pricing ↗</a></p></details><button class=\"cp-btn cp-btn-primary\" type=\"submit\">Test and use</button><p class=\"cp-form-status\" role=\"status\"></p></form>");
+    try w.writeAll("</div><p><a href=\"https://codegraff.com/\" target=\"_blank\" rel=\"noopener noreferrer\">View current Codegraff pricing ↗</a></p></details>");
+    if (models.len == 0)
+        try w.writeAll("<div class=\"notice notice-warn\" role=\"status\">The model catalog is temporarily unavailable. Refresh this page to try again.</div><button class=\"cp-btn cp-btn-primary\" type=\"submit\" disabled>Catalog unavailable</button>")
+    else
+        try w.writeAll("<button class=\"cp-btn cp-btn-primary\" type=\"submit\">Test and use</button>");
+    try w.writeAll("<p class=\"cp-form-status\" role=\"status\"></p></form>");
 }
 
 fn renderOtherProviders(req: mer.Request, w: anytype, descriptors: []const lib.types.ProviderDescriptor, settings: []const lib.types.ProviderStatusResponse) !void {
@@ -108,13 +119,17 @@ fn renderOtherProviders(req: mer.Request, w: anytype, descriptors: []const lib.t
         if (std.mem.eql(u8, provider.id, "codegraff")) continue;
         const current = findSetting(settings, provider.id);
         if (provider.legacy and current == null) continue;
-        try w.print("<details class=\"cp-provider-row\"{s}><summary><span><strong>{s}</strong><small>{s}</small></span><span>{s}</span></summary><div class=\"cp-provider-row-body\"><p>{s}</p>", .{ if (std.mem.eql(u8, provider.id, requested)) " open" else "", lib.ui.escapeSafe(req.allocator, provider.name), if (provider.legacy) "Legacy connection" else "Direct API connection", if (current) |setting| liveStatusLabel(setting) else "Not connected", lib.ui.escapeSafe(req.allocator, provider.description) });
+        try w.print("<details id=\"provider-{s}\" class=\"cp-provider-row\"{s}><summary><span><strong>{s}</strong><small>{s}</small></span><span>{s}</span></summary><div class=\"cp-provider-row-body\"><p>{s}</p>", .{ lib.ui.escapeSafe(req.allocator, provider.id), if (std.mem.eql(u8, provider.id, requested)) " open" else "", lib.ui.escapeSafe(req.allocator, provider.name), if (provider.legacy) "Legacy connection" else "Direct API connection", if (current) |setting| liveStatusLabel(setting) else "Not connected", lib.ui.escapeSafe(req.allocator, provider.description) });
         if (provider.legacy) {
             try w.writeAll("<p>Existing browser connections remain usable until disconnected. New legacy connections are not offered.</p>");
         } else {
             try renderDirectForm(req, w, provider, current);
         }
-        if (current) |setting| try w.print("<div class=\"cp-provider-actions\"><form class=\"wb-m3-form\" method=\"post\" action=\"/api/m3\" data-m3-form data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"provider.test\"><input type=\"hidden\" name=\"id\" value=\"{s}\"><button class=\"cp-btn cp-btn-ghost\" type=\"submit\">Test connection</button></form><form class=\"wb-m3-form\" method=\"post\" action=\"/api/m3\" data-m3-form data-confirm=\"Disconnect this provider?\" data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"provider.disconnect\"><input type=\"hidden\" name=\"id\" value=\"{s}\"><button class=\"cp-btn cp-btn-danger\" type=\"submit\">Disconnect</button></form></div>", .{ lib.ui.escapeSafe(req.allocator, setting.provider), lib.ui.escapeSafe(req.allocator, setting.provider) });
+        if (current) |setting| {
+            try w.print("<div class=\"cp-provider-actions\"><form class=\"wb-m3-form\" method=\"post\" action=\"/api/m3\" data-m3-form data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"provider.test\"><input type=\"hidden\" name=\"id\" value=\"{s}\"><button class=\"cp-btn cp-btn-ghost\" type=\"submit\">Test connection</button></form>", .{lib.ui.escapeSafe(req.allocator, setting.provider)});
+            if (std.mem.eql(u8, setting.status, "connected") and !setting.active_for_generation) try w.print("<form class=\"wb-m3-form\" method=\"post\" action=\"/api/m3\" data-m3-form data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"provider.activate\"><input type=\"hidden\" name=\"id\" value=\"{s}\"><button class=\"cp-btn cp-btn-primary\" type=\"submit\">Use for answers</button></form>", .{lib.ui.escapeSafe(req.allocator, setting.provider)});
+            try w.print("<form class=\"wb-m3-form\" method=\"post\" action=\"/api/m3\" data-m3-form data-confirm=\"Disconnect this provider?\" data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"provider.disconnect\"><input type=\"hidden\" name=\"id\" value=\"{s}\"><button class=\"cp-btn cp-btn-danger\" type=\"submit\">Disconnect</button></form></div>", .{lib.ui.escapeSafe(req.allocator, setting.provider)});
+        }
         try w.writeAll("</div></details>");
     }
     try w.writeAll("</div></details>");
@@ -123,7 +138,8 @@ fn renderOtherProviders(req: mer.Request, w: anytype, descriptors: []const lib.t
 fn renderDirectForm(req: mer.Request, w: anytype, provider: lib.types.ProviderDescriptor, current: ?lib.types.ProviderStatusResponse) !void {
     const model = if (current) |item| item.model else if (provider.models.len > 0) provider.models[0] else "";
     const endpoint = if (current) |item| item.endpoint else provider.endpoint;
-    try w.print("<form class=\"wb-m3-form cp-provider-direct-form\" method=\"post\" action=\"/api/m3\" data-m3-form data-provider-save data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"provider.save\"><input type=\"hidden\" name=\"provider\" value=\"{s}\"><label class=\"cp-field\"><span>{s}</span><input type=\"password\" name=\"api_key\" minlength=\"8\" maxlength=\"4096\" autocomplete=\"new-password\"{s}></label><label class=\"cp-field\"><span>{s}</span><input name=\"model\" value=\"{s}\" maxlength=\"100\" required></label>", .{ lib.ui.escapeSafe(req.allocator, provider.id), if (current == null) "API key" else "Replacement API key (optional)", if (current == null) " required" else "", if (std.mem.eql(u8, provider.id, "azure_openai")) "Deployment name" else "Model", lib.ui.escapeSafe(req.allocator, model) });
+    const reactivate = if (current) |item| item.active_for_generation else false;
+    try w.print("<form class=\"wb-m3-form cp-provider-direct-form\" method=\"post\" action=\"/api/m3\" data-m3-form data-provider-save{s} data-success=\"\"><input type=\"hidden\" name=\"action\" value=\"provider.save\"><input type=\"hidden\" name=\"provider\" value=\"{s}\"><label class=\"cp-field\"><span>{s}</span><input type=\"password\" name=\"api_key\" minlength=\"8\" maxlength=\"4096\" autocomplete=\"new-password\"{s}></label><label class=\"cp-field\"><span>{s}</span><input name=\"model\" value=\"{s}\" maxlength=\"100\" required></label>", .{ if (reactivate) " data-provider-activate" else "", lib.ui.escapeSafe(req.allocator, provider.id), if (current == null) "API key" else "Replacement API key (optional)", if (current == null) " required" else "", if (std.mem.eql(u8, provider.id, "azure_openai")) "Deployment name" else "Model", lib.ui.escapeSafe(req.allocator, model) });
     if (std.mem.eql(u8, provider.endpoint_mode, "custom")) try w.print("<label class=\"cp-field\"><span>Endpoint URL</span><input type=\"url\" name=\"endpoint\" value=\"{s}\" maxlength=\"500\" required></label>", .{lib.ui.escapeSafe(req.allocator, endpoint)});
     try w.writeAll("<button class=\"cp-btn cp-btn-primary\" type=\"submit\">Save and test</button><p class=\"cp-form-status\" role=\"status\"></p></form>");
 }

@@ -1335,13 +1335,13 @@ async def test_codegraff_device_connection_catalog_model_test_and_isolation(m3_c
             return_value=Response(200, json={"status": "ok", "api_key": "gateway-secret-key"})
         )
         catalog_route = respx.get(f"{settings.codegraff_gateway_url}/v1/models").mock(
-            return_value=Response(200, json=catalog)
+            return_value=Response(503, json={"error": "temporarily unavailable"})
         )
         approved = await client.post(f"/api/providers/auth-sessions/{session_id}/poll")
     assert approved.status_code == 200
     assert approved.json()["status"] == "completed"
     assert "gateway-secret-key" not in approved.text
-    assert catalog_route.called
+    assert not catalog_route.called
 
     connected = await session.scalar(
         select(ProviderSetting).where(
@@ -1351,6 +1351,7 @@ async def test_codegraff_device_connection_catalog_model_test_and_isolation(m3_c
     )
     assert connected is not None
     assert connected.auth_method == "device_code"
+    assert connected.model == settings.codegraff_balanced_model
     assert connected.status == "configured"
     assert connected.active_for_generation is False
     assert (

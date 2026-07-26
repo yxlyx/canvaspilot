@@ -13,11 +13,13 @@ from app.db.database import async_session_factory, engine, get_db
 from app.dependencies import get_current_user
 from app.main import app
 from app.models.flashcard import Flashcard, FlashcardDeck, LearningEvidence
+from app.models.m3 import IdempotencyRecord
 from app.models.source import Source, SourceStatus
 from app.models.source_chunk import SourceChunk
 from app.models.user import User
 from app.models.wiki import WikiCitation, WikiPage
 from app.schemas.flashcards import (
+    DraftAction,
     FlashcardAttemptCreate,
     FlashcardGenerateRequest,
     GeneratedFlashcardWording,
@@ -204,6 +206,35 @@ def test_generated_wording_rejects_whitespace_only_content():
             answer=" ",
             support_quote=" ",
             card_type="concept_check",
+        )
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "too_generic",
+        "ambiguous_answer",
+        "wrong_concept",
+        "poor_evidence",
+        "duplicate",
+        "other",
+    ],
+)
+def test_draft_action_accepts_rendered_rejection_reasons(reason):
+    action = DraftAction(
+        expected_revision=1,
+        card_ids=[uuid.uuid4()],
+        rejection_reason=reason,
+    )
+    assert action.rejection_reason == reason
+
+
+def test_draft_action_rejects_unknown_rejection_reason():
+    with pytest.raises(ValidationError):
+        DraftAction(
+            expected_revision=1,
+            card_ids=[uuid.uuid4()],
+            rejection_reason="unsupported",
         )
 
 
@@ -422,6 +453,65 @@ async def test_generate_flashcards_from_sources_preserves_citations(flashcard_cl
 
 
 @pytest.mark.asyncio
+async def test_generation_allows_topic_named_source_title(flashcard_client, monkeypatch):
+    client, session, user, _ = flashcard_client
+    source, _ = await _create_ready_source(
+        session,
+        user,
+        title="Recursion",
+        chunks=["Recursion is a process where a function calls itself to solve smaller cases."],
+        topic_tags=["recursion"],
+    )
+
+    async def topic_generation(_system, _prompt, _user, _db, provider, _schema):
+        return provider, (
+            '{"cards":[{"evidence_key":"E1","question":"How is recursion defined?",'
+            '"answer":"Recursion is a process where a function calls itself",'
+            '"support_quote":"Recursion is a process where a function calls itself",'
+            '"card_type":"definition"}]}'
+        )
+
+    monkeypatch.setattr(flashcard_service, "generate_json_text", topic_generation)
+    response = await client.post(
+        "/api/flashcards/decks/generate",
+        json={"source_ids": [str(source.id)], "limit": 1},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["deck"]["cards"][0]["question"] == "How is recursion defined?"
+
+
+@pytest.mark.asyncio
+async def test_generation_rejects_citation_reference_in_question(flashcard_client, monkeypatch):
+    client, session, user, _ = flashcard_client
+    source, _ = await _create_ready_source(
+        session,
+        user,
+        title="Recursion",
+        chunks=["Recursion is a process where a function calls itself to solve smaller cases."],
+        topic_tags=["recursion"],
+    )
+
+    async def citation_leak(_system, _prompt, _user, _db, provider, _schema):
+        return provider, (
+            '{"cards":[{"evidence_key":"E1",'
+            '"question":"According to Recursion Citation: Section 1, how is recursion defined?",'
+            '"answer":"Recursion is a process where a function calls itself",'
+            '"support_quote":"Recursion is a process where a function calls itself",'
+            '"card_type":"definition"}]}'
+        )
+
+    monkeypatch.setattr(flashcard_service, "generate_json_text", citation_leak)
+    response = await client.post(
+        "/api/flashcards/decks/generate",
+        json={"source_ids": [str(source.id)], "limit": 1},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["error"] == "provider_invalid_response"
+
+
+@pytest.mark.asyncio
 async def test_regeneration_replays_one_idempotent_successor(flashcard_client):
     client, session, user, _ = flashcard_client
     source, _ = await _create_ready_source(session, user)
@@ -446,6 +536,52 @@ async def test_regeneration_replays_one_idempotent_successor(flashcard_client):
         select(func.count(FlashcardDeck.id)).where(FlashcardDeck.user_id == user.id)
     )
     assert count == 2
+
+
+@pytest.mark.asyncio
+async def test_large_regeneration_stores_compact_idempotency_response(flashcard_client):
+    client, session, user, _ = flashcard_client
+    chunks = [
+        f"Concept {index} is supported by {'é' * 800} in this detailed explanation."
+        for index in range(20)
+    ]
+    source, _ = await _create_ready_source(
+        session,
+        user,
+        title="Large evidence set",
+        chunks=chunks,
+        topic_tags=["large-deck"],
+    )
+    payload = {"source_ids": [str(source.id)], "limit": 20}
+    root = await client.post("/api/flashcards/decks/generate", json=payload)
+    assert root.status_code == 200
+
+    headers = {"Idempotency-Key": "large-flashcard-regeneration-123456"}
+    regeneration = {**payload, "regenerate": True}
+    first = await client.post("/api/flashcards/decks/generate", json=regeneration, headers=headers)
+    assert first.status_code == 200
+    assert first.json()["deck"]["card_count"] == 20
+    changed = await client.patch(
+        f"/api/flashcards/drafts/{first.json()['deck']['id']}",
+        json={
+            "expected_revision": first.json()["deck"]["revision"],
+            "title": "Changed after generation",
+        },
+    )
+    assert changed.status_code == 200
+
+    replay = await client.post("/api/flashcards/decks/generate", json=regeneration, headers=headers)
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+    record = await session.scalar(
+        select(IdempotencyRecord).where(
+            IdempotencyRecord.user_id == user.id,
+            IdempotencyRecord.idempotency_key == headers["Idempotency-Key"],
+        )
+    )
+    assert record is not None
+    assert record.response_body["encoding"] == "zlib+base64"
+    assert set(record.response_body) == {"encoding", "body"}
 
 
 @pytest.mark.asyncio

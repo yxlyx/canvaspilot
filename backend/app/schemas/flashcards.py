@@ -155,6 +155,17 @@ class DraftAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_revision: int = Field(ge=1)
     card_ids: list[uuid.UUID] | None = None
+    rejection_reason: (
+        Literal[
+            "too_generic",
+            "ambiguous_answer",
+            "wrong_concept",
+            "poor_evidence",
+            "duplicate",
+            "other",
+        ]
+        | None
+    ) = None
 
 
 class FlashcardAttemptCreate(BaseModel):

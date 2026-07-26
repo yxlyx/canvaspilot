@@ -415,33 +415,10 @@ async def poll_authorization_session(
         api_key = result.get("api_key") or result.get("access_token")
         if not isinstance(api_key, str) or not 8 <= len(api_key) <= 4096:
             raise WikiBaseError(502, "invalid_device_response", "Codegraff omitted the gateway key")
-        try:
-            async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
-                catalog_response = await client.get(
-                    f"{settings.codegraff_gateway_url}/v1/models",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                )
-            if (
-                not catalog_response.is_success
-                or len(catalog_response.content) > MAX_TOKEN_RESPONSE_BYTES
-            ):
-                raise WikiBaseError(
-                    502, "catalog_unavailable", "Codegraff model catalog is unavailable"
-                )
-            from app.services.providers import _model_options
-
-            models = _model_options(catalog_response.json())
-        except (httpx.HTTPError, ValueError) as exc:
-            raise WikiBaseError(
-                502, "catalog_unavailable", "Codegraff model catalog is unavailable"
-            ) from exc
-        preset_order = [
-            settings.codegraff_balanced_model,
-            settings.codegraff_thorough_model,
-            settings.codegraff_economy_model,
-        ]
-        available = {model.id for model in models}
-        selected_model = next((model for model in preset_order if model in available), models[0].id)
+        # Persist the one-shot credential before any retryable catalog lookup. The
+        # settings page fetches the live catalog separately and lets the user
+        # replace this safe default before testing the connection.
+        selected_model = settings.codegraff_balanced_model
         await lock_provider_mutation(user.id, "codegraff", db)
         setting = await db.scalar(
             select(ProviderSetting).where(
