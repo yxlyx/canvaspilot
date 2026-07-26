@@ -1277,6 +1277,118 @@ async def test_provider_lifecycle_fixed_target_and_two_user_isolation(m3_client,
 
 
 @pytest.mark.asyncio
+async def test_codegraff_device_connection_catalog_model_test_and_isolation(m3_client):
+    client, session, owner, other, principal = m3_client
+    settings = provider_service.get_settings()
+    with respx.mock:
+        start_route = respx.post(f"{settings.codegraff_gateway_url}/v1/device/start").mock(
+            return_value=Response(
+                200,
+                json={
+                    "device_code": "private-device-code",
+                    "user_code": "ABCD-EFGH",
+                    "verification_uri": settings.codegraff_verification_url,
+                    "verification_uri_complete": (
+                        f"{settings.codegraff_verification_url}?code=ABCD-EFGH"
+                    ),
+                    "interval": 2,
+                    "expires_in": 600,
+                },
+            )
+        )
+        started = await client.post(
+            "/api/providers/codegraff/auth-sessions",
+            json={"return_path": "/settings/providers?provider=codegraff"},
+        )
+    assert started.status_code == 201
+    public = started.json()
+    assert public["user_code"] == "ABCD-EFGH"
+    assert "device_code" not in public
+    assert "private-device-code" not in started.text
+    assert start_route.called
+    session_id = public["id"]
+    stored_session = await session.get(ProviderAuthorizationSession, uuid.UUID(session_id))
+    assert stored_session.encrypted_device_code is not None
+    assert b"private-device-code" not in stored_session.encrypted_device_code
+
+    with respx.mock:
+        pending_route = respx.post(f"{settings.codegraff_gateway_url}/v1/device/poll").mock(
+            return_value=Response(200, json={"status": "authorization_pending"})
+        )
+        pending = await client.post(f"/api/providers/auth-sessions/{session_id}/poll")
+    assert pending.status_code == 200
+    assert pending.json()["status"] == "pending"
+    assert pending_route.called
+
+    await session.refresh(stored_session)
+    stored_session.next_poll_at = datetime.now(UTC) - timedelta(seconds=1)
+    await session.commit()
+    catalog = {
+        "data": [
+            {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro"},
+            {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6"},
+            {"id": "mimo-v2.5", "name": "MiMo V2.5"},
+        ]
+    }
+    with respx.mock:
+        respx.post(f"{settings.codegraff_gateway_url}/v1/device/poll").mock(
+            return_value=Response(200, json={"status": "ok", "api_key": "gateway-secret-key"})
+        )
+        catalog_route = respx.get(f"{settings.codegraff_gateway_url}/v1/models").mock(
+            return_value=Response(200, json=catalog)
+        )
+        approved = await client.post(f"/api/providers/auth-sessions/{session_id}/poll")
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "completed"
+    assert "gateway-secret-key" not in approved.text
+    assert catalog_route.called
+
+    connected = await session.scalar(
+        select(ProviderSetting).where(
+            ProviderSetting.user_id == owner.id,
+            ProviderSetting.provider == "codegraff",
+        )
+    )
+    assert connected is not None
+    assert connected.auth_method == "device_code"
+    assert connected.status == "configured"
+    assert connected.active_for_generation is False
+    assert (
+        provider_service.decrypt_provider_key(
+            connected.encrypted_api_key, connected.encryption_key_id, settings
+        )
+        == "gateway-secret-key"
+    )
+
+    with respx.mock:
+        respx.get(f"{settings.codegraff_gateway_url}/v1/models").mock(
+            return_value=Response(200, json=catalog)
+        )
+        selected = await client.put(
+            "/api/providers/settings",
+            json={"provider": "codegraff", "model": "claude-sonnet-4-6"},
+        )
+    assert selected.status_code == 200
+    assert selected.json()["model"] == "claude-sonnet-4-6"
+
+    with respx.mock:
+        respx.get(f"{settings.codegraff_gateway_url}/v1/models").mock(
+            return_value=Response(200, json=catalog)
+        )
+        tested = await client.post("/api/providers/codegraff/test")
+    assert tested.status_code == 200
+    assert tested.json()["status"] == "connected"
+    assert tested.json()["active_for_generation"] is True
+    runtime = await provider_service.resolve_generation_provider(owner, session)
+    assert runtime.endpoint == f"{settings.codegraff_gateway_url}/v1"
+    assert runtime.model == "claude-sonnet-4-6"
+
+    principal["user"] = other
+    assert (await client.get("/api/providers/codegraff/models")).status_code == 404
+    assert (await client.post(f"/api/providers/auth-sessions/{session_id}/poll")).status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_local_codex_connection_validates_cli_without_storing_credentials(
     m3_client, monkeypatch
 ):

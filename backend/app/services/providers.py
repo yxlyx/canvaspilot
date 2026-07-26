@@ -1,5 +1,6 @@
 import asyncio
 import ipaddress
+import re
 import socket
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,9 +19,27 @@ from app.schemas.m3 import (
     ProviderAuthMethodDescriptor,
     ProviderConfigureRequest,
     ProviderDescriptor,
+    ProviderModelOption,
 )
 
 PROVIDERS = {
+    "codegraff": ProviderDescriptor(
+        id="codegraff",
+        name="Codegraff",
+        models=[],
+        endpoint="https://gateway.codegraff.com/v1",
+        description="Use one Codegraff balance across a live selection of answer models.",
+        capabilities=["Cited answers", "Live model catalog", "Device-code connection"],
+        auth_methods=[
+            ProviderAuthMethodDescriptor(
+                kind="device_code", label="Connect Codegraff", recommended=True
+            )
+        ],
+        setup_url="https://codegraff.com/",
+        billing_note="Credits and current pricing are managed through Codegraff.",
+        recommended=True,
+        catalog_mode="live",
+    ),
     "openai": ProviderDescriptor(
         id="openai",
         name="OpenAI",
@@ -64,6 +83,7 @@ PROVIDERS = {
                 label="Use local Codex CLI login",
             ),
         ],
+        legacy=True,
     ),
     "openai_compatible": ProviderDescriptor(
         id="openai_compatible",
@@ -102,13 +122,25 @@ PROVIDERS = {
     ),
 }
 
+MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$")
+MODEL_CACHE_TTL_SECONDS = 300
+MAX_PROVIDER_RESPONSE_BYTES = 256 * 1024
+_model_cache: dict[str, tuple[float, list[ProviderModelOption]]] = {}
+
 
 def provider_descriptors(settings: Settings | None = None) -> list[ProviderDescriptor]:
     settings = settings or get_settings()
     descriptors: list[ProviderDescriptor] = []
     for descriptor in PROVIDERS.values():
         copy = descriptor.model_copy(deep=True)
-        if copy.id == "chatgpt":
+        if copy.id == "codegraff":
+            copy.models = [
+                settings.codegraff_balanced_model,
+                settings.codegraff_thorough_model,
+                settings.codegraff_economy_model,
+            ]
+            copy.endpoint = f"{settings.codegraff_gateway_url}/v1"
+        elif copy.id == "chatgpt":
             enabled = bool(settings.chatgpt_oauth_client_id.strip())
             copy.models = [settings.chatgpt_default_model]
             copy.endpoint = settings.chatgpt_responses_endpoint
@@ -257,6 +289,12 @@ async def resolve_generation_provider(
                 "reauth_required",
                 "Reconnect the selected provider before generating another answer",
             )
+    if not settings.openai_api_key.strip():
+        raise WikiBaseError(
+            409,
+            "provider_not_configured",
+            "Connect an answer provider before generating workspace content",
+        )
     return GenerationProvider(
         provider="openai",
         model="gpt-4o",
@@ -373,7 +411,7 @@ def _safe_custom_endpoint(value: str, settings: Settings) -> str:
 
 def endpoint_for(payload: ProviderConfigureRequest, settings: Settings | None = None) -> str:
     settings = settings or get_settings()
-    if payload.provider in {"openai", "google_gemini"}:
+    if payload.provider in {"codegraff", "openai", "google_gemini"}:
         if payload.endpoint is not None:
             raise WikiBaseError(
                 422, "fixed_endpoint", "This provider uses its fixed official endpoint"
@@ -495,6 +533,31 @@ async def configure_provider(
         )
     )
     setting = result.scalar_one_or_none()
+    if payload.provider == "codegraff":
+        if payload.api_key is not None or payload.endpoint is not None:
+            raise WikiBaseError(
+                422,
+                "credential_not_accepted",
+                "Codegraff credentials are accepted only through the device connection",
+            )
+        if (
+            setting is None
+            or setting.auth_method != "device_code"
+            or setting.encrypted_api_key is None
+        ):
+            raise WikiBaseError(409, "provider_not_connected", "Connect Codegraff first")
+        available = await provider_models(user, "codegraff", db, refresh=True)
+        if payload.model not in {item.id for item in available}:
+            raise WikiBaseError(422, "invalid_model", "Choose a model from the live catalog")
+        setting.model = payload.model
+        setting.endpoint = PROVIDERS["codegraff"].endpoint
+        setting.status = "configured"
+        setting.last_error = None
+        setting.last_error_code = None
+        setting.last_tested_at = None
+        await db.flush()
+        await db.refresh(setting)
+        return setting
     if setting is None:
         if payload.api_key is None:
             raise WikiBaseError(422, "credential_required", "An API key is required to connect")
@@ -604,7 +667,7 @@ async def test_provider(
         await db.flush()
         await db.refresh(setting)
         return setting
-    if provider in {"openai", "google_gemini"}:
+    if provider in {"codegraff", "openai", "google_gemini"}:
         endpoint = PROVIDERS[provider].endpoint
         if setting.endpoint != endpoint:
             raise WikiBaseError(422, "unsafe_endpoint", "Stored provider endpoint is not allowed")
@@ -619,7 +682,7 @@ async def test_provider(
     headers: dict[str, str]
     method = "GET"
     body = None
-    if provider in {"openai", "openai_compatible", "google_gemini"}:
+    if provider in {"codegraff", "openai", "openai_compatible", "google_gemini"}:
         url = f"{endpoint}/models"
         headers = {"Authorization": f"Bearer {key}"}
     elif provider == "azure_openai":
@@ -748,4 +811,69 @@ async def disconnect_provider(user: User, provider: str, db: AsyncSession) -> No
         )
     )
     await db.delete(setting)
+    _model_cache.pop(str(setting.id), None)
     await db.flush()
+
+
+def _model_options(payload: object) -> list[ProviderModelOption]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+        raise WikiBaseError(502, "invalid_catalog", "The provider returned an invalid model list")
+    values: dict[str, ProviderModelOption] = {}
+    for item in payload["data"]:
+        if not isinstance(item, dict):
+            continue
+        model_id = item.get("id")
+        if not isinstance(model_id, str) or not MODEL_ID_PATTERN.fullmatch(model_id):
+            continue
+        label = item.get("name") or item.get("display_name") or model_id
+        if not isinstance(label, str) or not label.strip():
+            label = model_id
+        values[model_id] = ProviderModelOption(id=model_id, label=label.strip()[:100])
+    if not values:
+        raise WikiBaseError(502, "invalid_catalog", "The provider returned no usable models")
+    return sorted(values.values(), key=lambda item: item.label.casefold())
+
+
+async def provider_models(
+    user: User,
+    provider: str,
+    db: AsyncSession,
+    *,
+    refresh: bool = False,
+) -> list[ProviderModelOption]:
+    if provider != "codegraff":
+        descriptor = PROVIDERS.get(provider)
+        if descriptor is None:
+            raise NotFoundError("Provider not found")
+        return [ProviderModelOption(id=model, label=model) for model in descriptor.models]
+    setting = await _owned_setting(user, provider, db)
+    if setting.auth_method != "device_code" or setting.encrypted_api_key is None:
+        raise WikiBaseError(409, "provider_not_connected", "Connect Codegraff first")
+    cache_key = str(setting.id)
+    now = asyncio.get_running_loop().time()
+    cached = _model_cache.get(cache_key)
+    if not refresh and cached is not None and cached[0] > now:
+        return cached[1]
+    settings = get_settings()
+    key = decrypt_provider_key(setting.encrypted_api_key, setting.encryption_key_id, settings)
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+            response = await client.get(
+                f"{settings.codegraff_gateway_url}/v1/models",
+                headers={"Authorization": f"Bearer {key}"},
+            )
+        if len(response.content) > MAX_PROVIDER_RESPONSE_BYTES:
+            raise WikiBaseError(502, "invalid_catalog", "The provider response was too large")
+        if not response.is_success:
+            raise WikiBaseError(502, "catalog_unavailable", "The model catalog is unavailable")
+        options = _model_options(response.json())
+        _model_cache[cache_key] = (now + MODEL_CACHE_TTL_SECONDS, options)
+        return options
+    except WikiBaseError:
+        if setting.model and MODEL_ID_PATTERN.fullmatch(setting.model):
+            return [ProviderModelOption(id=setting.model, label=setting.model)]
+        raise
+    except (httpx.HTTPError, ValueError) as exc:
+        if setting.model and MODEL_ID_PATTERN.fullmatch(setting.model):
+            return [ProviderModelOption(id=setting.model, label=setting.model)]
+        raise WikiBaseError(502, "catalog_unavailable", "The model catalog is unavailable") from exc

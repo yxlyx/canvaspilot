@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     chatgpt_oauth_redirect_uri: str = "http://localhost:3000/api/providers/chatgpt/oauth/callback"
     chatgpt_responses_endpoint: str = "https://chatgpt.com/backend-api/codex"
     chatgpt_default_model: str = "gpt-5-codex"
+    codegraff_gateway_url: str = "https://gateway.codegraff.com"
+    codegraff_verification_url: str = "https://codegraff.com/cli/auth"
+    codegraff_balanced_model: str = "deepseek-v4-pro"
+    codegraff_thorough_model: str = "claude-sonnet-4-6"
+    codegraff_economy_model: str = "mimo-v2.5"
     local_codex_cli_enabled: bool = False
     local_codex_cli_path: str = ""
     local_codex_cli_model: str = ""
@@ -114,6 +119,31 @@ class Settings(BaseSettings):
                 or parsed.username
                 or parsed.password
                 or parsed.path != path
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(f"{name} must use its fixed official HTTPS endpoint")
+        codegraff_urls = {
+            "CODEGRAFF_GATEWAY_URL": (
+                self.codegraff_gateway_url,
+                "gateway.codegraff.com",
+                "",
+            ),
+            "CODEGRAFF_VERIFICATION_URL": (
+                self.codegraff_verification_url,
+                "codegraff.com",
+                "/cli/auth",
+            ),
+        }
+        for name, (value, hostname, path) in codegraff_urls.items():
+            parsed = urlparse(value)
+            if (
+                parsed.scheme != "https"
+                or parsed.hostname != hostname
+                or parsed.port not in (None, 443)
+                or parsed.username
+                or parsed.password
+                or parsed.path.rstrip("/") != path
                 or parsed.query
                 or parsed.fragment
             ):
