@@ -35,6 +35,7 @@ from app.routers import chat as chat_router
 from app.schemas.sources import SourceCreate
 from app.services import idempotency as idempotency_service
 from app.services import llm as llm_service
+from app.services import local_codex as local_codex_service
 from app.services import meters as meter_service
 from app.services import provider_auth as provider_auth_service
 from app.services import providers as provider_service
@@ -1276,6 +1277,169 @@ async def test_provider_lifecycle_fixed_target_and_two_user_isolation(m3_client,
 
 
 @pytest.mark.asyncio
+async def test_local_codex_connection_validates_cli_without_storing_credentials(
+    m3_client, monkeypatch
+):
+    client, session, owner, other, principal = m3_client
+    owner_id = owner.id
+    local_settings = provider_service.get_settings().model_copy(
+        update={
+            "environment": "development",
+            "local_codex_cli_enabled": True,
+            "local_codex_cli_path": "/bin/echo",
+            "local_codex_cli_allowed_email": owner.email,
+        }
+    )
+    monkeypatch.setattr(provider_service, "get_settings", lambda: local_settings)
+
+    calls = 0
+
+    async def validate(_settings=None):
+        nonlocal calls
+        calls += 1
+
+    monkeypatch.setattr(local_codex_service, "validate_local_codex", validate)
+
+    descriptors = (await client.get("/api/providers")).json()
+    chatgpt = next(item for item in descriptors if item["id"] == "chatgpt")
+    local_method = next(
+        method for method in chatgpt["auth_methods"] if method["kind"] == "local_cli"
+    )
+    assert local_method["enabled"] is True
+
+    connected = await client.post("/api/providers/chatgpt/local-cli/connect")
+    assert connected.status_code == 200
+    payload = connected.json()
+    assert payload["auth_method"] == "local_cli"
+    assert payload["provider_account_label"] == "Local Codex CLI"
+    assert payload["active_for_generation"] is True
+    assert payload["access_token_expires_at"] is None
+    assert payload["credential"] == "********"
+    assert calls == 1
+
+    principal["user"] = other
+    forbidden = await client.post("/api/providers/chatgpt/local-cli/connect")
+    assert forbidden.status_code == 403
+    assert forbidden.json()["error"] == "local_codex_forbidden"
+    principal["user"] = owner
+
+    setting = await session.scalar(
+        select(ProviderSetting).where(
+            ProviderSetting.user_id == owner_id,
+            ProviderSetting.provider == "chatgpt",
+        )
+    )
+    assert setting is not None
+    assert setting.encrypted_api_key is None
+    assert setting.encrypted_access_token is None
+    assert setting.encrypted_refresh_token is None
+
+    await session.refresh(owner)
+    resolved = await provider_service.resolve_generation_provider(
+        owner, session, client_host="127.0.0.1"
+    )
+    assert resolved.transport == "codex_cli"
+    assert resolved.api_key == ""
+    with pytest.raises(WikiBaseError) as remote_error:
+        await provider_service.resolve_generation_provider(owner, session, client_host="192.0.2.10")
+    assert remote_error.value.error == "local_codex_forbidden"
+    with pytest.raises(WikiBaseError) as remote_test_error:
+        await provider_service.test_provider(
+            owner,
+            "chatgpt",
+            session,
+            client_host="192.0.2.10",
+        )
+    assert remote_test_error.value.error == "local_codex_forbidden"
+    assert calls == 1
+    await session.rollback()
+    await session.refresh(owner)
+
+    async def rejected_login(_settings=None):
+        raise WikiBaseError(
+            409,
+            "local_codex_login_required",
+            "Sign in with the local Codex CLI before connecting it",
+        )
+
+    monkeypatch.setattr(local_codex_service, "validate_local_codex", rejected_login)
+    tested = await client.post("/api/providers/chatgpt/test")
+    assert tested.status_code == 200
+    assert tested.json()["status"] == "reauth_required"
+    assert tested.json()["active_for_generation"] is True
+    with pytest.raises(WikiBaseError) as selected_error:
+        await provider_service.resolve_generation_provider(owner, session, client_host="127.0.0.1")
+    assert selected_error.value.error == "reauth_required"
+
+
+@pytest.mark.asyncio
+async def test_browser_oauth_cannot_replace_local_codex_connection(m3_client, monkeypatch):
+    client, session, owner, _, _ = m3_client
+    owner_id = owner.id
+    oauth_settings = provider_service.get_settings().model_copy(
+        update={"chatgpt_oauth_client_id": "approved-client"}
+    )
+    monkeypatch.setattr(provider_service, "get_settings", lambda: oauth_settings)
+    monkeypatch.setattr(provider_auth_service, "get_settings", lambda: oauth_settings)
+    session.add(
+        ProviderSetting(
+            user_id=owner.id,
+            provider="chatgpt",
+            model="Codex CLI default",
+            endpoint="local://codex-cli",
+            auth_method="local_cli",
+            encryption_key_id=oauth_settings.provider_encryption_key_id,
+            status="connected",
+            active_for_generation=True,
+            provider_account_label="Local Codex CLI",
+        )
+    )
+    await session.commit()
+
+    started = await client.post(
+        "/api/providers/chatgpt/auth-sessions",
+        json={"return_path": "/settings/providers?provider=chatgpt"},
+    )
+    query = parse_qs(urlparse(started.json()["authorization_url"]).query)
+    id_token, jwks = _oauth_identity(query["nonce"][0], "approved-client")
+    with respx.mock:
+        respx.post(oauth_settings.chatgpt_oauth_token_url).mock(
+            return_value=Response(
+                200,
+                json={
+                    "access_token": "must-not-persist",
+                    "refresh_token": "must-not-persist",
+                    "expires_in": 900,
+                    "id_token": id_token,
+                },
+            )
+        )
+        respx.get(oauth_settings.chatgpt_oauth_jwks_url).mock(return_value=Response(200, json=jwks))
+        completed = await client.post(
+            "/api/providers/chatgpt/oauth/callback",
+            json={
+                "state": query["state"][0],
+                "code": "one-time-code",
+                "browser_binding": started.json()["browser_binding"],
+            },
+        )
+
+    assert completed.status_code == 200
+    assert completed.json()["return_path"].endswith("auth=failed")
+    session.expire_all()
+    setting = await session.scalar(
+        select(ProviderSetting).where(
+            ProviderSetting.user_id == owner_id,
+            ProviderSetting.provider == "chatgpt",
+        )
+    )
+    assert setting.auth_method == "local_cli"
+    assert setting.encrypted_access_token is None
+    assert setting.encrypted_refresh_token is None
+    assert setting.active_for_generation is True
+
+
+@pytest.mark.asyncio
 async def test_custom_provider_endpoint_rejects_private_resolution(monkeypatch):
     monkeypatch.setattr(
         provider_service.socket,
@@ -1355,7 +1519,17 @@ async def test_chatgpt_browser_auth_is_pkce_bound_durable_and_replay_safe(m3_cli
             "recommended": True,
             "enabled": True,
             "unavailable_reason": None,
-        }
+        },
+        {
+            "kind": "local_cli",
+            "label": "Use local Codex CLI login",
+            "recommended": False,
+            "enabled": False,
+            "unavailable_reason": (
+                "Local Codex CLI access is available only in an explicitly enabled "
+                "development workspace."
+            ),
+        },
     ]
 
     started = await client.post(

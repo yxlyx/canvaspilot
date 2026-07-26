@@ -39,18 +39,30 @@ PROVIDERS = {
         name="ChatGPT",
         models=[],
         endpoint="",
-        description="Connect an approved ChatGPT account through a secure browser sign-in.",
-        capabilities=["Cited answers", "Browser sign-in", "Automatic token refresh"],
+        description=(
+            "Connect an approved ChatGPT account through browser sign-in, or use this machine's "
+            "existing Codex CLI login in local development."
+        ),
+        capabilities=[
+            "Cited answers",
+            "Browser sign-in",
+            "Local Codex CLI",
+            "Automatic token refresh",
+        ],
         billing_note=(
-            "Uses the connected ChatGPT account. Availability depends on the approved OAuth "
-            "client, account plan, and provider terms."
+            "Browser sign-in uses the connected account. The local CLI option uses the Codex "
+            "account already signed in on this machine and is never available in deployment."
         ),
         auth_methods=[
             ProviderAuthMethodDescriptor(
                 kind="oauth_code",
                 label="Sign in through browser",
                 recommended=True,
-            )
+            ),
+            ProviderAuthMethodDescriptor(
+                kind="local_cli",
+                label="Use local Codex CLI login",
+            ),
         ],
     ),
     "openai_compatible": ProviderDescriptor(
@@ -106,10 +118,50 @@ def provider_descriptors(settings: Settings | None = None) -> list[ProviderDescr
                 if enabled
                 else "An approved OAuth client must be configured by the workspace owner."
             )
+            local_cli = copy.auth_methods[1]
+            local_cli.enabled = settings.local_codex_cli_enabled
+            local_cli.unavailable_reason = (
+                None
+                if local_cli.enabled
+                else (
+                    "Local Codex CLI access is available only in an explicitly enabled "
+                    "development workspace."
+                )
+            )
         elif not copy.auth_methods:
             copy.auth_methods = [ProviderAuthMethodDescriptor(kind="api_key", label="API key")]
         descriptors.append(copy)
     return descriptors
+
+
+def _require_local_codex_request(
+    user: User,
+    settings: Settings,
+    client_host: str,
+) -> None:
+    environment = settings.environment.strip().lower()
+    if environment not in {"development", "dev"}:
+        raise WikiBaseError(
+            409,
+            "local_codex_unavailable",
+            "Local Codex CLI access is restricted to local development",
+        )
+    if user.email.strip().lower() != settings.local_codex_cli_allowed_email.strip().lower():
+        raise WikiBaseError(
+            403,
+            "local_codex_forbidden",
+            "Local Codex CLI access is restricted to the configured workspace owner",
+        )
+    try:
+        loopback = ipaddress.ip_address(client_host).is_loopback
+    except ValueError:
+        loopback = client_host == "localhost"
+    if not loopback:
+        raise WikiBaseError(
+            403,
+            "local_codex_forbidden",
+            "Local Codex CLI access accepts loopback requests only",
+        )
 
 
 @dataclass(frozen=True)
@@ -126,6 +178,8 @@ class GenerationProvider:
 async def resolve_generation_provider(
     user: User | None,
     db: AsyncSession | None,
+    *,
+    client_host: str = "",
 ) -> GenerationProvider:
     settings = get_settings()
     if user is not None and db is not None:
@@ -138,6 +192,23 @@ async def resolve_generation_provider(
         )
         selected = result.scalar_one_or_none()
         if selected is not None:
+            if selected.auth_method == "local_cli":
+                _require_local_codex_request(user, settings, client_host)
+                if selected.provider != "chatgpt":
+                    raise WikiBaseError(
+                        409,
+                        "local_codex_unavailable",
+                        "The active local CLI provider is invalid",
+                    )
+                return GenerationProvider(
+                    provider=selected.provider,
+                    model=selected.model,
+                    endpoint="local://codex-cli",
+                    api_key="",
+                    auth_method=selected.auth_method,
+                    account_id="",
+                    transport="codex_cli",
+                )
             if selected.auth_method == "oauth_code":
                 if selected.provider != "chatgpt" or selected.encrypted_access_token is None:
                     raise WikiBaseError(
@@ -192,6 +263,32 @@ async def resolve_generation_provider(
         endpoint=PROVIDERS["openai"].endpoint,
         api_key=settings.openai_api_key,
     )
+
+
+async def mark_local_codex_unavailable(
+    user: User | None,
+    db: AsyncSession | None,
+    error_code: str,
+    detail: str,
+) -> None:
+    if user is None or db is None:
+        return
+    await lock_provider_mutation(user.id, "chatgpt", db)
+    setting = await db.scalar(
+        select(ProviderSetting).where(
+            ProviderSetting.user_id == user.id,
+            ProviderSetting.provider == "chatgpt",
+            ProviderSetting.auth_method == "local_cli",
+            ProviderSetting.active_for_generation.is_(True),
+        )
+    )
+    if setting is None:
+        return
+    setting.status = "reauth_required"
+    setting.last_error_code = error_code[:100]
+    setting.last_error = detail[:1000]
+    setting.last_tested_at = datetime.now(UTC)
+    await db.commit()
 
 
 async def force_refresh_generation_provider(
@@ -316,6 +413,75 @@ async def list_settings(user: User, db: AsyncSession) -> list[ProviderSetting]:
     return list(result.scalars())
 
 
+async def connect_local_codex(
+    user: User,
+    db: AsyncSession,
+    *,
+    client_host: str,
+) -> ProviderSetting:
+    from app.services.local_codex import validate_local_codex
+
+    settings = get_settings()
+    _require_local_codex_request(user, settings, client_host)
+    await validate_local_codex(settings)
+    await lock_provider_mutation(user.id, "chatgpt", db)
+    await lock_provider_selection(user.id, db)
+    setting = await db.scalar(
+        select(ProviderSetting).where(
+            ProviderSetting.user_id == user.id,
+            ProviderSetting.provider == "chatgpt",
+        )
+    )
+    local_model = settings.local_codex_cli_model or "Codex CLI default"
+    if setting is not None and setting.auth_method != "local_cli":
+        raise WikiBaseError(
+            409,
+            "disconnect_required",
+            "Disconnect the existing ChatGPT connection before using the local Codex CLI",
+        )
+    if setting is None:
+        setting = ProviderSetting(
+            user_id=user.id,
+            provider="chatgpt",
+            model=local_model,
+            endpoint="local://codex-cli",
+            auth_method="local_cli",
+            encryption_key_id=settings.provider_encryption_key_id,
+            status="connected",
+            active_for_generation=False,
+        )
+        db.add(setting)
+    else:
+        setting.model = local_model
+        setting.endpoint = "local://codex-cli"
+        setting.auth_method = "local_cli"
+        setting.status = "connected"
+        setting.active_for_generation = False
+    setting.encrypted_api_key = None
+    setting.encrypted_access_token = None
+    setting.encrypted_refresh_token = None
+    setting.access_token_expires_at = None
+    setting.provider_account_id = None
+    setting.provider_subject_id = None
+    setting.provider_account_label = "Local Codex CLI"
+    setting.granted_scopes = None
+    setting.last_error = None
+    setting.last_error_code = None
+    setting.last_tested_at = datetime.now(UTC)
+    setting.last_refreshed_at = None
+    active = await db.scalar(
+        select(ProviderSetting.id).where(
+            ProviderSetting.user_id == user.id,
+            ProviderSetting.active_for_generation.is_(True),
+        )
+    )
+    if active is None:
+        setting.active_for_generation = True
+    await db.flush()
+    await db.refresh(setting)
+    return setting
+
+
 async def configure_provider(
     user: User, payload: ProviderConfigureRequest, db: AsyncSession
 ) -> ProviderSetting:
@@ -386,11 +552,38 @@ async def _owned_setting(user: User, provider: str, db: AsyncSession) -> Provide
     return setting
 
 
-async def test_provider(user: User, provider: str, db: AsyncSession) -> ProviderSetting:
+async def test_provider(
+    user: User,
+    provider: str,
+    db: AsyncSession,
+    *,
+    client_host: str = "",
+) -> ProviderSetting:
     await lock_provider_mutation(user.id, provider, db)
     setting = await _owned_setting(user, provider, db)
     settings = get_settings()
     if provider == "chatgpt":
+        if setting.auth_method == "local_cli":
+            from app.services.local_codex import validate_local_codex
+
+            _require_local_codex_request(user, settings, client_host)
+            try:
+                await validate_local_codex(settings)
+            except WikiBaseError as exc:
+                setting.status = "reauth_required"
+                setting.last_error = exc.detail
+                setting.last_error_code = exc.error
+                setting.last_tested_at = datetime.now(UTC)
+                await db.flush()
+                await db.refresh(setting)
+                return setting
+            setting.status = "connected"
+            setting.last_error = None
+            setting.last_error_code = None
+            setting.last_tested_at = datetime.now(UTC)
+            await db.flush()
+            await db.refresh(setting)
+            return setting
         if setting.auth_method != "oauth_code" or setting.encrypted_access_token is None:
             raise WikiBaseError(409, "reauth_required", "Reconnect ChatGPT through the browser")
         from app.services.provider_auth import refresh_browser_credential

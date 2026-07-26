@@ -1,7 +1,7 @@
 import uuid
 from urllib.parse import quote
 
-from fastapi import APIRouter, Body, Depends, Header, Query, Response, status
+from fastapi import APIRouter, Body, Depends, Header, Query, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,6 +60,7 @@ from app.services.provider_auth import (
 from app.services.providers import (
     activate_provider,
     configure_provider,
+    connect_local_codex,
     disconnect_provider,
     list_settings,
     provider_descriptors,
@@ -511,9 +512,36 @@ async def save_provider(
     )
 
 
+@router.post(
+    "/providers/chatgpt/local-cli/connect",
+    response_model=ProviderStatusResponse,
+)
+async def connect_local_codex_provider(
+    request: Request,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await execute_idempotent(
+        db=db,
+        user=user,
+        key=idempotency_key,
+        operation="provider.local_cli.connect:chatgpt",
+        payload=None,
+        status_code=status.HTTP_200_OK,
+        response_type=ProviderStatusResponse,
+        execute=lambda: connect_local_codex(
+            user,
+            db,
+            client_host=request.client.host if request.client is not None else "",
+        ),
+    )
+
+
 @router.post("/providers/{provider}/test", response_model=ProviderStatusResponse)
 async def validate_provider(
     provider: str,
+    request: Request,
     idempotency_key: str = Header(alias="Idempotency-Key"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -526,7 +554,12 @@ async def validate_provider(
         payload=None,
         status_code=status.HTTP_200_OK,
         response_type=ProviderStatusResponse,
-        execute=lambda: test_provider(user, provider, db),
+        execute=lambda: test_provider(
+            user,
+            provider,
+            db,
+            client_host=request.client.host if request.client is not None else "",
+        ),
     )
 
 
