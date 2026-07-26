@@ -127,6 +127,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 b'event: token\r\ndata: {"text":"Grounded live reply"}\r\n\r\n'
                 b'event: done\r\ndata: {"grounded":true,"confidence":0.9}\r\n\r\n'
             )
+        elif self.path == "/api/chat" and b"unauthorized live boundary" in payload:
+            status, body = 401, b'{"detail":"unauthorized"}'
+        elif self.path == "/api/chat" and b"forbidden live boundary" in payload:
+            status, body = 403, b'{"detail":"forbidden"}'
         elif self.path == "/api/chat" and b"truncated live boundary" in payload:
             status = 200
             content_type = "text/event-stream"
@@ -387,11 +391,22 @@ assert_status 502
 assert_json_field error 'live chat is unavailable; no demo answer was substituted'
 assert_backend_count 13
 
+for auth_failure in unauthorized forbidden; do
+    request "$BASE_URL/api/chat" \
+        --header 'Cookie: cp_session=chat-boundary' \
+        --header 'Content-Type: application/json' \
+        --data "{\"message\":\"$auth_failure live boundary\"}"
+    assert_status 401
+    assert_json_field error 'authentication required'
+    grep -Eiq '^set-cookie:[[:space:]]*cp_session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax[[:space:]]*\r?$' "$HEADERS" || fail "$auth_failure chat auth failure did not expire the session cookie"
+done
+assert_backend_count 15
+
 request "$BASE_URL/api/sync" --header 'Cookie: cp_session=chat-boundary' --data 'action=sync'
 assert_status 303
 grep -Eiq '^location:[[:space:]]*/dashboard\?synced=1[[:space:]]*\r?$' "$HEADERS" || fail 'authenticated live sync did not return its success redirect'
-assert_backend_count 14
-[[ "$(grep -Fxc '/api/chat' "$BACKEND_RECORD")" == "4" ]] || fail 'unexpected live chat backend request count'
+assert_backend_count 16
+[[ "$(grep -Fxc '/api/chat' "$BACKEND_RECORD")" == "6" ]] || fail 'unexpected live chat backend request count'
 [[ "$(grep -Fxc '/api/modules/sync' "$BACKEND_RECORD")" == "1" ]] || fail 'unexpected live sync backend request count'
 
 # Cookie-authenticated source mutations fail closed unless the browser proves same origin.
@@ -421,7 +436,7 @@ request "$BASE_URL/api/sources" \
     --header 'X-Forwarded-Proto: https' \
     --data "$source_payload"
 assert_status 403
-assert_backend_count 14
+assert_backend_count 16
 
 # A configured public origin works behind a proxy without trusting forwarding headers.
 for case in 'unauthorized source:401' 'forbidden source:403' 'invalid source:422' 'oversized source response:502'; do
@@ -451,7 +466,7 @@ request "$BASE_URL/api/sources" \
     --data '{"source_type":"link","origin":"test","title":"created source","source_url":"https://example.com"}'
 assert_status 201
 assert_json_field title 'created source'
-assert_backend_count 19
+assert_backend_count 21
 [[ "$(grep -Fxc '/api/sources' "$BACKEND_RECORD")" == "7" ]] || fail 'unexpected live source backend request count'
 
 printf 'chat-boundary-smoke: all assertions passed at %s\n' "$BASE_URL"
