@@ -1299,8 +1299,18 @@
         const result = await flashRequest("generate", { payload: payload });
         if (!result.deck) throw new Error("request-failed");
         window.location.href = "/flashcards/drafts/" + encodeURIComponent(result.deck.id);
-      } catch (_) {
-        status.textContent = "The draft could not be created. Your scope selection is preserved; try again.";
+      } catch (error) {
+        const code = error.body && error.body.error;
+        const providerIssue = ["provider_not_configured", "credential_unavailable", "reauth_required", "provider_authentication_failed", "provider_unavailable", "local_codex_unavailable", "local_codex_login_required"].includes(code);
+        status.textContent = providerIssue
+          ? "Connect or reconnect an answer provider before generating this draft. Your scope selection is preserved. "
+          : "The draft could not be created. Your scope selection is preserved; try again.";
+        if (providerIssue) {
+          const settingsLink = document.createElement("a");
+          settingsLink.href = "/settings/providers";
+          settingsLink.textContent = "Open provider settings";
+          status.appendChild(settingsLink);
+        }
         form.querySelector('button[type="submit"]').disabled = false;
       }
     });

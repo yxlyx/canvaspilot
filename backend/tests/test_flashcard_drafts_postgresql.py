@@ -30,6 +30,8 @@ from app.schemas.sources import SourceCreate
 from app.services.flashcards import log_flashcard_attempt
 from app.services.sources import create_or_update_source
 
+pytestmark = pytest.mark.usefixtures("mock_flashcard_provider")
+
 
 @pytest.fixture
 async def draft_client() -> AsyncGenerator[tuple[AsyncClient, AsyncSession, User], None]:

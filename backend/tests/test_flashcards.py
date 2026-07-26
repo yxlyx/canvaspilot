@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
-from sqlalchemy import delete, inspect, select, text
+from sqlalchemy import delete, func, inspect, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,10 +17,23 @@ from app.models.source import Source, SourceStatus
 from app.models.source_chunk import SourceChunk
 from app.models.user import User
 from app.models.wiki import WikiCitation, WikiPage
-from app.schemas.flashcards import FlashcardAttemptCreate, FlashcardGenerateRequest
+from app.schemas.flashcards import (
+    FlashcardAttemptCreate,
+    FlashcardGenerateRequest,
+    GeneratedFlashcardWording,
+)
 from app.schemas.sources import SourceCreate
-from app.services.flashcards import _candidate_from_wiki_citation
+from app.services import flashcards as flashcard_service
+from app.services.flashcards import (
+    FlashcardCandidate,
+    _candidate_from_wiki_citation,
+    _card_fields,
+    _generated_wording_is_low_signal,
+    _generation_candidates,
+)
 from app.services.sources import create_or_update_source
+
+pytestmark = pytest.mark.usefixtures("mock_flashcard_provider")
 
 
 async def _require_database(session: AsyncSession) -> None:
@@ -183,6 +196,17 @@ async def _create_wiki_page(
     return page
 
 
+def test_generated_wording_rejects_whitespace_only_content():
+    with pytest.raises(ValidationError):
+        GeneratedFlashcardWording(
+            evidence_key="E1",
+            question="        ",
+            answer=" ",
+            support_quote=" ",
+            card_type="concept_check",
+        )
+
+
 def test_generate_request_requires_one_scope():
     with pytest.raises(ValidationError):
         FlashcardGenerateRequest()
@@ -234,6 +258,128 @@ def test_wiki_candidate_uses_cited_section_when_citation_snippet_is_too_short():
     assert candidate.source_chunk_id == chunk_id
 
 
+@pytest.mark.parametrize(
+    ("sentence", "expected_type", "question_fragment"),
+    [
+        (
+            "Searching an unsorted linked list has O(n) time complexity.",
+            "complexity",
+            "What complexity",
+        ),
+        (
+            "An array is contiguous storage for elements of the same type.",
+            "definition",
+            "defined or described",
+        ),
+        (
+            "To insert a node, update the new node and then the head pointer.",
+            "procedure",
+            "What procedure",
+        ),
+        (
+            "Unlike arrays, linked lists store nodes in non-contiguous memory.",
+            "comparison",
+            "What comparison",
+        ),
+        (
+            "A tail pointer must never reference a removed node after deletion.",
+            "misconception",
+            "What constraint",
+        ),
+    ],
+)
+def test_typed_questions_ask_only_for_the_supported_relation(
+    sentence, expected_type, question_fragment
+):
+    fields = _card_fields(
+        FlashcardCandidate(
+            content=sentence,
+            citation_ref="Section 1",
+            source_title="DATA STRUCTURES DIGITAL NOTES",
+            topic_tag="general",
+        ),
+        1,
+    )
+
+    assert fields["card_type"] == expected_type
+    assert question_fragment in fields["question"]
+    assert fields["answer"] == sentence.rstrip(".")
+    assert "DATA STRUCTURES DIGITAL NOTES" not in fields["question"]
+    assert "Section 1" not in fields["question"]
+
+
+def test_generated_support_quote_is_preserved_for_review():
+    support = "Relevant context " * 40 + "exact supported answer"
+    wording = GeneratedFlashcardWording(
+        evidence_key="E1",
+        question="What exact answer does the evidence provide?",
+        answer="exact supported answer",
+        support_quote=support,
+        card_type="concept_check",
+    )
+    fields = _card_fields(
+        FlashcardCandidate(
+            content=support,
+            citation_ref="Section 1",
+            source_title="Notes",
+            topic_tag="support",
+        ),
+        1,
+        wording,
+    )
+
+    assert fields["citations"][0]["excerpt"] == support
+    assert fields["answer"] in fields["citations"][0]["excerpt"]
+
+
+def test_generation_candidates_skip_document_header_metadata():
+    candidates = [
+        FlashcardCandidate(
+            content=(
+                "Faculty of Computing. Department of Computer Science. "
+                "Academic year 2026. Semester 1 course handbook."
+            ),
+            citation_ref="Cover page",
+            source_title="Course handbook",
+            topic_tag="general",
+        ),
+        FlashcardCandidate(
+            content=(
+                "Immutable lists preserve earlier values because updates create new "
+                "structures instead of changing existing nodes."
+            ),
+            citation_ref="Section 2",
+            source_title="Functional programming notes",
+            topic_tag="immutability",
+        ),
+    ]
+
+    selected = _generation_candidates(candidates, 10)
+
+    assert len(selected) == 1
+    assert selected[0].topic_tag == "immutability"
+
+
+def test_generated_wording_rejects_metadata_and_overlong_answers():
+    metadata = GeneratedFlashcardWording(
+        evidence_key="E1",
+        question="Which institution appears in the source header?",
+        answer="The university",
+        support_quote="The university",
+        card_type="concept_check",
+    )
+    overlong = GeneratedFlashcardWording(
+        evidence_key="E2",
+        question="Why does immutability preserve earlier values?",
+        answer="word " * 81,
+        support_quote="word " * 81,
+        card_type="concept_check",
+    )
+
+    assert _generated_wording_is_low_signal(metadata)
+    assert _generated_wording_is_low_signal(overlong)
+
+
 @pytest.mark.asyncio
 async def test_generate_flashcards_from_sources_preserves_citations(flashcard_client):
     client, session, user, _ = flashcard_client
@@ -252,13 +398,20 @@ async def test_generate_flashcards_from_sources_preserves_citations(flashcard_cl
     assert deck["generation_scope"] == "sources"
     assert deck["source_ids"] == [str(source.id)]
     assert deck["card_count"] == 2
-    assert {card["card_type"] for card in deck["cards"]} == {"short_answer", "concept_check"}
+    assert {card["card_type"] for card in deck["cards"]} == {"concept_check"}
     first_card = deck["cards"][0]
     assert first_card["source_id"] == str(source.id)
     assert first_card["source_chunk_id"] == str(chunks[0].id)
     assert first_card["citation_ref"] == "Limits Notes Citation: Section 1"
-    assert first_card["topic_tag"] == "calculus"
+    assert first_card["topic_tag"] == "Limits"
+    assert first_card["question"] == "What does the source establish about Limits?"
+    assert source.title not in first_card["question"]
+    assert first_card["citation_ref"] not in first_card["question"]
     assert "Limits describe" in first_card["answer"]
+    assert first_card["answer"] in first_card["citations"][0]["excerpt"]
+    assert deck["generator_snapshot"]["kind"] == "provider_structured"
+    assert deck["generator_snapshot"]["provider"] == "test_provider"
+    assert deck["generator_snapshot"]["model"] == "test-study-model"
 
     stored_cards = (
         (await session.execute(select(Flashcard).where(Flashcard.deck_id == uuid.UUID(deck["id"]))))
@@ -266,6 +419,33 @@ async def test_generate_flashcards_from_sources_preserves_citations(flashcard_cl
         .all()
     )
     assert len(stored_cards) == 2
+
+
+@pytest.mark.asyncio
+async def test_regeneration_replays_one_idempotent_successor(flashcard_client):
+    client, session, user, _ = flashcard_client
+    source, _ = await _create_ready_source(session, user)
+    payload = {"source_ids": [str(source.id)], "limit": 1}
+    root = await client.post(
+        "/api/flashcards/decks/generate",
+        json=payload,
+        headers={"Idempotency-Key": "flashcard-root-123456"},
+    )
+    assert root.status_code == 200
+
+    regeneration = {**payload, "regenerate": True}
+    headers = {"Idempotency-Key": "flashcard-regenerate-123456"}
+    first = await client.post("/api/flashcards/decks/generate", json=regeneration, headers=headers)
+    replay = await client.post("/api/flashcards/decks/generate", json=regeneration, headers=headers)
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    assert replay.json()["deck"]["id"] == first.json()["deck"]["id"]
+    assert first.json()["deck"]["predecessor_id"] == root.json()["deck"]["id"]
+    count = await session.scalar(
+        select(func.count(FlashcardDeck.id)).where(FlashcardDeck.user_id == user.id)
+    )
+    assert count == 2
 
 
 @pytest.mark.asyncio
@@ -289,7 +469,7 @@ async def test_generate_flashcards_from_selected_source_chunks_only(flashcard_cl
     ]
     assert [card["order_index"] for card in deck["cards"]] == [1, 2]
     assert deck["cards"][0]["citation_ref"] == chunks[1].citation_ref
-    assert "One sided limits" in deck["cards"][0]["answer"]
+    assert "One-sided limits" in deck["cards"][0]["answer"]
 
 
 @pytest.mark.asyncio
@@ -385,6 +565,66 @@ async def test_low_context_generation_returns_clear_fallback(flashcard_client):
 
 
 @pytest.mark.asyncio
+async def test_generation_rejects_provider_output_outside_evidence_scope(
+    flashcard_client, monkeypatch
+):
+    client, session, user, _ = flashcard_client
+    source, _ = await _create_ready_source(session, user)
+
+    async def invalid_generation(_system, _prompt, _user, _db, provider, _schema):
+        return provider, (
+            '{"cards":[{"evidence_key":"E99","question":"What is outside scope?",'
+            '"answer":"Unsupported","support_quote":"Unsupported",'
+            '"card_type":"concept_check"}]}'
+        )
+
+    monkeypatch.setattr(flashcard_service, "generate_json_text", invalid_generation)
+    response = await client.post(
+        "/api/flashcards/decks/generate",
+        json={"source_ids": [str(source.id)], "limit": 2},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["error"] == "provider_invalid_response"
+    decks = list(
+        (
+            await session.execute(select(FlashcardDeck).where(FlashcardDeck.user_id == user.id))
+        ).scalars()
+    )
+    assert decks == []
+
+
+@pytest.mark.asyncio
+async def test_generation_rejects_fabricated_answer_with_valid_evidence_key(
+    flashcard_client, monkeypatch
+):
+    client, session, user, _ = flashcard_client
+    source, _ = await _create_ready_source(session, user)
+
+    async def fabricated_generation(_system, _prompt, _user, _db, provider, _schema):
+        return provider, (
+            '{"cards":[{"evidence_key":"E1","question":"What unsupported claim is made?",'
+            '"answer":"The limit always exists","support_quote":"The limit always exists",'
+            '"card_type":"concept_check"}]}'
+        )
+
+    monkeypatch.setattr(flashcard_service, "generate_json_text", fabricated_generation)
+    response = await client.post(
+        "/api/flashcards/decks/generate",
+        json={"source_ids": [str(source.id)], "limit": 1},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["error"] == "provider_invalid_response"
+    decks = list(
+        (
+            await session.execute(select(FlashcardDeck).where(FlashcardDeck.user_id == user.id))
+        ).scalars()
+    )
+    assert decks == []
+
+
+@pytest.mark.asyncio
 async def test_attempt_logging_creates_learning_evidence(flashcard_client):
     client, session, user, _ = flashcard_client
     source, chunks = await _create_ready_source(session, user)
@@ -417,7 +657,7 @@ async def test_attempt_logging_creates_learning_evidence(flashcard_client):
     assert attempt["confidence"] == 3
     evidence = attempt["evidence"]
     assert evidence["evidence_type"] == "flashcard_attempt"
-    assert evidence["topic_tag"] == "calculus"
+    assert evidence["topic_tag"] == "Limits"
     assert evidence["source_id"] == str(source.id)
     assert evidence["source_chunk_id"] == str(chunks[0].id)
     assert evidence["flashcard_id"] == card["id"]
@@ -428,9 +668,7 @@ async def test_attempt_logging_creates_learning_evidence(flashcard_client):
     ).scalar_one()
     assert stored_evidence.flashcard_attempt_id == uuid.UUID(attempt["id"])
 
-    evidence_response = await client.get(
-        "/api/flashcards/evidence", params={"topic_tag": "calculus"}
-    )
+    evidence_response = await client.get("/api/flashcards/evidence", params={"topic_tag": "limits"})
     assert evidence_response.status_code == 200
     assert evidence_response.json()[0]["id"] == evidence["id"]
 

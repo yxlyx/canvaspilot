@@ -165,7 +165,8 @@ fn renderLivePage(req: mer.Request, w: *std.Io.Writer, decks: []const lib.types.
     var draft_count: usize = 0;
     for (decks) |deck| if (std.mem.eql(u8, deck.lifecycle, "draft")) {
         draft_count += 1;
-        try w.print("<article><div><strong>{s}</strong><span>{d} draft cards · revision {d} · {s}</span></div><a class=\"cp-btn cp-btn-ghost\" href=\"/flashcards/drafts/{s}\">Review draft</a></article>", .{ lib.ui.escapeSafe(req.allocator, deck.title), deck.card_count, deck.revision, lib.ui.escapeSafe(req.allocator, deck.updated_at), lib.ui.escapeSafe(req.allocator, deck.id) });
+        const updated = lib.time.formatRelative(req.allocator, deck.updated_at, lib.time.nowSecs()) catch "—";
+        try w.print("<article><div><strong>{s}</strong><span>{d} draft cards · revision {d} · updated {s}</span></div><a class=\"cp-btn cp-btn-ghost\" href=\"/flashcards/drafts/{s}\">Review draft</a></article>", .{ lib.ui.escapeSafe(req.allocator, deck.title), deck.card_count, deck.revision, lib.ui.escapeSafe(req.allocator, updated), lib.ui.escapeSafe(req.allocator, deck.id) });
     };
     if (draft_count == 0) try w.writeAll("<p class=\"cp-empty-copy\">No draft decks are awaiting review.</p>");
     try w.writeAll("</div><p id=\"draft-review\" class=\"cp-inline-status\">Draft review surface reserved for the review workflow. Publishing remains an explicit action.</p></section>");

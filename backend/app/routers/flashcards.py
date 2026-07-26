@@ -1,10 +1,11 @@
 import uuid
 
-from fastapi import APIRouter, Depends, Header, Query, Response
+from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
 from app.dependencies import get_current_user
+from app.exceptions import WikiBaseError
 from app.models.user import User
 from app.schemas.flashcards import (
     DraftAction,
@@ -34,6 +35,7 @@ from app.services.flashcards import (
     update_draft_card,
     update_draft_title,
 )
+from app.services.idempotency import execute_idempotent
 
 router = APIRouter(prefix="/flashcards", tags=["flashcards"])
 
@@ -41,15 +43,47 @@ router = APIRouter(prefix="/flashcards", tags=["flashcards"])
 @router.post("/decks/generate", response_model=FlashcardGenerateResponse)
 async def generate_deck(
     payload: FlashcardGenerateRequest,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    outcome = await generate_flashcard_deck(user, payload, db)
-    return FlashcardGenerateResponse(
-        deck=outcome.deck,
-        generated_count=outcome.generated_count,
-        message=outcome.message,
-    )
+    if payload.regenerate and idempotency_key is None:
+        raise WikiBaseError(
+            400,
+            "idempotency_key_required",
+            "Regeneration requires an Idempotency-Key header",
+        )
+
+    async def generate(commit: bool):
+        return await generate_flashcard_deck(
+            user,
+            payload,
+            db,
+            client_host=request.client.host if request.client else "",
+            commit=commit,
+        )
+
+    def response_value(outcome):
+        return FlashcardGenerateResponse(
+            deck=outcome.deck,
+            generated_count=outcome.generated_count,
+            message=outcome.message,
+        )
+
+    if idempotency_key is not None:
+        return await execute_idempotent(
+            db=db,
+            user=user,
+            key=idempotency_key,
+            operation="flashcard_generate",
+            payload=payload,
+            status_code=200,
+            response_type=FlashcardGenerateResponse,
+            execute=lambda: generate(False),
+            response_value=response_value,
+        )
+    return response_value(await generate(True))
 
 
 @router.get("/decks", response_model=list[FlashcardDeckResponse])

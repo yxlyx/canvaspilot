@@ -29,6 +29,95 @@ async def fake_stream(parts: list[str]):
 
 
 @pytest.mark.asyncio
+async def test_generate_json_text_requests_structured_chat_output(monkeypatch):
+    captured = None
+
+    class Message:
+        content = '{"cards":[]}'
+
+    class Choice:
+        message = Message()
+
+    class Response:
+        choices = [Choice()]
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            nonlocal captured
+            captured = kwargs
+            return Response()
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, api_key: str, **kwargs):
+            self.chat = FakeChat()
+
+    monkeypatch.setattr(llm, "AsyncOpenAI", FakeOpenAI)
+    provider = GenerationProvider("openai", "study-model", "https://api.openai.com/v1", "key")
+
+    schema = {"type": "object", "properties": {"cards": {"type": "array"}}}
+    selected, text = await llm.generate_json_text(
+        "Return JSON", "Evidence", None, None, provider, schema
+    )
+
+    assert selected == provider
+    assert text == '{"cards":[]}'
+    assert captured["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "workspace_generation",
+            "strict": True,
+            "schema": schema,
+        },
+    }
+    assert captured["temperature"] == 0.2
+    assert captured["messages"][1]["content"] == "Evidence"
+
+
+@pytest.mark.asyncio
+async def test_generate_json_text_requests_structured_responses_output(monkeypatch):
+    captured = None
+
+    class Response:
+        output_text = '{"cards":[]}'
+
+    class FakeResponses:
+        async def create(self, **kwargs):
+            nonlocal captured
+            captured = kwargs
+            return Response()
+
+    class FakeOpenAI:
+        def __init__(self, api_key: str, **kwargs):
+            self.responses = FakeResponses()
+
+    monkeypatch.setattr(llm, "AsyncOpenAI", FakeOpenAI)
+    provider = GenerationProvider(
+        "chatgpt",
+        "study-model",
+        "https://provider.test/responses",
+        "key",
+        transport="responses",
+    )
+    schema = {"type": "object", "properties": {"cards": {"type": "array"}}}
+
+    selected, text = await llm.generate_json_text(
+        "Return JSON", "Evidence", None, None, provider, schema
+    )
+
+    assert selected == provider
+    assert text == '{"cards":[]}'
+    assert captured["text"]["format"] == {
+        "type": "json_schema",
+        "name": "workspace_generation",
+        "strict": True,
+        "schema": schema,
+    }
+
+
+@pytest.mark.asyncio
 async def test_stream_rag_response_formats_events_and_citations(settings, monkeypatch):
     captured_messages = None
 

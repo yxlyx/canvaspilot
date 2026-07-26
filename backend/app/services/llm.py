@@ -4,7 +4,15 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any
 
-from openai import AsyncAzureOpenAI, AsyncOpenAI, AuthenticationError
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AsyncAzureOpenAI,
+    AsyncOpenAI,
+    AuthenticationError,
+    RateLimitError,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
@@ -44,6 +52,145 @@ def _provider_client(provider):
             api_version="2024-10-21",
         )
     return AsyncOpenAI(api_key=provider.api_key, base_url=provider.endpoint)
+
+
+def _response_text(response: Any) -> str:
+    output_text = getattr(response, "output_text", None)
+    if isinstance(output_text, str):
+        return output_text.strip()
+    choices = getattr(response, "choices", None)
+    if choices:
+        content = getattr(choices[0].message, "content", None)
+        if isinstance(content, str):
+            return content.strip()
+    return ""
+
+
+async def generate_json_text(
+    system_prompt: str,
+    user_prompt: str,
+    user: User | None,
+    db: AsyncSession | None,
+    provider: GenerationProvider,
+    json_schema: dict[str, Any] | None = None,
+) -> tuple[GenerationProvider, str]:
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    structured_format = (
+        {
+            "type": "json_schema",
+            "name": "workspace_generation",
+            "strict": True,
+            "schema": json_schema,
+        }
+        if json_schema is not None
+        else {"type": "json_object"}
+    )
+    chat_format = (
+        {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "workspace_generation",
+                "strict": True,
+                "schema": json_schema,
+            },
+        }
+        if json_schema is not None
+        else structured_format
+    )
+    try:
+        if provider.transport == "codex_cli":
+            from app.services.local_codex import generate_with_local_codex
+
+            transcript = "\n\n".join(
+                f"{message['role'].upper()}:\n{message['content']}" for message in messages
+            )
+            try:
+                text = await generate_with_local_codex(
+                    "Return only the requested JSON object. Do not inspect local files, "
+                    "run commands, or use tools.\n\n" + transcript,
+                    provider.model,
+                )
+            except WikiBaseError as exc:
+                await mark_local_codex_unavailable(user, db, exc.error, exc.detail)
+                raise
+            return provider, text.strip()
+
+        client = _provider_client(provider)
+        if provider.transport == "responses":
+            headers = {"originator": "canvaspilot"}
+            if provider.account_id:
+                headers["chatgpt-account-id"] = provider.account_id
+            try:
+                response = await client.responses.create(
+                    model=provider.model,
+                    input=messages,
+                    max_output_tokens=4096,
+                    text={"format": structured_format},
+                    extra_headers=headers,
+                )
+            except AuthenticationError:
+                provider = await force_refresh_generation_provider(user, db)
+                client = _provider_client(provider)
+                headers = {"originator": "canvaspilot"}
+                if provider.account_id:
+                    headers["chatgpt-account-id"] = provider.account_id
+                response = await client.responses.create(
+                    model=provider.model,
+                    input=messages,
+                    max_output_tokens=4096,
+                    text={"format": structured_format},
+                    extra_headers=headers,
+                )
+        else:
+            response = await client.chat.completions.create(
+                model=provider.model,
+                messages=messages,
+                response_format=chat_format,
+                temperature=0.2,
+                max_tokens=4096,
+            )
+    except AuthenticationError as exc:
+        raise WikiBaseError(
+            409,
+            "provider_authentication_failed",
+            "Reconnect the selected answer provider before generating flashcards",
+        ) from exc
+    except RateLimitError as exc:
+        raise WikiBaseError(
+            429,
+            "provider_rate_limited",
+            "The answer provider is busy or has reached its usage limit",
+        ) from exc
+    except APITimeoutError as exc:
+        raise WikiBaseError(
+            504,
+            "provider_timeout",
+            "The answer provider took too long to generate flashcards",
+        ) from exc
+    except APIConnectionError as exc:
+        raise WikiBaseError(
+            502,
+            "provider_unavailable",
+            "The answer provider could not be reached",
+        ) from exc
+    except APIStatusError as exc:
+        raise WikiBaseError(
+            502,
+            "provider_unavailable",
+            "The answer provider could not generate flashcards",
+        ) from exc
+
+    text = _response_text(response)
+    if not text:
+        raise WikiBaseError(
+            502,
+            "provider_invalid_response",
+            "The answer provider returned no flashcards",
+        )
+    return provider, text
 
 
 async def prepare_rag_stream(
