@@ -20,13 +20,14 @@ pub fn render(req: mer.Request) mer.Response {
     if (lib.m3.access(req) == .login) return mer.redirect("/login", .see_other);
     const use_mock = lib.m3.isExplicitDemo(req);
     const chat_endpoint: []const u8 = if (use_mock) "/api/chat?mock=1" else "/api/chat";
-    const selected_module = req.queryParam("module") orelse "";
+    const selected_scope = req.queryParam("enrollment") orelse req.queryParam("module") orelse "";
     const sources_href = lib.m3.demoHref(req.allocator, req, "/sources") catch return mer.internalError("ask render failed");
 
-    var modules_slice: []const lib.types.Module = if (use_mock) lib.mock.modules else &.{};
+    const modules_slice: []const lib.types.Module = if (use_mock) lib.mock.modules else &.{};
+    var enrollments: []const lib.types.EnrollmentResponse = &.{};
     if (!use_mock) {
-        const result = lib.backend.listModules(req.allocator, session.token);
-        if (result.value) |modules| modules_slice = modules.value else return lib.m3.liveError(req, "Ask", result.status);
+        const result = lib.backend.listEnrollments(req.allocator, session.token);
+        if (result.value) |items| enrollments = items.value else return lib.m3.liveError(req, "Ask", result.status);
     }
 
     var buf = lib.ui.buildHtml(req.allocator);
@@ -36,25 +37,26 @@ pub fn render(req: mer.Request) mer.Response {
         "<header class=\"cp-page-header\"><div><p class=\"cp-page-kicker\">Grounded Q&amp;A{s}</p><h1 class=\"cp-page-title\">Ask your knowledge base</h1></div></header>",
         .{if (use_mock) " · synthetic demo" else ""},
     ) catch return mer.internalError("ask render failed");
-    if (!use_mock and modules_slice.len == 0) {
-        w.writeAll("<div class=\"cp-status-banner cp-status-info\">No modules have been synced yet. You can still ask about imported sources.</div>\n") catch return mer.internalError("ask render failed");
+    if (!use_mock and enrollments.len == 0) {
+        w.writeAll("<div class=\"cp-status-banner cp-status-info\">No local module enrollments yet. Import one in Learning settings, or ask across all imported sources.</div>\n") catch return mer.internalError("ask render failed");
     }
     w.writeAll(
         \\<div class="chat-page">
         \\  <aside class="chat-context surface">
-        \\    <div><p class="eyebrow">Question scope</p><label class="field"><span>Module</span><select id="cp-chat-module" aria-label="Module">
+        \\    <div><p class="eyebrow">Question scope</p><label class="field"><span>Local module enrollment</span><select id="cp-chat-module" data-scope-kind="enrollment" aria-label="Local module enrollment">
     ) catch return mer.internalError("ask render failed");
 
-    if (modules_slice.len == 0) {
-        w.writeAll("      <option value=\"\" data-code=\"All sources\">All imported sources</option>\n") catch return mer.internalError("ask render failed");
-    } else {
+    w.writeAll("      <option value=\"\" data-code=\"All sources\">All imported sources</option>\n") catch return mer.internalError("ask render failed");
+    if (use_mock) {
         for (modules_slice) |module| {
-            const safe_id = lib.ui.escapeSafe(req.allocator, module.id);
-            const safe_code = lib.ui.escapeSafe(req.allocator, module.code);
-            const safe_name = lib.ui.escapeSafe(req.allocator, module.name);
-            const selected: []const u8 = if (std.mem.eql(u8, selected_module, module.id)) " selected" else "";
-            w.print("      <option value=\"{s}\" data-code=\"{s}\"{s}>{s} {s}</option>\n", .{ safe_id, safe_code, selected, safe_code, safe_name }) catch return mer.internalError("ask render failed");
+            const selected: []const u8 = if (std.mem.eql(u8, selected_scope, module.id)) " selected" else "";
+            w.print("      <option value=\"{s}\" data-code=\"{s}\"{s}>{s} {s}</option>\n", .{ lib.ui.escapeSafe(req.allocator, module.id), lib.ui.escapeSafe(req.allocator, module.code), selected, lib.ui.escapeSafe(req.allocator, module.code), lib.ui.escapeSafe(req.allocator, module.name) }) catch return mer.internalError("ask render failed");
         }
+    } else {
+        for (enrollments) |enrollment| if (!enrollment.archived) {
+            const selected: []const u8 = if (std.mem.eql(u8, selected_scope, enrollment.id)) " selected" else "";
+            w.print("      <option value=\"{s}\" data-code=\"{s}\"{s}>{s} {s}</option>\n", .{ lib.ui.escapeSafe(req.allocator, enrollment.id), lib.ui.escapeSafe(req.allocator, enrollment.code), selected, lib.ui.escapeSafe(req.allocator, enrollment.code), lib.ui.escapeSafe(req.allocator, enrollment.title) }) catch return mer.internalError("ask render failed");
+        };
     }
 
     w.writeAll("    </select></label></div>\n") catch return mer.internalError("ask render failed");
@@ -80,12 +82,12 @@ pub fn render(req: mer.Request) mer.Response {
             \\    </div>
         ) catch return mer.internalError("ask render failed");
     } else {
-        w.print("    <div class=\"context-sources\"><div class=\"section-title\"><div><h2>Evidence in scope</h2><p>Synced sources</p></div></div><a href=\"{s}\">Browse the source library</a></div>\n", .{sources_href}) catch return mer.internalError("ask render failed");
+        w.print("    <div class=\"context-sources\"><div class=\"section-title\"><div><h2>Evidence in scope</h2><p>Current indexed sources</p></div></div><a href=\"{s}\">Browse the source library</a></div>\n", .{sources_href}) catch return mer.internalError("ask render failed");
     }
     w.writeAll("    <div class=\"grounding-note\"><span>") catch return mer.internalError("ask render failed");
     w.writeAll(ICON_SHIELD) catch return mer.internalError("ask render failed");
     w.writeAll(
-        \\    </span><p><strong>Citations required</strong>Answers use only the selected module and always expose their evidence.</p></div>
+        \\    </span><p><strong>Citations required</strong>Answers use only current sources in the selected local enrollment and always expose their evidence.</p></div>
         \\  </aside>
         \\  <section class="chat-thread surface" aria-label="Question and answer conversation">
         \\    <header><div><span class="status-pill status-good">Sources ready</span><span id="cp-chat-module-code"></span></div><button id="cp-chat-clear" type="button" disabled>Clear conversation</button></header>
@@ -94,7 +96,7 @@ pub fn render(req: mer.Request) mer.Response {
     ) catch return mer.internalError("ask render failed");
     w.writeAll(ICON_ASK) catch return mer.internalError("ask render failed");
 
-    const welcome_copy: []const u8 = if (use_mock) "Ask a question about a sample module. WikiBase will answer from fixture sources and show where each claim came from." else "Ask a question about your selected module. WikiBase will answer from your synced sources and show where each claim came from.";
+    const welcome_copy: []const u8 = if (use_mock) "Ask a question about a sample module. WikiBase will answer from fixture sources and show where each claim came from." else "Ask a question about a local enrollment. WikiBase will answer from current indexed sources and show where each claim came from.";
     const prompt_one: []const u8 = if (use_mock) "Why do AVL rotations preserve the search-tree order?" else "Summarise the key ideas in my sources.";
     const prompt_two: []const u8 = if (use_mock) "Compare breadth-first and depth-first search." else "What should I revise next?";
     const prompt_three: []const u8 = if (use_mock) "Which sources discuss meaningful digital consent?" else "Which sources cover this topic?";

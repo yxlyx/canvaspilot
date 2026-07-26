@@ -8,7 +8,12 @@ const PasswordOnly = struct { current_password: []const u8 };
 const DeleteAccount = struct { current_password: []const u8, confirmation: []const u8 };
 const Theme = struct { theme: []const u8 };
 const Appearance = struct { theme: []const u8, motion_preference: []const u8 };
-const Learning = struct { default_module_id: ?[]const u8, daily_review_target: usize };
+const Learning = struct {
+    default_module_id: ?[]const u8,
+    default_enrollment_id: ?[]const u8,
+    daily_review_target: usize,
+};
+const ReviewTarget = struct { daily_review_target: usize };
 const Reminders = struct {
     reminder_daily_review: bool,
     reminder_processing_attention: bool,
@@ -65,6 +70,32 @@ fn safeSegment(segment: []const u8) bool {
         else => return false,
     };
     return true;
+}
+
+fn safeUuid(value_: []const u8) bool {
+    if (value_.len != 36) return false;
+    for (value_, 0..) |c, index| {
+        if (index == 8 or index == 13 or index == 18 or index == 23) {
+            if (c != '-') return false;
+        } else if (!std.ascii.isHex(c)) return false;
+    }
+    return true;
+}
+
+const DefaultScope = struct {
+    module_id: ?[]const u8 = null,
+    enrollment_id: ?[]const u8 = null,
+};
+
+fn parseDefaultScope(raw: []const u8) !DefaultScope {
+    if (raw.len == 0) return .{};
+    const separator = std.mem.indexOfScalar(u8, raw, ':') orelse return error.InvalidScope;
+    const kind = raw[0..separator];
+    const id = raw[separator + 1 ..];
+    if (!safeUuid(id)) return error.InvalidScope;
+    if (std.mem.eql(u8, kind, "module")) return .{ .module_id = id };
+    if (std.mem.eql(u8, kind, "enrollment")) return .{ .enrollment_id = id };
+    return error.InvalidScope;
 }
 
 fn wantsJson(req: mer.Request) bool {
@@ -141,8 +172,12 @@ pub fn render(req: mer.Request) mer.Response {
             const target_raw = value(req, "daily_review_target") orelse return reject(req, "enter a review target");
             const target = std.fmt.parseInt(usize, target_raw, 10) catch return reject(req, "review target must be a number");
             if (target < 1 or target > 100) return reject(req, "review target must be between 1 and 100");
-            const raw_module = value(req, "default_module_id") orelse "";
-            payload = stringify(req.allocator, Learning{ .default_module_id = if (raw_module.len == 0) null else raw_module, .daily_review_target = target });
+            if (std.mem.eql(u8, value(req, "scope_loaded") orelse "", "1")) {
+                const scope = parseDefaultScope(value(req, "default_scope") orelse "") catch return reject(req, "choose a valid default scope");
+                payload = stringify(req.allocator, Learning{ .default_module_id = scope.module_id, .default_enrollment_id = scope.enrollment_id, .daily_review_target = target });
+            } else {
+                payload = stringify(req.allocator, ReviewTarget{ .daily_review_target = target });
+            }
         }
     } else if (std.mem.eql(u8, action, "preferences.notifications")) {
         method = .PATCH;
@@ -208,4 +243,14 @@ test "account archives require ZIP content and an attachment filename" {
     try std.testing.expect(archiveDisposition(allocator, "text/html", "attachment; filename=wikibase-account.zip", "<html>login</html>") == null);
     try std.testing.expect(archiveDisposition(allocator, "application/zip", null, "PK\x03\x04archive") == null);
     try std.testing.expect(archiveDisposition(allocator, "application/zip", "inline; filename=wikibase-account.zip", "PK\x03\x04archive") == null);
+}
+
+test "default learning scopes preserve their identity type" {
+    const enrollment = try parseDefaultScope("enrollment:123e4567-e89b-12d3-a456-426614174000");
+    try std.testing.expect(enrollment.module_id == null);
+    try std.testing.expectEqualStrings("123e4567-e89b-12d3-a456-426614174000", enrollment.enrollment_id.?);
+    const module = try parseDefaultScope("module:223e4567-e89b-12d3-a456-426614174000");
+    try std.testing.expect(module.enrollment_id == null);
+    try std.testing.expectEqualStrings("223e4567-e89b-12d3-a456-426614174000", module.module_id.?);
+    try std.testing.expectError(error.InvalidScope, parseDefaultScope("../module-enrollments"));
 }

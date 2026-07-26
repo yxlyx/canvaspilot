@@ -3,8 +3,8 @@
 // Proposal M1 1c: "user can ask a question, system retrieves relevant chunks
 // via cosine similarity and returns a grounded response with source links".
 //
-// The browser POSTs JSON {message, module_id, history} here. We re-serialize
-// the body, forward it to FastAPI /api/chat with the user's bearer token
+// The browser POSTs a message, optional local enrollment scope, and history here.
+// We re-serialize the body and forward it to FastAPI /api/chat with the user's bearer token
 // (read from the HttpOnly cp_session cookie — never exposed to the browser),
 // then read the Server-Sent Events response, aggregate the streamed tokens
 // and citations, and return a single JSON {message, citations, grounded}
@@ -26,6 +26,7 @@ const log = std.log.scoped(.chat_api);
 const ChatBody = struct {
     message: []const u8 = "",
     module_id: ?[]const u8 = null,
+    enrollment_id: ?[]const u8 = null,
     history: []const lib.types.ChatMessage = &.{},
 };
 
@@ -53,9 +54,13 @@ pub fn render(req: mer.Request) mer.Response {
     if (body.message.len == 0) {
         return mer.badRequest("empty message");
     }
-    if (body.message.len > 8000 or body.history.len > 40 or (body.module_id != null and body.module_id.?.len > 256)) {
+    if (body.message.len > 8000 or body.history.len > 40 or
+        (body.module_id != null and body.module_id.?.len > 256) or
+        (body.enrollment_id != null and body.enrollment_id.?.len > 256))
+    {
         return mer.badRequest("chat request is too large");
     }
+    if (body.module_id != null and body.enrollment_id != null) return mer.badRequest("choose one chat scope");
     for (body.history) |entry| {
         if (entry.content.len > 8000) return mer.badRequest("chat history entry is too large");
     }

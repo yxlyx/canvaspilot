@@ -63,6 +63,22 @@ pub fn clearCookie() mer.SetCookie {
     return buildCookie(cfg.session_cookie, "", 0, cfg.public_origin);
 }
 
+pub fn providerAuthCookie(allocator: std.mem.Allocator, session_id: []const u8, value: []const u8) !mer.SetCookie {
+    const cfg = config.load();
+    const name = try std.fmt.allocPrint(allocator, "cp_provider_auth_{s}", .{session_id});
+    var cookie = buildCookie(name, value, 10 * 60, cfg.public_origin);
+    cookie.path = "/api/providers/chatgpt/oauth/callback";
+    return cookie;
+}
+
+pub fn clearProviderAuthCookie(allocator: std.mem.Allocator, session_id: []const u8) !mer.SetCookie {
+    const cfg = config.load();
+    const name = try std.fmt.allocPrint(allocator, "cp_provider_auth_{s}", .{session_id});
+    var cookie = buildCookie(name, "", 0, cfg.public_origin);
+    cookie.path = "/api/providers/chatgpt/oauth/callback";
+    return cookie;
+}
+
 pub fn themeCookie(preference: []const u8) mer.SetCookie {
     const cfg = config.load();
     const safe = if (std.mem.eql(u8, preference, "light") or std.mem.eql(u8, preference, "dark") or std.mem.eql(u8, preference, "system")) preference else "system";
@@ -77,6 +93,16 @@ pub fn motionCookie(preference: []const u8) mer.SetCookie {
     var cookie = buildCookie("wb_motion_preference", safe, 365 * 24 * 3600, cfg.public_origin);
     cookie.http_only = false;
     return cookie;
+}
+
+test "provider authorization cookies are isolated by session" {
+    const first = try providerAuthCookie(std.testing.allocator, "11111111-1111-4111-8111-111111111111", "binding-one");
+    defer std.testing.allocator.free(first.name);
+    const second = try providerAuthCookie(std.testing.allocator, "22222222-2222-4222-8222-222222222222", "binding-two");
+    defer std.testing.allocator.free(second.name);
+    try std.testing.expect(!std.mem.eql(u8, first.name, second.name));
+    try std.testing.expectEqualStrings("/api/providers/chatgpt/oauth/callback", first.path);
+    try std.testing.expect(first.http_only);
 }
 
 test "session cookies fail secure except explicit loopback HTTP" {

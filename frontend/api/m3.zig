@@ -2,6 +2,13 @@ const std = @import("std");
 const mer = @import("mer");
 const lib = @import("lib");
 
+const ProviderAuthorizationStart = struct {
+    id: []const u8,
+    authorization_url: []const u8,
+    browser_binding: []const u8,
+};
+const ProviderAuthorizationPublic = struct { authorization_url: []const u8 };
+
 const Envelope = struct {
     action: []const u8,
     idempotency_key: []const u8 = "",
@@ -125,10 +132,12 @@ fn formPayload(req: mer.Request, action: []const u8) !?std.json.Value {
         try putOptionalFloat(req.allocator, &object, "available_marks", formValue(req, "available_marks"), std.mem.eql(u8, action, "paper.updateQuestion"));
         if (formValue(req, "confidence")) |confidence| try object.put(req.allocator, "confidence", .{ .float = try std.fmt.parseFloat(f64, confidence) });
         if (std.mem.eql(u8, action, "paper.updateQuestion")) try object.put(req.allocator, "reviewed", .{ .bool = formValue(req, "reviewed") != null });
+    } else if (std.mem.eql(u8, action, "provider.auth.start")) {
+        try object.put(req.allocator, "return_path", .{ .string = try requiredFormValue(req, "return_path") });
     } else if (std.mem.eql(u8, action, "provider.save")) {
         const provider = try requiredFormValue(req, "provider");
         try object.put(req.allocator, "provider", .{ .string = provider });
-        try object.put(req.allocator, "api_key", .{ .string = try requiredFormValue(req, "api_key") });
+        try putOptionalString(req.allocator, &object, "api_key", formValue(req, "api_key"));
         try object.put(req.allocator, "model", .{ .string = try requiredFormValue(req, "model") });
         if (!std.mem.eql(u8, provider, "openai") and !std.mem.eql(u8, provider, "google_gemini")) {
             if (formValue(req, "endpoint")) |endpoint| {
@@ -160,6 +169,8 @@ fn formMutation(req: mer.Request) !FormMutation {
         "/wiki/guides"
     else if (std.mem.eql(u8, action, "health.run"))
         "/sources/health"
+    else if (std.mem.eql(u8, action, "provider.auth.start") and id != null and safeSegment(id.?))
+        try std.fmt.allocPrint(req.allocator, "/settings/providers?provider={s}&auth=failed", .{id.?})
     else if (std.mem.startsWith(u8, action, "provider."))
         "/settings/providers"
     else if (std.mem.eql(u8, action, "wiki.export"))
@@ -174,7 +185,8 @@ fn formMutation(req: mer.Request) !FormMutation {
 }
 
 fn formRedirect(req: mer.Request, path: []const u8, success: bool) mer.Response {
-    const location = std.fmt.allocPrint(req.allocator, "{s}?{s}=1", .{ path, if (success) "saved" else "error" }) catch path;
+    const separator: []const u8 = if (std.mem.indexOfScalar(u8, path, '?') == null) "?" else "&";
+    const location = std.fmt.allocPrint(req.allocator, "{s}{s}{s}=1", .{ path, separator, if (success) "saved" else "error" }) catch path;
     return mer.redirect(location, .see_other);
 }
 fn route(allocator: std.mem.Allocator, envelope: Envelope) !struct { std.http.Method, []const u8, bool } {
@@ -183,6 +195,11 @@ fn route(allocator: std.mem.Allocator, envelope: Envelope) !struct { std.http.Me
     if (std.mem.eql(u8, action, "health.run")) return .{ .POST, "/api/workspace/health", false };
     if (std.mem.eql(u8, action, "paper.upload")) return .{ .POST, "/api/marked-papers", false };
     if (std.mem.eql(u8, action, "provider.save")) return .{ .PUT, "/api/providers/settings", false };
+    if (std.mem.eql(u8, action, "provider.auth.start")) {
+        const provider = envelope.id orelse return error.InvalidRoute;
+        if (!safeSegment(provider)) return error.InvalidRoute;
+        return .{ .POST, try std.fmt.allocPrint(allocator, "/api/providers/{s}/auth-sessions", .{provider}), false };
+    }
     if (std.mem.eql(u8, action, "wiki.export")) return .{ .POST, "/api/wiki/download", true };
     if (std.mem.eql(u8, action, "page.download")) {
         const slug = envelope.slug orelse return error.InvalidRoute;
@@ -194,6 +211,7 @@ fn route(allocator: std.mem.Allocator, envelope: Envelope) !struct { std.http.Me
     if (std.mem.eql(u8, action, "paper.delete")) return .{ .DELETE, try std.fmt.allocPrint(allocator, "/api/marked-papers/{s}", .{id}), false };
     if (std.mem.eql(u8, action, "paper.addQuestion")) return .{ .POST, try std.fmt.allocPrint(allocator, "/api/marked-papers/{s}/questions", .{id}), false };
     if (std.mem.eql(u8, action, "provider.test")) return .{ .POST, try std.fmt.allocPrint(allocator, "/api/providers/{s}/test", .{id}), false };
+    if (std.mem.eql(u8, action, "provider.activate")) return .{ .POST, try std.fmt.allocPrint(allocator, "/api/providers/{s}/activate", .{id}), false };
     if (std.mem.eql(u8, action, "provider.disconnect")) return .{ .DELETE, try std.fmt.allocPrint(allocator, "/api/providers/{s}", .{id}), false };
     const child = envelope.child_id orelse return error.InvalidRoute;
     if (!safeSegment(child)) return error.InvalidRoute;
@@ -230,6 +248,18 @@ pub fn render(req: mer.Request) mer.Response {
         cookies[0] = lib.session.clearCookie();
         const response: mer.Response = if (form != null) mer.redirect("/login?reason=session_expired", .see_other) else .{ .status = .unauthorized, .content_type = .json, .body = "{\"error\":\"session expired\"}" };
         return mer.withCookies(response, cookies);
+    }
+    if (std.mem.eql(u8, envelope.action, "provider.auth.start") and result.status >= 200 and result.status < 300) {
+        const parsed = std.json.parseFromSlice(ProviderAuthorizationStart, req.allocator, result.body, .{ .ignore_unknown_fields = true }) catch return if (form) |value| formRedirect(req, value.redirect_path, false) else .{ .status = .bad_gateway, .content_type = .json, .body = "{\"error\":\"invalid provider authorization response\"}" };
+        const session_id = parsed.value.id;
+        const authorization_url = parsed.value.authorization_url;
+        const browser_binding = parsed.value.browser_binding;
+        if (!safeSegment(session_id) or !std.mem.startsWith(u8, authorization_url, "https://auth.openai.com/oauth/authorize?") or std.mem.indexOfAny(u8, authorization_url, "\\\r\n") != null or browser_binding.len < 32 or browser_binding.len > 200 or !safeSegment(browser_binding)) return if (form) |value| formRedirect(req, value.redirect_path, false) else .{ .status = .bad_gateway, .content_type = .json, .body = "{\"error\":\"invalid provider authorization response\"}" };
+        const cookies = req.allocator.alloc(mer.SetCookie, 1) catch return mer.internalError("provider authorization cookie failed");
+        cookies[0] = lib.session.providerAuthCookie(req.allocator, session_id, browser_binding) catch return mer.internalError("provider authorization cookie failed");
+        if (form != null) return mer.withCookies(mer.redirect(authorization_url, .see_other), cookies);
+        const public_response = mer.typedJson(req.allocator, ProviderAuthorizationPublic{ .authorization_url = authorization_url });
+        return mer.withCookies(public_response, cookies);
     }
     if (form) |value| if (!target[2]) return formRedirect(req, value.redirect_path, result.status >= 200 and result.status < 300);
     var response = mer.Response{ .status = @enumFromInt(result.status), .content_type = .json, .body = result.body };

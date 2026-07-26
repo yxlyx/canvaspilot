@@ -48,10 +48,10 @@ test("settings pages share the current immutable script version", async () => {
     "app/settings/data.zig",
   ]) {
     const source = fs.readFileSync(path.join(__dirname, "../..", relative), "utf8");
-    expect(source).toContain("/settings.js?v=20260724-2");
+    expect(source).toContain("/settings.js?v=20260728-1");
   }
   const layout = fs.readFileSync(path.join(__dirname, "../../app/layout.zig"), "utf8");
-  expect(layout).toContain("/app.js?v=wikibase-13");
+  expect(layout).toContain("/app.js?v=wikibase-16");
 });
 
 test("explicit demo renders grounded and insufficient study-guide states", async ({ page }) => {
@@ -167,6 +167,65 @@ test("live mutation payload and canonical download work without secret URLs", as
   expect(requests[1]).toMatchObject({ action: "page.download", slug: "safe-page" });
   expect(requests[1].idempotency_key).toBeUndefined();
   expect(requests.every((request) => !JSON.stringify(request).includes("api_key"))).toBeTruthy();
+});
+
+test("provider browser sign-in starts a one-time session without exposing credentials", async ({ page }) => {
+  await page.goto("/login");
+  let requestBody;
+  await page.route("**/api/m3", async (route) => {
+    requestBody = route.request().postDataJSON();
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "11111111-1111-4111-8111-111111111111",
+        provider: "chatgpt",
+        status: "pending",
+        authorization_url: "/login?oauth=provider",
+        expires_at: "2026-08-01T10:10:00Z",
+      }),
+    });
+  });
+  await page.setContent(`<main><form method="post" action="/api/m3" data-m3-form>
+    <input name="action" value="provider.auth.start">
+    <input name="id" value="chatgpt">
+    <input name="return_path" value="/settings/providers?provider=chatgpt">
+    <button type="submit">Sign in through browser</button>
+    <p class="cp-form-status" role="status"></p>
+  </form><script src="/m3.js"></script></main>`);
+  await page.getByRole("button", { name: "Sign in through browser" }).click();
+  await expect(page).toHaveURL(/\/login\?oauth=provider$/);
+  expect(requestBody).toMatchObject({
+    action: "provider.auth.start",
+    id: "chatgpt",
+    payload: { return_path: "/settings/providers?provider=chatgpt" },
+  });
+  expect(requestBody.idempotency_key).toMatch(/^[A-Za-z0-9_-]{16,128}$/);
+  expect(JSON.stringify(requestBody)).not.toContain("token");
+  expect(JSON.stringify(requestBody)).not.toContain("api_key");
+});
+
+test("provider callback requires the initiating signed-in browser and fails closed", async ({ context, page }) => {
+  const state = "11111111-1111-4111-8111-111111111111.secure-state-value";
+  await context.addCookies([{ name: "cp_provider_auth_11111111-1111-4111-8111-111111111111", value: "browser-binding-value-12345678901234567890", domain: "127.0.0.1", path: "/api/providers/chatgpt/oauth/callback", httpOnly: true, sameSite: "Lax" }]);
+  const anonymous = await page.goto(`/api/providers/chatgpt/oauth/callback?state=${state}&code=one-time-code`);
+  expect(anonymous.status()).toBe(200);
+  await expect(page).toHaveURL(/\/login\?reason=session_expired$/);
+  expect((await context.cookies()).some((cookie) => cookie.name.startsWith("cp_provider_auth_"))).toBeFalsy();
+
+  await context.addCookies([{ name: "cp_session", value: "browser-token", url: cookieURL, httpOnly: true, sameSite: "Lax" }]);
+  await page.goto(`/api/providers/chatgpt/oauth/callback?state=${state}&code=one-time-code`);
+  await expect(page).toHaveURL(/\/settings\/providers\?provider=chatgpt&auth=failed$/);
+});
+
+test("provider form contracts preserve optional keys and safe external authorization redirects", async () => {
+  const proxy = fs.readFileSync(path.join(__dirname, "../../api/m3.zig"), "utf8");
+  expect(proxy).toContain('putOptionalString(req.allocator, &object, "api_key"');
+  expect(proxy).toContain('https://auth.openai.com/oauth/authorize?');
+  expect(proxy).toContain('provider.auth.start');
+  expect(proxy).toContain("providerAuthCookie(req.allocator, session_id, browser_binding)");
+  const providerPage = fs.readFileSync(path.join(__dirname, "../../app/settings/providers.zig"), "utf8");
+  expect(providerPage).toContain("workspace questions and sources are not sent");
 });
 
 test("signup mode has matching title, heading, active tab, and focused server errors", async ({ page }) => {
@@ -316,15 +375,16 @@ test("saved account motion preference remains reduced after reload", async ({ pa
   await expect.poll(() => page.locator(".wb-marketing-nav").evaluate((node) => Number.parseFloat(getComputedStyle(node).transitionDuration))).toBeLessThanOrEqual(0.00001);
 });
 
-test("live source preview stays metadata-only and source saves report pending ingestion", async ({ page }) => {
+test("live source preview stays metadata-only and source intake reports its saved indexing state", async ({ page }) => {
   await page.goto("/login");
-  let sourceRequest;
-  await page.route("**/api/sources", (route) => {
+  let sourceRequest; let sourceIdempotencyKey;
+  await page.route("**/api/sources/import", (route) => {
     sourceRequest = route.request().postDataJSON();
+    sourceIdempotencyKey = route.request().headers()["idempotency-key"];
     return route.fulfill({
       status: 201,
       contentType: "application/json",
-      body: JSON.stringify({ id: "source-1", title: "Lecture notes", status: "pending" }),
+      body: JSON.stringify({ import_status: "saved", duplicate: false, source: { id: "source-1", title: "Lecture notes", status: "pending" } }),
     });
   });
   await page.setContent(`<main>
@@ -336,8 +396,10 @@ test("live source preview stays metadata-only and source saves report pending in
       <h3 id="cp-preview-paper-title">Source</h3><h2 id="cp-preview-title">Source</h2><p id="cp-preview-detail"></p>
       <span id="cp-preview-status"></span><dl><dd id="cp-preview-context"></dd><dd id="cp-preview-format"></dd><dd id="cp-preview-topics"></dd></dl>
     </section></div>
-    <form id="cp-add-source-form" action="/api/sources"><input id="cp-new-source-title" value="New source"><input id="cp-new-source-url" value="https://example.test/notes"><input id="cp-new-source-module" value="CS2040S"><button type="submit">Save source</button><p class="cp-form-status"></p></form>
-    <script src="/app.js"></script></main>`);
+    <button id="cp-add-source" type="button">Add source</button><div id="cp-add-source-modal"><section>
+      <button type="button" data-source-mode="upload">Upload files</button><button type="button" data-source-mode="link">Add link</button><button type="button" data-source-mode="paste">Paste text</button>
+      <form id="cp-add-source-form" action="/api/sources/import"><input name="mode" value="upload"><div data-source-panel="upload"></div><div data-source-panel="link" hidden></div><div data-source-panel="paste" hidden></div><input id="cp-new-source-title" value="New source"><input id="cp-new-source-url" value="https://example.test/notes"><input id="cp-new-source-module" value="CS2040S"><button type="submit">Import source</button><p class="cp-form-status"></p></form>
+    </section></div><script src="/app.js"></script></main>`);
 
   await page.getByRole("button", { name: "Preview" }).click();
   await expect(page.locator("#cp-preview-context")).toHaveText("CS2040S");
@@ -346,9 +408,11 @@ test("live source preview stays metadata-only and source saves report pending in
   await expect(page.locator("#cp-source-preview-modal")).not.toContainText("linked wiki claims");
   await expect(page.locator("#cp-source-preview-modal")).not.toContainText("Traceability preserved");
 
-  await page.getByRole("button", { name: "Save source" }).click();
-  await expect(page.locator(".cp-form-status")).toHaveText("Source saved as metadata. Ingestion has not started.");
-  expect(sourceRequest).toEqual({ source_type: "link", origin: "web", title: "New source", source_url: "https://example.test/notes", course_context: "CS2040S" });
+  await page.getByRole("button", { name: "Add link" }).click();
+  await page.getByRole("button", { name: "Import source" }).click();
+  await expect(page.locator(".cp-form-status")).toHaveText("Bookmark metadata saved. No processing was started.");
+  expect(sourceRequest).toEqual({ mode: "link", source_type: "link", title: "New source", source_url: "https://example.test/notes", course_context: "CS2040S" });
+  expect(sourceIdempotencyKey).toMatch(/^source-[A-Za-z0-9-]{16,}$/);
 });
 
 test("forms lock before async work, reject duplicate submits, and focus errors", async ({ page }) => {

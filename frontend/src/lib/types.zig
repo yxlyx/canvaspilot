@@ -1,3 +1,5 @@
+const std = @import("std");
+
 // src/lib/types.zig — Zig structs shared across frontend routes. The top
 // section mirrors FastAPI Pydantic schemas; M2 prototype structs below model
 // workspace sources, wiki pages, and flashcards while backend endpoints land.
@@ -53,6 +55,9 @@ pub const Citation = struct {
     title: []const u8,
     url: []const u8,
     snippet: []const u8,
+    source_id: ?[]const u8 = null,
+    citation_ref: ?[]const u8 = null,
+    reference_number: ?usize = null,
 };
 
 pub const ChatMessage = struct {
@@ -63,6 +68,7 @@ pub const ChatMessage = struct {
 
 pub const ChatRequest = struct {
     module_id: ?[]const u8 = null,
+    enrollment_id: ?[]const u8 = null,
     message: []const u8,
     history: []const ChatMessage = &.{},
 };
@@ -84,9 +90,22 @@ pub const WorkspaceSource = struct {
     url: []const u8 = "",
 };
 
+pub const CurriculumTopicResponse = struct {
+    id: []const u8,
+    position: usize,
+    title: []const u8,
+    archived: bool,
+    state: []const u8,
+    provenance: []const u8,
+    extraction_rule: []const u8 = "",
+    extraction_rule_hash: []const u8 = "",
+    source_sha256: []const u8 = "",
+};
+
 pub const SourceResponse = struct {
     id: []const u8,
     user_id: []const u8,
+    enrollment_id: ?[]const u8 = null,
     source_type: []const u8,
     origin: []const u8 = "",
     external_id: ?[]const u8 = null,
@@ -145,11 +164,28 @@ pub const FlashcardResponse = struct {
     question: []const u8,
     answer: []const u8,
     topic_tag: []const u8 = "general",
+    topic_ids: []const []const u8 = &.{},
+    tags: []const []const u8 = &.{},
     citation_ref: []const u8 = "",
+    citations: []const std.json.Value = &.{},
     source_title: []const u8 = "",
     location_label: []const u8 = "",
+    state: []const u8 = "active",
+    manual_note: bool = false,
+    approved: bool = false,
     created_at: []const u8 = "",
     updated_at: []const u8 = "",
+};
+
+pub const FlashcardRevisionResponse = struct {
+    id: []const u8,
+    deck_id: []const u8,
+    user_id: []const u8,
+    revision: usize,
+    action: []const u8,
+    before: std.json.Value,
+    after: std.json.Value,
+    created_at: []const u8,
 };
 
 pub const FlashcardDeckResponse = struct {
@@ -162,9 +198,62 @@ pub const FlashcardDeckResponse = struct {
     wiki_page_id: ?[]const u8 = null,
     topic_tags: []const []const u8 = &.{},
     card_count: usize = 0,
+    lifecycle: []const u8 = "draft",
+    revision: usize = 1,
+    input_fingerprint: ?[]const u8 = null,
+    scope_snapshot: std.json.Value = .null,
+    generator_snapshot: std.json.Value = .null,
+    enrollment_id: ?[]const u8 = null,
+    topic_ids: []const []const u8 = &.{},
+    predecessor_id: ?[]const u8 = null,
+    approved_at: ?[]const u8 = null,
+    retired_at: ?[]const u8 = null,
+    approved_snapshot: std.json.Value = .null,
     cards: []const FlashcardResponse = &.{},
     created_at: []const u8 = "",
     updated_at: []const u8 = "",
+};
+
+pub const ProcessingStageResponse = struct {
+    id: []const u8,
+    name: []const u8,
+    position: usize,
+    status: []const u8,
+    attempt_count: usize,
+    max_attempts: usize,
+    available_at: []const u8,
+    started_at: ?[]const u8 = null,
+    completed_at: ?[]const u8 = null,
+    outcome: std.json.Value = .null,
+    error_code: ?[]const u8 = null,
+    @"error": ?[]const u8 = null,
+};
+
+pub const ProcessingRunResponse = struct {
+    id: []const u8,
+    source_id: []const u8,
+    source_version_id: []const u8,
+    status: []const u8,
+    current_stage: []const u8,
+    attempt_count: usize,
+    started_at: ?[]const u8 = null,
+    completed_at: ?[]const u8 = null,
+    cancelled_at: ?[]const u8 = null,
+    pause_reason: ?[]const u8 = null,
+    error_code: ?[]const u8 = null,
+    @"error": ?[]const u8 = null,
+    created_at: []const u8,
+    updated_at: []const u8,
+    stages: []const ProcessingStageResponse = &.{},
+};
+
+pub const ProcessingPolicyResponse = struct {
+    process_sources: bool,
+    map_topics: bool,
+    compile_wiki: bool,
+    flashcard_mode: []const u8,
+    require_deck_review: bool,
+    updated_at: []const u8,
 };
 
 pub const FlashcardAttemptResponse = struct {
@@ -405,17 +494,53 @@ pub const HistoryEntryResponse = struct { id: []const u8, entry_type: []const u8
 pub const WikiRevisionResponse = struct { id: []const u8, page_id: []const u8, revision_number: usize, title: []const u8, markdown: []const u8, source_ids: []const []const u8, citation_count: usize, change_summary: []const u8, created_at: []const u8 };
 pub const RevisionDiffResponse = struct { page_id: []const u8, from_revision: usize, to_revision: usize, diff: []const u8 };
 pub const MeterSignalResponse = struct { name: []const u8, value: ?f64, evidence_count: usize };
-pub const TopicMeterResponse = struct { topic: []const u8, estimated_completion: ?f64, evidence_confidence: f64, evidence_count: usize, state: []const u8, stale: bool, signals: []const MeterSignalResponse, recommendation: []const u8 };
+pub const TopicMeterResponse = struct { topic: []const u8, estimated_completion: ?f64, evidence_confidence: ?f64, evidence_count: usize, state: []const u8, stale: bool, signals: []const MeterSignalResponse, recommendation: []const u8, reason_code: ?[]const u8 = null };
 pub const MarkedPaperQuestionResponse = struct { id: []const u8, question_number: usize, question_text: []const u8, awarded_marks: ?f64, available_marks: ?f64, feedback: []const u8, topic_tag: []const u8, confidence: f64, reviewed: bool, reviewed_at: ?[]const u8 };
 pub const MarkedPaperResponse = struct { id: []const u8, filename: []const u8, content_type: []const u8, extraction_status: []const u8, extraction_message: []const u8, questions: []const MarkedPaperQuestionResponse = &.{}, created_at: []const u8, updated_at: []const u8 };
 pub const StudyOutputPageResponse = struct { items: []const StudyOutputResponse, next_cursor: ?[]const u8 };
 pub const MarkedPaperPageResponse = struct { items: []const MarkedPaperResponse, next_cursor: ?[]const u8 };
-pub const ProviderDescriptor = struct { id: []const u8, name: []const u8, models: []const []const u8, endpoint: []const u8 };
-pub const ProviderStatusResponse = struct { provider: []const u8, model: []const u8, endpoint: []const u8, status: []const u8, credential: []const u8 = "********", last_tested_at: ?[]const u8, updated_at: []const u8 };
+pub const ProviderAuthMethodDescriptor = struct {
+    kind: []const u8,
+    label: []const u8,
+    recommended: bool = false,
+    enabled: bool = true,
+    unavailable_reason: ?[]const u8 = null,
+};
+pub const ProviderDescriptor = struct {
+    id: []const u8,
+    name: []const u8,
+    models: []const []const u8,
+    endpoint: []const u8,
+    description: []const u8 = "",
+    capabilities: []const []const u8 = &.{},
+    auth_methods: []const ProviderAuthMethodDescriptor = &.{},
+    setup_url: []const u8 = "",
+    billing_note: []const u8 = "",
+    endpoint_mode: []const u8 = "fixed",
+    supports_generation: bool = true,
+    supports_embeddings: bool = false,
+};
+pub const ProviderStatusResponse = struct {
+    provider: []const u8,
+    model: []const u8,
+    endpoint: []const u8,
+    auth_method: []const u8 = "api_key",
+    status: []const u8,
+    active_for_generation: bool = false,
+    provider_account_label: ?[]const u8 = null,
+    access_token_expires_at: ?[]const u8 = null,
+    last_error_code: ?[]const u8 = null,
+    last_error: ?[]const u8 = null,
+    credential: []const u8 = "********",
+    last_tested_at: ?[]const u8,
+    last_refreshed_at: ?[]const u8 = null,
+    updated_at: []const u8,
+};
 pub const UserPreferenceResponse = struct {
     theme: []const u8,
     motion_preference: []const u8,
     default_module_id: ?[]const u8,
+    default_enrollment_id: ?[]const u8,
     daily_review_target: usize,
     reminder_daily_review: bool,
     reminder_processing_attention: bool,
@@ -437,6 +562,26 @@ pub const NotificationPageResponse = struct {
     unread_count: usize,
 };
 pub const NotificationCountResponse = struct { unread_count: usize };
+pub const EnrollmentResponse = struct {
+    id: []const u8,
+    code: []const u8,
+    title: []const u8,
+    academic_year: []const u8,
+    semester: u8,
+    provenance: []const u8,
+    import_method: []const u8,
+    topic_state: []const u8,
+    evidence_warning: ?[]const u8,
+    archived: bool,
+    institution: []const u8,
+    provider: []const u8,
+    provider_version: []const u8,
+    provider_academic_year: []const u8,
+    source_url: []const u8,
+    provider_fetched_at: []const u8,
+    payload_sha256: []const u8,
+};
+
 pub const ActivityEntryResponse = struct {
     id: []const u8,
     event_type: []const u8,

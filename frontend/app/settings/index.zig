@@ -41,7 +41,7 @@ pub fn render(req: mer.Request) mer.Response {
     }
     w.writeAll("</section>") catch return mer.internalError("settings render failed");
     if (!demo) w.writeAll("<section class=\"cp-settings-section cp-settings-signout\"><div><h2>Sign out this device</h2><p>Your other sessions remain active unless you change your password.</p></div><form action=\"/logout\" method=\"post\"><button class=\"cp-btn cp-btn-ghost\" type=\"submit\">Sign out</button></form></section>") catch return mer.internalError("settings render failed");
-    w.writeAll("</div><script src=\"/settings.js?v=20260724-2\" defer></script>") catch return mer.internalError("settings render failed");
+    w.writeAll("</div><script src=\"/settings.js?v=20260728-1\" defer></script>") catch return mer.internalError("settings render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 

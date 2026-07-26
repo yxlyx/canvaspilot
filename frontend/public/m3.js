@@ -105,6 +105,20 @@
     try {
       const response = await request(form, body, release);
       if (!response.ok) { let message = "Request failed (" + response.status + ")."; try { message = errorMessage(await response.json(), message); } catch (_) {} throw new Error(message); }
+      if (body.action === "provider.auth.start") {
+        const result = await response.json();
+        if (!result.authorization_url) throw new Error("The provider did not return a sign-in URL.");
+        status(form, "Opening secure browser sign-in…", false);
+        window.location.assign(result.authorization_url);
+        return;
+      }
+      if (body.action === "provider.save" && form.hasAttribute("data-provider-save")) {
+        status(form, "Configuration saved. Testing the connection…", false);
+        const tested = await request(form, { action: "provider.test", id: body.payload.provider, idempotency_key: idempotencyKey() }, release);
+        if (!tested.ok) { let message = "The connection test failed (" + tested.status + ")."; try { message = errorMessage(await tested.json(), message); } catch (_) {} throw new Error(message); }
+        const result = await tested.json();
+        if (result.status !== "connected") throw new Error(result.last_error || "The provider rejected the key, endpoint, or model.");
+      }
       status(form, "Saved.", false);
       const target = form.dataset.success;
       if (target !== undefined) window.location.assign(target || window.location.href); else release();
