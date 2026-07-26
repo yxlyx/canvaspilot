@@ -19,6 +19,56 @@ test("explicit demo chat keeps demo context through a cited source link", async 
   await expect(sourcePage.getByRole("heading", { name: "Source library" })).toBeVisible();
 });
 
+test("clearing chat invalidates an in-flight answer without unlocking a newer request", async ({ page }) => {
+  let releaseLateResponse;
+  let releaseFreshResponse;
+  let markFirstStarted;
+  let markSecondStarted;
+  const lateResponseHeld = new Promise((resolve) => { releaseLateResponse = resolve; });
+  const freshResponseHeld = new Promise((resolve) => { releaseFreshResponse = resolve; });
+  const firstStarted = new Promise((resolve) => { markFirstStarted = resolve; });
+  const secondStarted = new Promise((resolve) => { markSecondStarted = resolve; });
+  let requestCount = 0;
+
+  await page.route("**/api/chat**", async (route) => {
+    requestCount += 1;
+    if (requestCount === 1) {
+      markFirstStarted();
+      await lateResponseHeld;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ message: "SENTINEL LATE ANSWER", citations: [] }) });
+      return;
+    }
+    markSecondStarted();
+    await freshResponseHeld;
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ message: "Fresh answer", citations: [] }) });
+  });
+
+  await page.goto("/chat?mock=1");
+  const input = page.locator("#cp-chat-input");
+  await input.fill("First question");
+  await page.locator("#cp-chat-send").click();
+  await firstStarted;
+
+  await page.locator("#cp-chat-clear").click();
+  await expect(page.locator("#cp-chat-log .chat-dynamic")).toHaveCount(0);
+  await expect(page.locator("#cp-chat-welcome")).toBeVisible();
+
+  await input.fill("Question after clear");
+  await page.locator("#cp-chat-send").click();
+  await secondStarted;
+
+  const lateResponse = page.waitForResponse((response) => response.url().includes("/api/chat"));
+  releaseLateResponse();
+  await (await lateResponse).finished();
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await expect(page.locator("#cp-chat-log")).not.toContainText("SENTINEL LATE ANSWER");
+  await expect(input).toBeDisabled();
+  await expect(page.locator("#cp-chat-log .loading-turn")).toHaveCount(1);
+
+  releaseFreshResponse();
+  await expect(page.locator("#cp-chat-log")).toContainText("Fresh answer");
+});
+
 test("demo mutations are unavailable and anonymous live mutations require auth", async ({ page }) => {
   await page.goto("/login");
 

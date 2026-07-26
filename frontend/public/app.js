@@ -552,6 +552,7 @@
     const history = [];
     let loading = false;
     let lastFailedMessage = null;
+    let requestGeneration = 0;
 
     function selectedCode() {
       if (!moduleSelect) return "CS2040S";
@@ -700,6 +701,7 @@
     }
 
     async function sendMessage(message, addStudent) {
+      const generation = requestGeneration += 1;
       loading = true;
       lastFailedMessage = null;
       input.disabled = true;
@@ -723,12 +725,14 @@
         });
         if (!response.ok) throw new Error("HTTP " + response.status);
         const data = await response.json();
+        if (generation !== requestGeneration) return;
         pending.remove();
         const reply = data.message || "No grounded answer was returned.";
         appendAnswer(reply, data.citations);
         history.push({ role: "assistant", content: reply });
         input.value = "";
       } catch (error) {
+        if (generation !== requestGeneration) return;
         pending.remove();
         history.length = 0;
         history.push.apply(history, priorHistory);
@@ -736,11 +740,13 @@
         lastFailedMessage = message;
         input.value = message;
       } finally {
-        loading = false;
-        input.disabled = false;
-        syncSend();
-        input.focus();
-        log.scrollTop = log.scrollHeight;
+        if (generation === requestGeneration) {
+          loading = false;
+          input.disabled = false;
+          syncSend();
+          input.focus();
+          log.scrollTop = log.scrollHeight;
+        }
       }
     }
 
@@ -762,8 +768,13 @@
     });
     if (clearButton) {
       clearButton.addEventListener("click", function () {
+        requestGeneration += 1;
+        loading = false;
+        lastFailedMessage = null;
         log.querySelectorAll(".chat-dynamic").forEach(function (turn) { turn.remove(); });
         history.length = 0;
+        input.disabled = false;
+        syncSend();
         if (welcome) welcome.hidden = false;
         clearButton.disabled = true;
       });
