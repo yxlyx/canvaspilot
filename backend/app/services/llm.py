@@ -15,11 +15,13 @@ from openai import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.exceptions import WikiBaseError
 from app.models.user import User
 from app.schemas.chat import ChatMessage
 from app.services.providers import (
     GenerationProvider,
     force_refresh_generation_provider,
+    mark_local_codex_unavailable,
     resolve_generation_provider,
 )
 from app.services.retrieval import RetrievedChunk
