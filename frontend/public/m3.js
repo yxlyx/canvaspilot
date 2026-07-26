@@ -121,7 +121,7 @@
       }
       status(form, "Saved.", false);
       const target = form.dataset.success;
-      if (target !== undefined) window.location.assign(target || window.location.href); else release();
+      if (target !== undefined) { release(); window.location.assign(target || window.location.href); } else release();
     } catch (error) { status(form, error.message || "Request failed.", true); release(); }
   }
   document.querySelectorAll("[data-m3-form]").forEach((form) => {
@@ -146,7 +146,7 @@
       const body = { action: "paper.upload", payload: { filename: file.name, content_type: fallback, content_base64: btoa(binary) } };
       const response = await request(upload, body, release);
       if (!response.ok) { let message = "Upload failed (" + response.status + ")."; try { message = errorMessage(await response.json(), message); } catch (_) {} throw new Error(message); }
-      status(upload, "Saved.", false); window.location.assign(upload.dataset.success || window.location.href);
+      status(upload, "Saved.", false); release(); window.location.assign(upload.dataset.success || window.location.href);
     } catch (error) { status(upload, error.message || "Upload failed.", true); release(); }
   });
 
