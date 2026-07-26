@@ -107,7 +107,9 @@ class ProcessingRun(TimestampMixin, Base):
         cascade="all, delete-orphan", lazy="selectin", order_by="ProcessingStage.position"
     )
     events: Mapped[list["ProcessingEvent"]] = relationship(
-        cascade="all, delete-orphan", lazy="selectin", order_by="ProcessingEvent.created_at"
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by=lambda: (ProcessingEvent.created_at, ProcessingEvent.id),
     )
 
 

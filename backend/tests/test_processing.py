@@ -2,6 +2,7 @@ import asyncio
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -13,8 +14,15 @@ from app.db.database import async_session_factory, engine, get_db
 from app.dependencies import get_current_user
 from app.exceptions import WikiBaseError
 from app.main import app
+from app.models.curriculum import (
+    CatalogModule,
+    ModuleEnrollment,
+    ProviderModuleSnapshot,
+    SemesterOffering,
+)
 from app.models.flashcard import FlashcardDeck
 from app.models.processing import (
+    ProcessingCoverageSnapshot,
     ProcessingEnqueueRequest,
     ProcessingEvent,
     ProcessingPolicy,
@@ -27,10 +35,14 @@ from app.models.source import Source, SourceKind, SourceStatus
 from app.models.source_chunk import SourceChunk
 from app.models.user import User
 from app.schemas.m3 import StudyOutputGenerateRequest
+from app.services.activity import activity_entries
 from app.services.curriculum import _source_chunks_fingerprint
 from app.services.curriculum_coverage import _chunks_by_source
 from app.services.flashcards import _source_candidates
 from app.services.processing import (
+    _fingerprint,
+    _heartbeat_while_running,
+    _json_compatible,
     cancel_run,
     claim_stage,
     enqueue_source_version,
@@ -592,6 +604,291 @@ async def test_processing_status_api_is_user_scoped(processing_session):
 
 
 @pytest.mark.asyncio
+async def test_latest_processing_runs_select_before_limit_and_preserve_history(processing_session):
+    session, user, other = processing_session
+    other_source = await _source(session, other, "Someone else's notes")
+    other_user_run = await _enqueue(session, other, other_source, "Private processing history.")
+    first_source = await _source(session, user, "Versioned notes")
+    older_run = await _enqueue(session, user, first_source, "The original version has evidence.")
+    latest_run = await _enqueue(session, user, first_source, "The replacement has newer evidence.")
+    second_source = await _source(session, user, "Other notes")
+    other_run = await _enqueue(session, user, second_source, "A separate source has evidence.")
+
+    async def current_user():
+        return user
+
+    async def current_db():
+        yield session
+
+    app.dependency_overrides[get_current_user] = current_user
+    app.dependency_overrides[get_db] = current_db
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            history = await client.get("/api/processing/runs")
+            latest = await client.get("/api/processing/runs?latest_per_source=true&limit=1")
+            source_latest = await client.get(
+                f"/api/processing/runs?source_id={first_source.id}&latest_per_source=true"
+            )
+            older = await client.get(f"/api/processing/runs/{older_run.id}")
+            other_latest = await client.get(
+                f"/api/processing/runs?source_id={other_source.id}&latest_per_source=true"
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert history.status_code == latest.status_code == source_latest.status_code == 200
+    assert [item["id"] for item in history.json()] == [
+        str(other_run.id),
+        str(latest_run.id),
+        str(older_run.id),
+    ]
+    assert [item["id"] for item in latest.json()] == [str(other_run.id)]
+    assert [item["id"] for item in source_latest.json()] == [str(latest_run.id)]
+    assert older.status_code == 200
+    assert older.json()["id"] == str(older_run.id)
+    assert other_latest.status_code == 200
+    assert other_latest.json() == []
+    assert all(item["id"] != str(other_user_run.id) for item in history.json())
+
+
+@pytest.mark.asyncio
+async def test_activity_reports_processing_recovery_without_duplicate_failure(processing_session):
+    session, user, other = processing_session
+    source = await _source(session, user, "Recovered notes")
+    failed_run = await _enqueue(session, user, source, "Recoverable processing evidence.")
+    recovered_run = await _enqueue(session, user, source, "Replacement processing evidence.")
+    failed_at = datetime.now(UTC) - timedelta(minutes=1)
+    ready_at = datetime.now(UTC)
+    session.add_all(
+        [
+            ProcessingEvent(
+                run_id=failed_run.id,
+                user_id=user.id,
+                event_type="stage_failed",
+                dedupe_key="activity:failed",
+                payload={"error_code": "temporary_failure"},
+                created_at=failed_at,
+            ),
+            ProcessingEvent(
+                run_id=recovered_run.id,
+                user_id=user.id,
+                event_type="run_ready",
+                dedupe_key="activity:ready",
+                payload={"status": "ready"},
+                created_at=ready_at,
+            ),
+        ]
+    )
+    source.status = SourceStatus.READY
+    failed_source = await _source(session, user, "Failed notes")
+    ready_run = await _enqueue(session, user, failed_source, "Earlier valid processing evidence.")
+    failed_run = await _enqueue(session, user, failed_source, "Processing failure evidence.")
+    failed_source.status = SourceStatus.FAILED
+    failed_source.updated_at = ready_at
+    completed_source = await _source(session, user, "Completed notes")
+    first_completed_run = await _enqueue(
+        session, user, completed_source, "First completed processing evidence."
+    )
+    completed_run = await _enqueue(
+        session, user, completed_source, "Replacement completed processing evidence."
+    )
+    session.add_all(
+        [
+            ProcessingEvent(
+                run_id=ready_run.id,
+                user_id=user.id,
+                event_type="run_ready",
+                dedupe_key="activity:ready-before-failure",
+                payload={"status": "ready"},
+                created_at=failed_at,
+            ),
+            ProcessingEvent(
+                run_id=failed_run.id,
+                user_id=user.id,
+                event_type="stage_failed",
+                dedupe_key="activity:failed-only",
+                payload={"error_code": "terminal_failure"},
+                created_at=ready_at,
+            ),
+            ProcessingEvent(
+                run_id=first_completed_run.id,
+                user_id=user.id,
+                event_type="run_ready",
+                dedupe_key="activity:first-completed",
+                payload={"status": "ready"},
+                created_at=failed_at,
+            ),
+            ProcessingEvent(
+                run_id=completed_run.id,
+                user_id=user.id,
+                event_type="run_ready",
+                dedupe_key="activity:completed",
+                payload={"status": "ready"},
+                created_at=ready_at,
+            ),
+        ]
+    )
+    fallback_source = await _source(session, user, "Newer source failure")
+    fallback_run = await _enqueue(session, user, fallback_source, "Initially valid evidence.")
+    fallback_source.status = SourceStatus.FAILED
+    fallback_source.import_error = "A newer import failed"
+    fallback_source.updated_at = ready_at + timedelta(seconds=1)
+    other_source = await _source(session, other, "Private source")
+    other_run = await _enqueue(session, other, other_source, "Private evidence.")
+    session.add_all(
+        [
+            ProcessingEvent(
+                run_id=fallback_run.id,
+                user_id=user.id,
+                event_type="run_ready",
+                dedupe_key="activity:before-source-failure",
+                payload={"status": "ready"},
+                created_at=ready_at,
+            ),
+            ProcessingEvent(
+                run_id=other_run.id,
+                user_id=user.id,
+                event_type="stage_failed",
+                dedupe_key="activity:malformed-cross-user",
+                payload={"error_code": "malformed"},
+                created_at=ready_at + timedelta(seconds=2),
+            ),
+        ]
+    )
+    await session.commit()
+
+    entries = await activity_entries(user, session, 20)
+    processing_entries = [entry for entry in entries if entry["resource_id"] == source.id]
+    failed_entries = [entry for entry in entries if entry["resource_id"] == failed_source.id]
+    completed_entries = [entry for entry in entries if entry["resource_id"] == completed_source.id]
+    fallback_entries = [entry for entry in entries if entry["resource_id"] == fallback_source.id]
+
+    assert all(entry["resource_id"] != other_source.id for entry in entries)
+    assert len(processing_entries) == 1
+    assert processing_entries[0]["event_type"] == "processing_recovered"
+    assert processing_entries[0]["title"] == "Source processing recovered"
+    assert "earlier interruption" in processing_entries[0]["summary"].lower()
+    assert len(failed_entries) == 1
+    assert failed_entries[0]["event_type"] == "processing_failure"
+    assert failed_entries[0]["title"] == "Failed notes"
+    assert len(completed_entries) == 1
+    assert completed_entries[0]["event_type"] == "processing_completed"
+    assert completed_entries[0]["title"] == "Source processing completed"
+    assert len(fallback_entries) == 1
+    assert fallback_entries[0]["event_type"] == "processing_failure"
+    assert fallback_entries[0]["summary"] == "A newer import failed"
+
+
+@pytest.mark.asyncio
+async def test_activity_processing_limit_has_deterministic_tie_boundary(processing_session):
+    session, user, _ = processing_session
+    created_at = datetime.now(UTC)
+    event_ids = [uuid.UUID(int=value) for value in (1, 2, 3)]
+    source_by_event_id = {}
+    for index, event_id in enumerate(event_ids):
+        source = await _source(session, user, f"Tied source {index}")
+        run = await _enqueue(session, user, source, f"Tied evidence {index}.")
+        source_by_event_id[event_id] = source.id
+        session.add(
+            ProcessingEvent(
+                id=event_id,
+                run_id=run.id,
+                user_id=user.id,
+                event_type="run_ready",
+                dedupe_key="activity:tied-ready",
+                payload={"status": "ready"},
+                created_at=created_at,
+            )
+        )
+    await session.commit()
+
+    entries = await activity_entries(user, session, 2)
+
+    assert [entry["resource_id"] for entry in entries] == [
+        source_by_event_id[event_ids[2]],
+        source_by_event_id[event_ids[1]],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_coverage_snapshot_jsonb_and_fingerprint_round_trip(processing_session):
+    session, user, _ = processing_session
+    module_code = f"T{str(user.id)[:7]}"
+    provider_snapshot = ProviderModuleSnapshot(
+        provider="test",
+        academic_year="2024-2025",
+        module_code=module_code,
+        provider_version="1",
+        source_url=f"https://example.test/{module_code}",
+        fetched_at=datetime.now(UTC),
+        payload_sha256="a" * 64,
+        payload={},
+    )
+    catalog_module = CatalogModule(
+        institution="NUS",
+        canonical_code=module_code,
+        code=module_code,
+        title="Programming",
+        description="",
+        metadata_json={},
+    )
+    session.add_all([provider_snapshot, catalog_module])
+    await session.flush()
+    offering = SemesterOffering(
+        catalog_module_id=catalog_module.id,
+        provider_snapshot_id=provider_snapshot.id,
+        academic_year="2024-2025",
+        semester=1,
+        available=True,
+        metadata_json={},
+    )
+    session.add(offering)
+    await session.flush()
+    enrollment = ModuleEnrollment(
+        user_id=user.id,
+        offering_id=offering.id,
+        provenance="nusmods",
+        import_method="manual_codes",
+        topic_state="provisional",
+        lesson_config={},
+    )
+    session.add(enrollment)
+    await session.flush()
+    source = await _source(session, user, "Coverage snapshot notes")
+    run = await _enqueue(session, user, source, "Coverage evidence.")
+    dashboard = {
+        "topic_id": uuid.uuid4(),
+        "observed_at": datetime.now(UTC),
+        "score": Decimal("0.75"),
+    }
+    normalized = _json_compatible(dashboard)
+    snapshot = ProcessingCoverageSnapshot(
+        run_id=run.id,
+        enrollment_id=enrollment.id,
+        source_version_id=run.source_version_id,
+        fingerprint=_fingerprint(normalized),
+        snapshot=normalized,
+    )
+    session.add(snapshot)
+    await session.commit()
+    snapshot_id = snapshot.id
+    session.expire(snapshot)
+
+    stored = await session.get(ProcessingCoverageSnapshot, snapshot_id)
+
+    assert stored is not None
+    assert stored.snapshot == normalized
+    assert stored.fingerprint == _fingerprint(stored.snapshot)
+
+    await session.delete(enrollment)
+    await session.flush()
+    await session.delete(offering)
+    await session.delete(catalog_module)
+    await session.delete(provider_snapshot)
+    await session.commit()
+
+
+@pytest.mark.asyncio
 async def test_processing_events_are_deduplicated(processing_session):
     session, user, _ = processing_session
     source = await _source(session, user, "Event notes")
@@ -694,6 +991,50 @@ async def test_interleaved_versions_retain_chunks_and_newest_wins(processing_ses
     assert curriculum_count == 1
     assert "Version two evidence becomes current." in wiki_draft.sections[0]
     assert "Version one evidence remains retained." not in wiki_draft.sections[0]
+
+
+@pytest.mark.asyncio
+async def test_cancelling_stage_execution_stops_and_awaits_heartbeat(
+    processing_session, monkeypatch
+):
+    session, user, _ = processing_session
+    source = await _source(session, user, "Cancelled heartbeat notes")
+    await _enqueue(session, user, source, "Cancellation must not leak a heartbeat task.")
+    stage = await claim_stage(session, "cancelled-worker")
+    assert stage is not None
+
+    execution_started = asyncio.Event()
+    heartbeat_stopped = asyncio.Event()
+    original_heartbeat = _heartbeat_while_running
+
+    async def blocked_execution(*_args):
+        execution_started.set()
+        await asyncio.Event().wait()
+
+    async def observed_heartbeat(*args):
+        try:
+            await original_heartbeat(*args)
+        finally:
+            heartbeat_stopped.set()
+
+    monkeypatch.setattr("app.services.processing._execute_stage", blocked_execution)
+    monkeypatch.setattr("app.services.processing._heartbeat_while_running", observed_heartbeat)
+    task = asyncio.create_task(
+        execute_claimed_stage(session, stage.id, "cancelled-worker", stage.lease_token)
+    )
+    await execution_started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert heartbeat_stopped.is_set()
+    assert not any(
+        other is not asyncio.current_task()
+        and not other.done()
+        and "_heartbeat_while_running" in repr(other.get_coro())
+        for other in asyncio.all_tasks()
+    )
 
 
 @pytest.mark.asyncio

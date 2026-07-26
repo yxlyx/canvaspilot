@@ -4,6 +4,7 @@ import json
 import uuid
 from datetime import UTC, datetime, timedelta
 
+from pydantic_core import to_jsonable_python
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,9 +53,13 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _json_compatible(value: object) -> object:
+    return to_jsonable_python(value)
+
+
 def _fingerprint(value: object) -> str:
     return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
 
 
@@ -370,17 +375,39 @@ async def get_run(user: User, run_id: uuid.UUID, db: AsyncSession) -> Processing
 
 
 async def list_runs(
-    user: User, db: AsyncSession, *, source_id: uuid.UUID | None = None, limit: int = 100
+    user: User,
+    db: AsyncSession,
+    *,
+    source_id: uuid.UUID | None = None,
+    limit: int = 100,
+    latest_per_source: bool = False,
 ) -> list[ProcessingRun]:
     statement = (
         select(ProcessingRun)
         .options(selectinload(ProcessingRun.stages), selectinload(ProcessingRun.events))
         .where(ProcessingRun.user_id == user.id)
-        .order_by(ProcessingRun.created_at.desc())
-        .limit(limit)
     )
-    if source_id is not None:
+    if latest_per_source:
+        ranked = select(
+            ProcessingRun.id.label("run_id"),
+            func.row_number()
+            .over(
+                partition_by=ProcessingRun.source_id,
+                order_by=(ProcessingRun.created_at.desc(), ProcessingRun.id.desc()),
+            )
+            .label("position"),
+        ).where(ProcessingRun.user_id == user.id)
+        if source_id is not None:
+            ranked = ranked.where(ProcessingRun.source_id == source_id)
+        ranked = ranked.subquery()
+        statement = statement.where(
+            ProcessingRun.id.in_(select(ranked.c.run_id).where(ranked.c.position == 1))
+        )
+    elif source_id is not None:
         statement = statement.where(ProcessingRun.source_id == source_id)
+    statement = statement.order_by(ProcessingRun.created_at.desc(), ProcessingRun.id.desc()).limit(
+        limit
+    )
     return list((await db.execute(statement)).scalars().unique())
 
 
@@ -773,7 +800,8 @@ async def _execute_stage(run: ProcessingRun, stage: ProcessingStage, db: AsyncSe
         if enrollment is None:
             return {"skipped": "enrollment_unavailable"}
         dashboard = await coverage_dashboard(enrollment, db)
-        dashboard_fingerprint = _fingerprint(dashboard)
+        dashboard_snapshot = _json_compatible(dashboard)
+        dashboard_fingerprint = _fingerprint(dashboard_snapshot)
         await db.execute(
             insert(ProcessingCoverageSnapshot)
             .values(
@@ -781,7 +809,7 @@ async def _execute_stage(run: ProcessingRun, stage: ProcessingStage, db: AsyncSe
                 enrollment_id=enrollment.id,
                 source_version_id=version.id,
                 fingerprint=dashboard_fingerprint,
-                snapshot=dashboard,
+                snapshot=dashboard_snapshot,
             )
             .on_conflict_do_update(
                 index_elements=[
@@ -791,7 +819,7 @@ async def _execute_stage(run: ProcessingRun, stage: ProcessingStage, db: AsyncSe
                 set_={
                     "run_id": run.id,
                     "fingerprint": dashboard_fingerprint,
-                    "snapshot": dashboard,
+                    "snapshot": dashboard_snapshot,
                     "created_at": _now(),
                 },
             )
@@ -900,6 +928,16 @@ async def execute_claimed_stage(
     heartbeat = asyncio.create_task(_heartbeat_while_running(stage.id, worker_id, token))
     try:
         outcome = await _execute_stage(run, stage, db)
+    except asyncio.CancelledError:
+        try:
+            await db.rollback()
+        finally:
+            heartbeat.cancel()
+            try:
+                await heartbeat
+            except asyncio.CancelledError:
+                pass
+        raise
     except Exception as exc:
         await db.rollback()
         heartbeat.cancel()

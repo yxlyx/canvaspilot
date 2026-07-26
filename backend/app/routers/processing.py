@@ -29,11 +29,18 @@ router = APIRouter(prefix="/processing", tags=["processing"])
 @router.get("/runs", response_model=list[ProcessingRunResponse])
 async def processing_runs(
     source_id: uuid.UUID | None = None,
+    latest_per_source: bool = False,
     limit: int = Query(default=100, ge=1, le=100),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await list_runs(user, db, source_id=source_id, limit=limit)
+    return await list_runs(
+        user,
+        db,
+        source_id=source_id,
+        limit=limit,
+        latest_per_source=latest_per_source,
+    )
 
 
 @router.get("/runs/{run_id}", response_model=ProcessingRunResponse)
