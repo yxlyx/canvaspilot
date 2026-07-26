@@ -13,6 +13,7 @@ class SourceKind(enum.StrEnum):
     MARKDOWN = "markdown"
     PLAIN_TEXT = "plain_text"
     PDF = "pdf"
+    IMAGE = "image"
     LINK = "link"
     REPOSITORY = "repository"
 
@@ -49,6 +50,9 @@ class Source(TimestampMixin, Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=gen_uuid)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    enrollment_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("module_enrollments.id", ondelete="SET NULL")
+    )
     source_type: Mapped[SourceKind] = mapped_column(
         Enum(SourceKind, name="librarysourcetype", values_callable=enum_values)
     )
@@ -69,6 +73,9 @@ class Source(TimestampMixin, Base):
     project_context: Mapped[str | None] = mapped_column(String(255))
     last_imported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     import_error: Mapped[str | None] = mapped_column(Text)
+    current_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("source_versions.id", ondelete="SET NULL")
+    )
 
     user: Mapped["User"] = relationship(back_populates="sources")  # noqa: F821
     chunks: Mapped[list["SourceChunk"]] = relationship(  # noqa: F821

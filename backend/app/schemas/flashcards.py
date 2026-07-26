@@ -9,14 +9,17 @@ from app.schemas.sources import normalize_topic_tags
 class FlashcardGenerateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    enrollment_id: uuid.UUID | None = None
+    topic_ids: list[uuid.UUID] | None = None
     source_ids: list[uuid.UUID] | None = None
     source_chunk_ids: list[uuid.UUID] | None = None
     wiki_page_id: uuid.UUID | None = None
     topic: str | None = None
     deck_title: str | None = None
     limit: int = Field(default=10, ge=1, le=20)
+    regenerate: bool = False
 
-    @field_validator("source_ids", "source_chunk_ids")
+    @field_validator("source_ids", "source_chunk_ids", "topic_ids")
     @classmethod
     def deduplicate_ids(cls, value: list[uuid.UUID] | None) -> list[uuid.UUID] | None:
         if value is None:
@@ -51,6 +54,8 @@ class FlashcardGenerateRequest(BaseModel):
     @model_validator(mode="after")
     def require_single_generation_scope(self):
         scopes = [
+            self.enrollment_id is not None,
+            self.topic_ids is not None,
             self.source_ids is not None,
             self.source_chunk_ids is not None,
             self.wiki_page_id is not None,
@@ -61,10 +66,80 @@ class FlashcardGenerateRequest(BaseModel):
         return self
 
 
+class DraftDeckUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+    title: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("title")
+    @classmethod
+    def strip_title(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Title is required")
+        return value.strip()
+
+
+class CitationSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: uuid.UUID
+    source_chunk_id: uuid.UUID | None = None
+    wiki_page_id: uuid.UUID | None = None
+
+
+class DraftCardUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+    question: str | None = Field(default=None, min_length=1)
+    answer: str | None = Field(default=None, min_length=1)
+    tags: list[str] | None = None
+    topic_ids: list[uuid.UUID] | None = None
+    citations: list[CitationSelection] | None = None
+    manual_note: bool | None = None
+
+
+class DraftCardAdd(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+    question: str = Field(min_length=1)
+    answer: str = Field(min_length=1)
+    tags: list[str] = Field(default_factory=list)
+    topic_ids: list[uuid.UUID] = Field(default_factory=list)
+    citations: list[CitationSelection] = Field(default_factory=list)
+    manual_note: bool = False
+
+
+class DraftReorder(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+    card_ids: list[uuid.UUID]
+
+
+class DraftAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+    card_ids: list[uuid.UUID] | None = None
+
+
 class FlashcardAttemptCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    rating: str | None = None
     answer_text: str = ""
-    is_correct: bool
+    is_correct: bool | None = None
     confidence: int | None = Field(default=None, ge=1, le=5)
+
+    @field_validator("rating")
+    @classmethod
+    def valid_rating(cls, value: str | None) -> str | None:
+        if value is not None and value not in {"Again", "Hard", "Good", "Easy"}:
+            raise ValueError("Rating must be Again, Hard, Good, or Easy")
+        return value
+
+    @model_validator(mode="after")
+    def require_rating_or_legacy_result(self):
+        if self.rating is None and self.is_correct is None:
+            raise ValueError("rating is required")
+        return self
 
     @field_validator("answer_text", mode="before")
     @classmethod
@@ -106,11 +181,30 @@ class FlashcardResponse(BaseModel):
     question: str
     answer: str
     topic_tag: str
+    topic_ids: list[uuid.UUID]
+    tags: list[str]
     citation_ref: str
+    citations: list[dict]
     source_title: str
     location_label: str
+    state: str
+    manual_note: bool
+    approved: bool
     created_at: datetime
     updated_at: datetime
+
+
+class FlashcardRevisionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    deck_id: uuid.UUID
+    user_id: uuid.UUID
+    revision: int
+    action: str
+    before: dict
+    after: dict
+    created_at: datetime
 
 
 class FlashcardDeckResponse(BaseModel):
@@ -125,6 +219,17 @@ class FlashcardDeckResponse(BaseModel):
     wiki_page_id: uuid.UUID | None
     topic_tags: list[str]
     card_count: int
+    lifecycle: str
+    revision: int
+    input_fingerprint: str | None
+    scope_snapshot: dict
+    generator_snapshot: dict
+    enrollment_id: uuid.UUID | None
+    topic_ids: list[uuid.UUID]
+    predecessor_id: uuid.UUID | None
+    approved_at: datetime | None
+    retired_at: datetime | None
+    approved_snapshot: dict | None
     cards: list[FlashcardResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
@@ -138,6 +243,8 @@ class FlashcardAttemptResponse(BaseModel):
     deck_id: uuid.UUID
     card_id: uuid.UUID
     answer_text: str
+    rating: str
+    ease: int
     is_correct: bool
     confidence: int | None
     evidence: LearningEvidenceResponse | None = None

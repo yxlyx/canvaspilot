@@ -46,9 +46,12 @@
   setupAuth();
   setupShell();
   setupChat();
+  setupFlashcardWorkspace();
+  setupDraftReview();
   setupFlashcards();
   setupDashboard();
   setupSources();
+  setupProcessing();
   setupWiki();
   setupArticle();
 
@@ -404,6 +407,13 @@
       openModal(previewModal, trigger);
     });
 
+    const focusedSource = grid.querySelector(".document-card.is-focused[data-source-id]");
+    if (focusedSource) {
+      focusedSource.scrollIntoView({ block: "center" });
+      focusedSource.focus({ preventScroll: true });
+      focusedSource.querySelector("[data-source-preview]")?.click();
+    }
+
     const add = document.getElementById("cp-add-source");
     if (add) add.addEventListener("click", function () { openModal(addModal, add); });
     document.querySelectorAll("[data-close-source-modal]").forEach(function (button) {
@@ -436,32 +446,418 @@
       }
     });
 
+    let selectedFiles = [];
+    const maxFileBytes = 10 * 1024 * 1024;
+    const maxTextCharacters = 2000000;
+    const textContents = new WeakMap();
+    const textReads = new WeakMap();
+    const textProblems = new WeakMap();
+    function sourceType(file) {
+      const name = file.name.toLowerCase();
+      if (file.type === "application/pdf" || name.endsWith(".pdf")) return "pdf";
+      if (file.type === "image/png" || file.type === "image/jpeg" || /\.(png|jpe?g)$/.test(name)) return "image";
+      if (file.type === "text/markdown" || name.endsWith(".md")) return "markdown";
+      if (file.type === "text/plain" || name.endsWith(".txt")) return "plain_text";
+      return "";
+    }
+    function isTextFile(file) {
+      const type = sourceType(file);
+      return type === "markdown" || type === "plain_text";
+    }
+    function textExceedsLimit(text) {
+      let characters = 0;
+      for (const _character of text) {
+        characters += 1;
+        if (characters > maxTextCharacters) return true;
+      }
+      return false;
+    }
+
     const addForm = document.getElementById("cp-add-source-form");
+    const sourceParams = new URLSearchParams(window.location.search);
+    const legacySourceScope = sourceParams.get("module_scope");
+    const sourceEnrollmentId = addForm ? (sourceParams.get("enrollment_id") || legacySourceScope) : null;
+    const sourceTopicId = addForm ? sourceParams.get("topic_id") : null;
+    if (addForm) {
+      const modeInput = addForm.elements.mode;
+      const fileInput = document.getElementById("cp-source-files");
+      const dropZone = addForm.querySelector(".source-drop-zone");
+      const fileList = addForm.querySelector(".source-file-list");
+      const modeButtons = Array.from(addModal.querySelectorAll("[data-source-mode]"));
+      const panels = Array.from(addModal.querySelectorAll("[data-source-panel]"));
+      function fileProblem(file) {
+        if (!sourceType(file)) return "Unsupported format";
+        if (!file.size) return "Empty file";
+        if (file.size > maxFileBytes) return "Over 10 MiB";
+        if (isTextFile(file)) return textProblems.get(file) || "Checking text length…";
+        return "Ready to import";
+      }
+      function readText(file) {
+        let pending = textReads.get(file);
+        if (!pending) {
+          pending = file.text().then(function (content) {
+            textContents.set(file, content);
+            return content;
+          });
+          textReads.set(file, pending);
+        }
+        return pending;
+      }
+      async function inspectTextFiles(files) {
+        for (const file of files) {
+          if (!isTextFile(file) || !file.size || file.size > maxFileBytes) continue;
+          try {
+            const content = await readText(file);
+            textProblems.set(file, textExceedsLimit(content) ? "Over 2,000,000 characters" : "Ready to import");
+          } catch (_) {
+            textProblems.set(file, "Could not read file");
+          }
+        }
+        if (files.length === selectedFiles.length && files.every(function (file, index) { return file === selectedFiles[index]; })) {
+          showFiles(files);
+        }
+      }
+
+      function setMode(mode) {
+        modeInput.value = mode;
+        modeButtons.forEach(function (button) {
+          const active = button.dataset.sourceMode === mode;
+          button.setAttribute("aria-selected", String(active));
+          button.tabIndex = active ? 0 : -1;
+        });
+        panels.forEach(function (panel) { panel.hidden = panel.dataset.sourcePanel !== mode; });
+        if (fileInput) fileInput.required = mode === "upload";
+        const urlInput = document.getElementById("cp-new-source-url");
+        const contentInput = document.getElementById("cp-source-content");
+        if (urlInput) urlInput.required = mode === "link";
+        if (contentInput) contentInput.required = mode === "paste";
+      }
+
+      function showFiles(files) {
+        if (!fileList) return;
+        const statusNode = addForm.querySelector(".cp-form-status");
+        if (statusNode) statusNode.textContent = "";
+        fileList.replaceChildren();
+        Array.from(files || []).forEach(function (file) {
+          const item = document.createElement("li");
+          const size = file.size < 1024 * 1024 ? Math.max(1, Math.round(file.size / 1024)) + " KB" : (file.size / (1024 * 1024)).toFixed(1) + " MB";
+          const problem = fileProblem(file);
+          item.classList.toggle("invalid", !["Ready to import", "Checking text length…"].includes(problem));
+          item.innerHTML = "<span><strong></strong><small></small></span><button type=\"button\">Remove</button>";
+          item.querySelector("strong").textContent = file.name;
+          item.querySelector("small").textContent = [sourceType(file) ? sourceType(file).replace("_", " ") : "unknown type", size, problem].join(" · ");
+          item.querySelector("button").setAttribute("aria-label", "Remove " + file.name);
+          item.querySelector("button").addEventListener("click", function () {
+            selectedFiles = selectedFiles.filter(function (selected) { return selected !== file; });
+            showFiles(selectedFiles);
+            if (fileInput && typeof DataTransfer !== "undefined") {
+              const transfer = new DataTransfer();
+              selectedFiles.forEach(function (selected) { transfer.items.add(selected); });
+              fileInput.files = transfer.files;
+            }
+          });
+          fileList.appendChild(item);
+        });
+      }
+
+      modeButtons.forEach(function (button, index) {
+        button.addEventListener("click", function () { setMode(button.dataset.sourceMode); });
+        button.addEventListener("keydown", function (event) {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+          event.preventDefault();
+          const offset = event.key === "ArrowRight" ? 1 : -1;
+          const next = modeButtons[(index + offset + modeButtons.length) % modeButtons.length];
+          setMode(next.dataset.sourceMode);
+          next.focus();
+        });
+      });
+      if (fileInput) fileInput.addEventListener("change", function () {
+        selectedFiles = Array.from(fileInput.files || []);
+        showFiles(selectedFiles);
+        void inspectTextFiles(selectedFiles);
+      });
+      if (dropZone) {
+        ["dragenter", "dragover"].forEach(function (name) { dropZone.addEventListener(name, function (event) { event.preventDefault(); dropZone.classList.add("dragging"); }); });
+        ["dragleave", "drop"].forEach(function (name) { dropZone.addEventListener(name, function (event) { event.preventDefault(); dropZone.classList.remove("dragging"); }); });
+        dropZone.addEventListener("drop", function (event) {
+          if (!fileInput || !event.dataTransfer.files.length) return;
+          selectedFiles = Array.from(event.dataTransfer.files);
+          if (typeof DataTransfer !== "undefined") {
+            const transfer = new DataTransfer();
+            selectedFiles.forEach(function (selected) { transfer.items.add(selected); });
+            fileInput.files = transfer.files;
+          }
+          showFiles(selectedFiles);
+          void inspectTextFiles(selectedFiles);
+        });
+      }
+      window.addEventListener("dragover", function (event) {
+        const overDropZone = event.target instanceof Element && event.target.closest(".source-drop-zone");
+        if (!addModal.hidden && !overDropZone) event.preventDefault();
+      });
+      window.addEventListener("drop", function (event) {
+        const overDropZone = event.target instanceof Element && event.target.closest(".source-drop-zone");
+        if (!addModal.hidden && !overDropZone) event.preventDefault();
+      });
+      setMode("upload");
+    }
     if (addForm) addForm.addEventListener("submit", async function (event) {
       event.preventDefault();
       const statusNode = addForm.querySelector(".cp-form-status");
       const submit = addForm.querySelector('button[type="submit"]');
-      const title = (document.getElementById("cp-new-source-title") || {}).value || "";
-      const url = (document.getElementById("cp-new-source-url") || {}).value || "";
+      const mode = addForm.elements.mode.value;
+      const rawTitle = ((document.getElementById("cp-new-source-title") || {}).value || "").trim();
       const courseContext = (document.getElementById("cp-new-source-module") || {}).value || "";
       if (submit) submit.disabled = true;
-      if (statusNode) statusNode.textContent = "Adding source…";
+      if (statusNode) statusNode.textContent = mode === "upload" ? "Reading files securely…" : "Adding source…";
+      function base64(bytes) {
+        let encoded = "";
+        for (let offset = 0; offset < bytes.length; offset += 0x8000) encoded += String.fromCharCode.apply(null, bytes.subarray(offset, offset + 0x8000));
+        return btoa(encoded);
+      }
+      function importError(message) {
+        const raw = String(message || "");
+        if (/missing credentials|openai_api_key|workload_identity|admin_api_key/i.test(raw)) {
+          return "Indexing is not configured yet. Ask the workspace owner to connect the search service, then retry.";
+        }
+        return raw || "The document could not be parsed.";
+      }
+      function intakeKey() {
+        if (window.crypto && typeof window.crypto.randomUUID === "function") return "source-" + window.crypto.randomUUID();
+        const bytes = new Uint8Array(16);
+        window.crypto.getRandomValues(bytes);
+        return "source-" + Array.from(bytes, function (value) { return value.toString(16).padStart(2, "0"); }).join("");
+      }
+      async function send(payload, idempotencyKey) {
+        if (sourceEnrollmentId) payload.enrollment_id = sourceEnrollmentId;
+        let response;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            response = await fetch(addForm.action, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+              credentials: "same-origin",
+              body: JSON.stringify(payload),
+            });
+            break;
+          } catch (error) {
+            if (attempt === 1) throw error;
+          }
+        }
+        if (!response || !response.ok) {
+          let message = response && response.status === 401 ? "Your session has expired. Sign in and try again." : "The source could not be queued.";
+          try { const data = await response.json(); message = data.detail || data.error || message; } catch (_) {}
+          throw new Error(message);
+        }
+        return response.json();
+      }
       try {
-        const response = await fetch(addForm.action, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ source_type: "link", origin: "web", title: title.trim(), source_url: url.trim(), course_context: courseContext.trim() }),
-        });
-        if (!response.ok) throw new Error(response.status === 401 ? "Your session has expired. Sign in and try again." : "The source could not be added. Check the link and try again.");
-        if (statusNode) statusNode.textContent = "Source saved as metadata. Ingestion has not started.";
-        window.setTimeout(function () { window.location.assign("/sources?import=saved"); }, 450);
+        let results = [];
+        if (mode === "upload") {
+          const files = selectedFiles.length ? selectedFiles : Array.from((document.getElementById("cp-source-files") || {}).files || []);
+          if (!files.length) throw new Error("Choose at least one PDF, PNG, JPEG, Markdown, or text file.");
+          files.forEach(function (file) {
+            const type = sourceType(file);
+            if (!type) throw new Error(file.name + " is not a PDF, PNG, JPEG, Markdown, or text file.");
+            if (!file.size) throw new Error(file.name + " is empty.");
+            if (file.size > maxFileBytes) throw new Error(file.name + " exceeds the 10 MiB file limit.");
+          });
+          for (const file of files) {
+            if (!isTextFile(file)) continue;
+            let content;
+            try {
+              content = await readText(file);
+            } catch (_) {
+              throw new Error(file.name + " could not be read.");
+            }
+            if (textExceedsLimit(content)) throw new Error(file.name + " exceeds the 2,000,000 character text limit.");
+          }
+          const failures = [];
+          for (let index = 0; index < files.length; index += 1) {
+            const file = files[index];
+            const type = sourceType(file);
+            if (statusNode) statusNode.textContent = "Importing " + (index + 1) + " of " + files.length + " · " + file.name;
+            const title = rawTitle && files.length === 1 ? rawTitle : file.name.replace(/\.(pdf|png|jpe?g|md|txt)$/i, "");
+            const payload = { mode: "upload", title, course_context: courseContext.trim() || null, source_type: type, filename: file.name };
+            if (type === "pdf" || type === "image") {
+              payload.content_base64 = base64(new Uint8Array(await file.arrayBuffer()));
+            } else {
+              payload.content = textContents.get(file) || await readText(file);
+            }
+            try {
+              results.push(await send(payload, intakeKey()));
+            } catch (error) {
+              failures.push(file.name + ": " + (error && error.message ? error.message : "Import failed"));
+            }
+          }
+          if (failures.length) {
+            const imported = results.length ? results.length + (results.length === 1 ? " file imported. " : " files imported. ") : "";
+            throw new Error(imported + failures.join(" "));
+          }
+        } else if (mode === "link") {
+          const url = (document.getElementById("cp-new-source-url") || {}).value || "";
+          if (!url.trim()) throw new Error("Enter a public link.");
+          let title = rawTitle;
+          if (!title) { try { title = new URL(url).hostname.replace(/^www\./, ""); } catch (_) {} }
+          results.push(await send({ mode: "link", title: title || "Reference link", course_context: courseContext.trim() || null, source_type: "link", source_url: url.trim() }, intakeKey()));
+        } else {
+          const content = (document.getElementById("cp-source-content") || {}).value || "";
+          const type = (document.getElementById("cp-paste-format") || {}).value || "plain_text";
+          if (!rawTitle) throw new Error("Give the pasted notes a clear title.");
+          if (!content.trim()) throw new Error("Paste some notes to import.");
+          results.push(await send({ mode: "paste", title: rawTitle, course_context: courseContext.trim() || null, source_type: type, content }, intakeKey()));
+        }
+        const duplicates = results.filter(function (item) { return item.duplicate; }).length;
+        const states = results.map(function (item) { return item.import_status || "queued"; });
+        const importState = states.includes("failed") ? "failed" : states.includes("paused") ? "paused" : states.includes("running") ? "running" : states.includes("queued") ? "queued" : states.every(function (state) { return state === "saved"; }) ? "saved" : "completed";
+        if (statusNode) statusNode.textContent = (importState === "saved" ? "Bookmark metadata saved. No processing was started" : "Source accepted. Persisted state: " + importState) + (duplicates ? " · " + duplicates + " replayed existing run" : "") + ".";
+        window.setTimeout(function () {
+          const importedSourceId = results.length === 1 && results[0].source ? results[0].source.id : null;
+          const importedRunId = results.length === 1 ? results[0].job_id : null;
+          const next = new URL(sourceEnrollmentId && sourceTopicId ? "/learning/" + sourceEnrollmentId : "/sources", window.location.origin);
+          next.searchParams.set("import", importState);
+          if (importedSourceId) next.searchParams.set("source", importedSourceId);
+          if (importedRunId) {
+            next.searchParams.set("run", importedRunId);
+            next.hash = "processing";
+          }
+          if (sourceEnrollmentId && sourceTopicId) {
+            next.searchParams.set("topic_id", sourceTopicId);
+            if (importedSourceId) next.searchParams.set("review_source", importedSourceId);
+          } else if (sourceEnrollmentId) {
+            next.searchParams.set(legacySourceScope ? "module_scope" : "enrollment_id", sourceEnrollmentId);
+          }
+          window.location.assign(next.pathname + next.search + next.hash);
+        }, 650);
       } catch (error) {
-        if (statusNode) statusNode.textContent = error && error.message ? error.message : "The source could not be added.";
+        if (statusNode) statusNode.textContent = error && error.message ? error.message : "The source could not be imported.";
         if (submit) submit.disabled = false;
       }
     });
 
     applyFilters();
+  }
+
+  function setupProcessing() {
+    const panel = document.querySelector("[data-processing-panel]");
+    if (!panel) return;
+    const errorNode = panel.querySelector("[data-processing-error]");
+    let delay = 1500;
+    let timer = 0;
+    let stopped = false;
+
+    function key() {
+      return "processing-" + (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : Date.now() + "-" + Math.random().toString(16).slice(2));
+    }
+    async function request(envelope) {
+      const response = await fetch("/api/processing", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(envelope),
+      });
+      if (!response.ok) {
+        let message = "Processing status could not be refreshed.";
+        try { const body = await response.json(); message = body.detail?.message || body.detail || body.error || message; } catch (_) {}
+        throw new Error(message);
+      }
+      return response.json();
+    }
+    function activeRuns() {
+      return Array.from(panel.querySelectorAll("[data-processing-run]")).filter(function (run) {
+        return run.dataset.runStatus === "queued" || run.dataset.runStatus === "running";
+      });
+    }
+    function apply(run) {
+      const node = panel.querySelector('[data-processing-run="' + CSS.escape(run.id) + '"]');
+      if (!node) return;
+      const previous = node.dataset.runStatus;
+      node.dataset.runStatus = run.status;
+      const pill = node.querySelector("header .status-pill");
+      if (pill) {
+        pill.textContent = run.status === "ready" ? "completed" : run.status;
+        pill.className = "status-pill status-" + (run.status === "ready" ? "good" : run.status === "failed" || run.status === "cancelled" ? "warn" : "info");
+      }
+      (run.stages || []).forEach(function (stage) {
+        const item = node.querySelector('[data-stage="' + CSS.escape(stage.name) + '"]');
+        if (!item) return;
+        item.dataset.status = stage.status;
+        const spans = item.querySelectorAll("span");
+        if (spans[0]) spans[0].textContent = "Status: " + stage.status;
+        if (spans[1]) spans[1].textContent = (stage.completed_at || stage.started_at || stage.available_at) + " · attempt " + stage.attempt_count + " of " + stage.max_attempts;
+      });
+      if ((run.status === "ready" || run.status === "failed" || run.status === "cancelled" || run.status === "paused") && previous !== run.status) {
+        stopped = true;
+        window.location.reload();
+      }
+    }
+    async function poll() {
+      window.clearTimeout(timer);
+      if (stopped || document.hidden) return;
+      const runs = activeRuns();
+      if (!runs.length) return;
+      try {
+        const values = await Promise.all(runs.map(function (node) { return request({ action: "run.status", id: node.dataset.processingRun }); }));
+        values.forEach(apply);
+        delay = Math.min(Math.round(delay * 1.5), 15000);
+        if (errorNode) errorNode.hidden = true;
+      } catch (error) {
+        delay = Math.min(delay * 2, 30000);
+        if (errorNode) {
+          errorNode.textContent = (error && error.message ? error.message : "Processing status could not be refreshed.") + " Existing timeline and source content are preserved.";
+          errorNode.hidden = false;
+        }
+      }
+      timer = window.setTimeout(poll, delay);
+    }
+    panel.addEventListener("click", async function (event) {
+      const button = event.target.closest("[data-processing-action]");
+      if (!button || button.disabled) return;
+      if (button.dataset.processingAction === "run.cancel" && !window.confirm("Cancel this active processing run? Completed outputs will remain available.")) return;
+      button.disabled = true;
+      button.setAttribute("aria-busy", "true");
+      try {
+        const run = await request({ action: button.dataset.processingAction, id: button.dataset.runId, idempotency_key: key(), payload: {} });
+        apply(run);
+        if (!stopped) window.location.reload();
+      } catch (error) {
+        if (errorNode) {
+          errorNode.textContent = error && error.message ? error.message : "The run could not be changed.";
+          errorNode.hidden = false;
+          errorNode.focus();
+        }
+        button.disabled = false;
+      } finally {
+        button.removeAttribute("aria-busy");
+      }
+    });
+    document.querySelectorAll("[data-manual-processing-trigger]").forEach(function (button) {
+      button.addEventListener("click", async function () {
+        const status = button.parentElement && button.parentElement.querySelector(".cp-form-status");
+        button.disabled = true;
+        if (status) status.textContent = "Queueing rebuild…";
+        try {
+          const run = await request({ action: "manual.trigger", idempotency_key: key(), payload: { source_id: button.dataset.sourceId } });
+          if (status) status.textContent = "Rebuild queued. Run " + run.id + ". The current Wiki remains available.";
+          window.setTimeout(function () { window.location.reload(); }, 500);
+        } catch (error) {
+          if (status) {
+            status.textContent = error && error.message ? error.message : "The rebuild could not be queued.";
+            status.setAttribute("role", "alert");
+            status.focus();
+          }
+          button.disabled = false;
+        }
+      });
+    });
+    document.addEventListener("visibilitychange", function () {
+      window.clearTimeout(timer);
+      if (!document.hidden) {
+        delay = 1500;
+        poll();
+      }
+    });
+    poll();
   }
 
   function setupWiki() {
@@ -552,6 +948,7 @@
     const history = [];
     let loading = false;
     let lastFailedMessage = null;
+    let requestGeneration = 0;
 
     function selectedCode() {
       if (!moduleSelect) return "CS2040S";
@@ -645,14 +1042,21 @@
       if (citationList.length) {
         const citationRow = document.createElement("div");
         citationRow.className = "answer-citations";
-        citationList.slice(0, 3).forEach(function (citation, index) {
+        citationList.forEach(function (citation, index) {
           const link = document.createElement("a");
           link.className = "citation";
-          link.href = safeCitationUrl(citation.url || "");
+          const citationUrl = citation.source_id
+            ? "/sources?source=" + encodeURIComponent(citation.source_id)
+              + (moduleSelect && moduleSelect.value ? "&enrollment_id=" + encodeURIComponent(moduleSelect.value) : "")
+            : citation.url || "";
+          link.href = safeCitationUrl(citationUrl);
           link.target = "_blank";
           link.rel = "noopener noreferrer";
           const number = document.createElement("span");
-          number.textContent = String(index + 1);
+          const referenceNumber = Number.isInteger(citation.reference_number) && citation.reference_number > 0
+            ? citation.reference_number
+            : index + 1;
+          number.textContent = String(referenceNumber);
           const citationText = (citation.title || "Source") + (citation.snippet ? " — " + citation.snippet : "");
           link.append(number, document.createTextNode(citationText));
           citationRow.appendChild(link);
@@ -700,6 +1104,7 @@
     }
 
     async function sendMessage(message, addStudent) {
+      const generation = requestGeneration += 1;
       loading = true;
       lastFailedMessage = null;
       input.disabled = true;
@@ -717,18 +1122,20 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             message: message,
-            module_id: moduleSelect && moduleSelect.value ? moduleSelect.value : null,
+            enrollment_id: moduleSelect && moduleSelect.value ? moduleSelect.value : null,
             history: priorHistory,
           }),
         });
         if (!response.ok) throw new Error("HTTP " + response.status);
         const data = await response.json();
+        if (generation !== requestGeneration) return;
         pending.remove();
         const reply = data.message || "No grounded answer was returned.";
         appendAnswer(reply, data.citations);
         history.push({ role: "assistant", content: reply });
         input.value = "";
       } catch (error) {
+        if (generation !== requestGeneration) return;
         pending.remove();
         history.length = 0;
         history.push.apply(history, priorHistory);
@@ -736,11 +1143,13 @@
         lastFailedMessage = message;
         input.value = message;
       } finally {
-        loading = false;
-        input.disabled = false;
-        syncSend();
-        input.focus();
-        log.scrollTop = log.scrollHeight;
+        if (generation === requestGeneration) {
+          loading = false;
+          input.disabled = false;
+          syncSend();
+          input.focus();
+          log.scrollTop = log.scrollHeight;
+        }
       }
     }
 
@@ -753,7 +1162,19 @@
     });
 
     input.addEventListener("input", syncSend);
-    if (moduleSelect) moduleSelect.addEventListener("change", syncModule);
+    if (moduleSelect) moduleSelect.addEventListener("change", function () {
+      requestGeneration += 1;
+      loading = false;
+      lastFailedMessage = null;
+      log.querySelectorAll(".chat-dynamic").forEach(function (turn) { turn.remove(); });
+      history.length = 0;
+      input.value = "";
+      input.disabled = false;
+      syncModule();
+      syncSend();
+      if (welcome) welcome.hidden = false;
+      if (clearButton) clearButton.disabled = true;
+    });
     form.addEventListener("submit", function (event) {
       event.preventDefault();
       const message = input.value.trim();
@@ -762,8 +1183,13 @@
     });
     if (clearButton) {
       clearButton.addEventListener("click", function () {
+        requestGeneration += 1;
+        loading = false;
+        lastFailedMessage = null;
         log.querySelectorAll(".chat-dynamic").forEach(function (turn) { turn.remove(); });
         history.length = 0;
+        input.disabled = false;
+        syncSend();
         if (welcome) welcome.hidden = false;
         clearButton.disabled = true;
       });
@@ -773,6 +1199,230 @@
     syncSend();
   }
 
+  function flashKey(prefix) {
+    if (window.crypto && window.crypto.randomUUID) return prefix + "-" + window.crypto.randomUUID();
+    return prefix + "-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+  }
+
+  async function flashRequest(action, options) {
+    options = options || {};
+    const response = await fetch("/api/flashcards", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({
+        action: action,
+        deck_id: options.deckId || null,
+        card_id: options.cardId || null,
+        expected_revision: options.revision || null,
+        idempotency_key: options.key || flashKey(action),
+        payload: options.payload === undefined ? null : options.payload,
+      }),
+    });
+    let body = null;
+    try { body = await response.json(); } catch (_) {}
+    if (!response.ok) {
+      const error = new Error(response.status === 409 ? "revision-conflict" : "request-failed");
+      error.status = response.status;
+      error.body = body;
+      throw error;
+    }
+    return body;
+  }
+
+  function setupFlashcardWorkspace() {
+    const area = document.querySelector("[data-flash-create]");
+    if (!area) return;
+    const form = area.querySelector("form");
+    const status = area.querySelector("[data-flash-create-status]");
+    const effective = area.querySelector("[data-scope-effective]");
+    if (!form || form.querySelector("fieldset:disabled")) return;
+    const enrollment = form.elements.enrollment_id;
+    const topics = form.elements.topic_ids;
+    const chunks = form.elements.source_chunk_ids;
+
+    async function loadChunks() {
+      const topic = form.elements.chunk_topic_id;
+      const source = form.elements.chunk_source_id;
+      chunks.innerHTML = "";
+      if (!enrollment.value || !topic.value || !source.value) return;
+      const records = await flashRequest("chunks", { deckId: enrollment.value, payload: { topic_id: topic.value, source_id: source.value } });
+      records.slice(0, 100).forEach(function (record) { chunks.add(new Option(record.citation + " · " + (record.excerpt || "current evidence"), record.chunk_id)); });
+    }
+
+    async function loadEnrollmentScope() {
+      if (!enrollment || !enrollment.value) return;
+      try {
+        const loadedTopics = await flashRequest("topics", { deckId: enrollment.value });
+        topics.innerHTML = "";
+        loadedTopics.filter(function (topic) { return !topic.archived; }).slice(0, 100).forEach(function (topic) {
+          topics.add(new Option(topic.title + " · " + topic.provenance, topic.id));
+        });
+        const chunkTopic = form.elements.chunk_topic_id;
+        chunkTopic.innerHTML = topics.innerHTML;
+        const candidates = await flashRequest("candidates", { deckId: enrollment.value });
+        const chunkSource = form.elements.chunk_source_id;
+        chunkSource.innerHTML = "";
+        candidates.filter(function (source) { return source.eligible && source.state === "ready"; }).slice(0, 100).forEach(function (source) {
+          chunkSource.add(new Option(source.title, source.id));
+        });
+        await loadChunks();
+      } catch (_) {
+        status.textContent = "Canonical topics or current chunks could not be loaded. Other stable scopes remain available.";
+      }
+    }
+    enrollment.addEventListener("change", loadEnrollmentScope);
+    form.elements.chunk_topic_id.addEventListener("change", function () { loadChunks().catch(function () { status.textContent = "Current chunks could not be loaded."; }); });
+    form.elements.chunk_source_id.addEventListener("change", function () { loadChunks().catch(function () { status.textContent = "Current chunks could not be loaded."; }); });
+    loadEnrollmentScope();
+
+    form.addEventListener("change", function () {
+      const selected = form.querySelector('[name="scope_type"]:checked');
+      const scope = selected ? selected.value : "";
+      form.querySelectorAll("[data-scope]").forEach(function (node) { node.hidden = node.dataset.scope !== scope; });
+      effective.textContent = "Effective scope: " + scope.replaceAll("_", " ") + ". Only the visible bounded selection will be sent.";
+    });
+    form.dispatchEvent(new Event("change"));
+    form.addEventListener("submit", async function (event) {
+      event.preventDefault();
+      const scope = form.querySelector('[name="scope_type"]:checked').value;
+      const control = form.elements[scope];
+      const values = control && control.multiple ? Array.from(control.selectedOptions).map(function (option) { return option.value; }) : [control && control.value].filter(Boolean);
+      if (!values.length) { status.textContent = "Select at least one item in the visible scope."; return; }
+      if (form.elements.regenerate.checked && !window.confirm("Regenerate creates a linked successor draft. The current matching draft remains in history. Continue?")) return;
+      const payload = { limit: Number(form.elements.limit.value), regenerate: form.elements.regenerate.checked };
+      if (form.elements.deck_title.value.trim()) payload.deck_title = form.elements.deck_title.value.trim();
+      payload[scope] = control.multiple ? values : values[0];
+      form.querySelector('button[type="submit"]').disabled = true;
+      status.textContent = "Creating or replaying the review draft…";
+      try {
+        const result = await flashRequest("generate", { payload: payload });
+        if (!result.deck) throw new Error("request-failed");
+        window.location.href = "/flashcards/drafts/" + encodeURIComponent(result.deck.id);
+      } catch (_) {
+        status.textContent = "The draft could not be created. Your scope selection is preserved; try again.";
+        form.querySelector('button[type="submit"]').disabled = false;
+      }
+    });
+  }
+
+  function setupDraftReview() {
+    const page = document.querySelector("[data-draft-review]");
+    if (!page) return;
+    let revision = Number(page.dataset.revision);
+    const deckId = page.dataset.deckId;
+    const status = page.querySelector("[data-draft-status]");
+    let pending = false;
+    const recoveryKey = "flashcard-draft-reapply-" + deckId;
+    try {
+      const recovery = JSON.parse(sessionStorage.getItem(recoveryKey) || "null");
+      if (recovery) {
+        page.querySelectorAll("form").forEach(function (form, index) {
+          const values = recovery[index] || {};
+          Object.keys(values).forEach(function (name) {
+            const control = form.elements[name];
+            if (!control) return;
+            if (control instanceof RadioNodeList) Array.from(control).forEach(function (item) { item.checked = item.value === values[name]; });
+            else control.value = values[name];
+          });
+        });
+        sessionStorage.removeItem(recoveryKey);
+        status.className = "cp-status-banner cp-status-info";
+        status.textContent = "Latest revision loaded. Your local field edits were reapplied; review and save them.";
+      }
+    } catch (_) {}
+    function ids(activeOnly) {
+      return Array.from(page.querySelectorAll("[data-card-id]"))
+        .filter(function (card) { return !activeOnly || card.dataset.discarded !== "true"; })
+        .map(function (card) { return card.dataset.cardId; });
+    }
+    function conflict() {
+      status.className = "cp-status-banner cp-status-error";
+      status.innerHTML = "This draft changed elsewhere. Your unsaved fields remain on this page. <button type=\"button\" data-conflict-reload>Reload latest and reapply my edits</button>";
+      status.querySelector("button").addEventListener("click", function () {
+        const snapshot = Array.from(page.querySelectorAll("form")).map(function (form) {
+          const values = {};
+          new FormData(form).forEach(function (value, name) { values[name] = value; });
+          return values;
+        });
+        try { sessionStorage.setItem(recoveryKey, JSON.stringify(snapshot)); } catch (_) {}
+        window.location.reload();
+      });
+    }
+    async function mutate(action, payload, cardId) {
+      if (pending) return null;
+      pending = true;
+      status.textContent = "Saving…";
+      try {
+        const result = await flashRequest(action, { deckId: deckId, cardId: cardId, revision: revision, payload: payload });
+        revision = result.revision || revision + 1;
+        page.dataset.revision = String(revision);
+        status.className = "cp-status-banner cp-status-info";
+        status.textContent = "Saved at revision " + revision + ".";
+        return result;
+      } catch (error) {
+        if (error.status === 409) conflict();
+        else { status.className = "cp-status-banner cp-status-error"; status.textContent = "The change was not saved. Your local edits are preserved; try again."; }
+        return null;
+      } finally { pending = false; }
+    }
+    const deckForm = page.querySelector("[data-deck-form]");
+    if (deckForm) deckForm.addEventListener("submit", async function (event) {
+      event.preventDefault();
+      if (await mutate("update_deck", { title: deckForm.elements.title.value.trim() })) window.location.reload();
+    });
+    page.querySelectorAll("[data-card-form]").forEach(function (form) {
+      form.addEventListener("submit", async function (event) {
+        event.preventDefault();
+        const card = form.closest("[data-card-id]");
+        const personal = form.elements.evidence_kind.value === "personal";
+        const citationParts = String(form.elements.citation_choice.value || "").split("|");
+        const sourceId = citationParts[0] || "";
+        const chunkId = citationParts[1] || "";
+        const wikiId = citationParts[2] || "";
+        if (!personal && (!sourceId || !chunkId)) {
+          status.className = "cp-status-banner cp-status-error";
+          status.textContent = "Select a current evidence citation, or clearly label this as a personal note.";
+          return;
+        }
+        const split = function (value) { return value.split(",").map(function (part) { return part.trim(); }).filter(Boolean); };
+        const citation = personal ? [] : [{ source_id: sourceId, source_chunk_id: chunkId, wiki_page_id: wikiId || null }];
+        const payload = { question: form.elements.question.value.trim(), answer: form.elements.answer.value.trim(), tags: split(form.elements.tags.value), topic_ids: split(form.elements.topic_ids.value), citations: citation, manual_note: personal };
+        if (await mutate("update_card", payload, card.dataset.cardId)) window.location.reload();
+      });
+    });
+    page.addEventListener("click", async function (event) {
+      const button = event.target.closest("button");
+      if (!button) return;
+      const card = button.closest("[data-card-id]");
+      let action = null, payload = null;
+      if (button.dataset.move) {
+        const list = page.querySelector("[data-card-list]");
+        const sibling = button.dataset.move === "up" ? card.previousElementSibling : card.nextElementSibling;
+        if (!sibling) return;
+        if (button.dataset.move === "up") list.insertBefore(card, sibling); else list.insertBefore(sibling, card);
+        action = "reorder"; payload = { card_ids: ids(false) };
+      } else if (button.hasAttribute("data-approve")) { action = "approve"; payload = { card_ids: [card.dataset.cardId] }; }
+      else if (button.hasAttribute("data-discard")) { action = "discard"; payload = { card_ids: [card.dataset.cardId] }; }
+      else if (button.hasAttribute("data-restore")) { action = "restore"; payload = { card_ids: [card.dataset.cardId] }; }
+      else if (button.hasAttribute("data-approve-selected")) {
+        const selected = Array.from(page.querySelectorAll("[data-card-select]:checked")).map(function (input) { return input.closest("[data-card-id]").dataset.cardId; });
+        if (!selected.length) { status.textContent = "Select at least one active card to approve."; return; }
+        action = "approve"; payload = { card_ids: selected };
+      }
+      else if (button.hasAttribute("data-approve-all")) { action = "approve"; payload = { card_ids: ids(true) }; }
+      else if (button.hasAttribute("data-publish")) { action = "publish"; payload = {}; }
+      else if (button.hasAttribute("data-archive") && window.confirm("Archive this draft? It will leave the active review list.")) { action = "archive"; payload = {}; }
+      else if (button.hasAttribute("data-retire") && window.confirm("Retire this approved deck? It will leave study, but its immutable snapshot remains.")) { action = "retire"; payload = {}; }
+      else if (button.hasAttribute("data-add-card")) {
+        const question = window.prompt("Personal-note prompt"); if (!question) return;
+        const answer = window.prompt("Personal-note answer"); if (!answer) return;
+        action = "add_card"; payload = { question: question, answer: answer, tags: [], topic_ids: [], citations: [], manual_note: true };
+      }
+      if (action && await mutate(action, payload, card && card.dataset.cardId)) window.location.reload();
+    });
+  }
+
   function setupFlashcards() {
     const review = document.getElementById("cp-flash-review");
     const flashcard = document.getElementById("cp-flashcard");
@@ -780,6 +1430,7 @@
     const revealButton = document.getElementById("cp-reveal-card");
     const answer = document.getElementById("cp-card-answer");
     const ratingPanel = document.getElementById("cp-rating-panel");
+    const skipButton = document.getElementById("cp-skip-card");
     const hint = document.getElementById("cp-review-hint");
     if (!review || !flashcard || !details || !revealButton || !answer || !ratingPanel) return;
 
@@ -787,12 +1438,25 @@
     const ratingForms = Array.from(document.querySelectorAll("form[data-flash-rate]"));
     let index = 0;
     let reviewed = Number((document.getElementById("cp-reviewed-count") || {}).textContent || 0);
+    let recalled = 0;
+    let missed = 0;
+    let confidenceTotal = 0;
+    let confidenceCount = 0;
+    let skipped = 0;
     let revealed = false;
     let submitting = false;
     let attemptStatus = null;
+    let pendingRating = null;
 
     details.style.display = "contents";
     flashcard.insertAdjacentElement("afterend", ratingPanel);
+    const deckId = ratingForms.length ? ratingForms[0].elements.deck_id.value : "";
+    const currentCardKey = deckId ? "flashcard-current-" + deckId : "";
+    if (currentCardKey) try {
+      const savedCardId = sessionStorage.getItem(currentCardKey);
+      const savedIndex = cards.findIndex(function (card) { return card.dataset.cardId === savedCardId; });
+      if (savedIndex >= 0) index = savedIndex;
+    } catch (_) {}
 
     document.querySelectorAll("[data-deck-url]").forEach(function (button) {
       button.addEventListener("click", function () {
@@ -813,11 +1477,18 @@
     function renderCurrent() {
       if (!cards.length) return;
       const card = cards[index % cards.length];
+      if (currentCardKey) try { sessionStorage.setItem(currentCardKey, card.dataset.cardId || ""); } catch (_) {}
       document.getElementById("cp-card-number").textContent = String((index % cards.length) + 1);
       document.getElementById("cp-card-question").textContent = card.dataset.question || "";
       document.getElementById("cp-card-answer-text").textContent = card.dataset.answer || "";
       document.getElementById("cp-card-source").textContent = card.dataset.source || "Source";
       document.getElementById("cp-card-page").textContent = card.dataset.page || "";
+      const sourceHref = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(card.dataset.sourceId || "")
+        ? "/sources?source=" + encodeURIComponent(card.dataset.sourceId)
+        : "/sources";
+      [document.getElementById("cp-card-source-link"), document.getElementById("cp-card-context-link")].forEach(function (link) {
+        if (link) link.href = sourceHref;
+      });
       document.querySelectorAll('[name="card_id"]').forEach(function (field) {
         field.value = card.dataset.cardId || "";
       });
@@ -827,16 +1498,28 @@
     function updateEvidence() {
       const count = document.getElementById("cp-reviewed-count");
       const evidence = document.getElementById("cp-evidence-reviewed");
-      const recall = document.getElementById("cp-evidence-recall");
+      const recalledNode = document.getElementById("cp-evidence-recalled");
+      const missedNode = document.getElementById("cp-evidence-missed");
+      const confidenceNode = document.getElementById("cp-evidence-confidence");
+      const skippedNode = document.getElementById("cp-evidence-skipped");
       const bar = document.getElementById("cp-review-bar");
       if (count) count.textContent = String(reviewed);
       if (evidence) evidence.textContent = String(reviewed);
-      if (recall) recall.textContent = reviewed ? "80%" : "—";
+      if (recalledNode) recalledNode.textContent = String(recalled);
+      if (missedNode) missedNode.textContent = String(missed);
+      if (confidenceNode) confidenceNode.textContent = confidenceCount ? (confidenceTotal / confidenceCount).toFixed(1) : "—";
+      if (skippedNode) skippedNode.textContent = String(skipped);
       if (bar) bar.style.width = Math.min(100, reviewed / 8 * 100) + "%";
     }
 
-    function rate() {
+    function rate(saved) {
       reviewed += 1;
+      if (saved.is_correct === true) recalled += 1;
+      else missed += 1;
+      if (Number.isInteger(saved.confidence)) {
+        confidenceTotal += saved.confidence;
+        confidenceCount += 1;
+      }
       index = cards.length ? (index + 1) % cards.length : 0;
       updateEvidence();
       renderCurrent();
@@ -861,10 +1544,22 @@
       });
     }
 
+    function skipCurrent() {
+      if (pendingRating) {
+        showFailure("Resolve the pending " + pendingRating.rating + " save before skipping this card.");
+        return;
+      }
+      skipped += 1;
+      index = cards.length ? (index + 1) % cards.length : 0;
+      updateEvidence();
+      renderCurrent();
+    }
+
     revealButton.addEventListener("click", function (event) {
       event.preventDefault();
       setRevealed(true);
     });
+    if (skipButton) skipButton.addEventListener("click", skipCurrent);
     ratingForms.forEach(function (form) {
       form.addEventListener("submit", async function (event) {
         event.preventDefault();
@@ -872,27 +1567,27 @@
         if (attemptStatus) attemptStatus.hidden = true;
         setSubmitting(true);
         try {
-          const response = await fetch(form.action, { method: "POST", body: new FormData(form) });
-          if (response.status === 401) {
-            throw new Error("unauthorized");
+          const cardId = form.elements.card_id.value;
+          const rating = form.elements.rating.value;
+          if (pendingRating && pendingRating.cardId === cardId && pendingRating.rating !== rating) {
+            showFailure("The previous save outcome is unknown. Retry the same " + pendingRating.rating + " rating before choosing a different rating.");
+            return;
           }
-          if (!response.ok) {
-            throw new Error("request failed");
+          if (!pendingRating || pendingRating.cardId !== cardId) {
+            pendingRating = { cardId: cardId, rating: rating, key: flashKey("rating") };
           }
-          if (response.redirected) {
-            const destination = new URL(response.url, window.location.href);
-            if (destination.pathname === "/login") {
-              throw new Error("unauthorized");
-            }
-            if (destination.searchParams.get("attempt") !== "saved") {
-              throw new Error("save failed");
-            }
-          }
-          rate();
+          const saved = await flashRequest("attempt", {
+            deckId: form.elements.deck_id.value,
+            cardId: cardId,
+            key: pendingRating.key,
+            payload: { rating: pendingRating.rating, answer_text: "" },
+          });
+          pendingRating = null;
+          rate(saved);
         } catch (error) {
-          const message = error && error.message === "unauthorized"
+          const message = error && error.status === 401
             ? "Your session has expired. This answer was not recorded; sign in and try again."
-            : "Practice result could not be saved. This card is still open and your answer was not recorded; try again.";
+            : "The save outcome is unknown. This card and rating remain open; retry the same rating with the same interaction key.";
           showFailure(message);
         } finally {
           setSubmitting(false);
@@ -903,7 +1598,10 @@
     document.addEventListener("keydown", function (event) {
       const target = event.target;
       if (target && /INPUT|TEXTAREA|SELECT/.test(target.tagName)) return;
-      if (event.code === "Space") {
+      if (event.key.toLowerCase() === "s" && skipButton && !submitting) {
+        event.preventDefault();
+        skipCurrent();
+      } else if (event.code === "Space") {
         event.preventDefault();
         if (!revealed) setRevealed(true);
       } else if (revealed && !submitting && /^[1-4]$/.test(event.key)) {

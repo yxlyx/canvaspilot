@@ -20,12 +20,12 @@ pub fn render(req: mer.Request) mer.Response {
     themeChoice(w, "dark", "Dark", "Charcoal surfaces and soft grey contrast", preferences.theme) catch return mer.internalError("appearance render failed");
     w.print("</fieldset><fieldset class=\"cp-setting-radios\"><legend>Motion</legend><label><input type=\"radio\" name=\"motion_preference\" value=\"system\"{s}><span><strong>Follow system</strong><small>Use your device motion preference.</small></span></label><label><input type=\"radio\" name=\"motion_preference\" value=\"reduce\"{s}><span><strong>Reduce motion</strong><small>Keep transitions and movement to a minimum.</small></span></label></fieldset>", .{ if (equal(preferences.motion_preference, "system")) " checked" else "", if (equal(preferences.motion_preference, "reduce")) " checked" else "" }) catch return mer.internalError("appearance render failed");
     if (demo) w.writeAll("<p class=\"cp-settings-readonly\">Theme previews work in this synthetic view, but account preferences are not saved.</p>") catch return mer.internalError("appearance render failed") else w.writeAll("<button class=\"cp-btn cp-btn-primary\" type=\"submit\">Save appearance</button><p class=\"cp-form-status\" role=\"status\" tabindex=\"-1\"></p>") catch return mer.internalError("appearance render failed");
-    w.writeAll("</form></section></div><script src=\"/settings.js?v=20260724-2\" defer></script>") catch return mer.internalError("appearance render failed");
+    w.writeAll("</form></section></div><script src=\"/settings.js?v=20260728-1\" defer></script>") catch return mer.internalError("appearance render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
 fn demoPreferences() lib.types.UserPreferenceResponse {
-    return .{ .theme = "system", .motion_preference = "system", .default_module_id = null, .daily_review_target = 10, .reminder_daily_review = true, .reminder_processing_attention = true, .reminder_paper_review = true, .reminder_health_attention = true, .updated_at = "" };
+    return .{ .theme = "system", .motion_preference = "system", .default_module_id = null, .default_enrollment_id = null, .daily_review_target = 10, .reminder_daily_review = true, .reminder_processing_attention = true, .reminder_paper_review = true, .reminder_health_attention = true, .updated_at = "" };
 }
 
 fn equal(a: []const u8, b: []const u8) bool {

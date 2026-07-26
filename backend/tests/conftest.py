@@ -1,9 +1,34 @@
 import os
+import re
 import uuid
 from datetime import UTC, datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
+
+
+def _configure_test_database() -> bool:
+    value = os.getenv("TEST_DATABASE_URL")
+    if value is None:
+        return False
+    try:
+        url = make_url(value)
+    except ArgumentError as error:
+        pytest.exit(f"refusing unsafe TEST_DATABASE_URL: {error}")
+    database = url.database or ""
+    if (
+        url.drivername != "postgresql+asyncpg"
+        or url.query
+        or not re.search(r"(^|[_-])test($|[_-])", database, re.IGNORECASE)
+    ):
+        pytest.exit("refusing unsafe TEST_DATABASE_URL: expected a PostgreSQL test database")
+    os.environ["DATABASE_URL"] = value
+    return True
+
+
+HAS_SAFE_TEST_DATABASE = _configure_test_database()
 
 os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("SESSION_SECRET", "test-session-secret-with-at-least-32-bytes")
@@ -16,9 +41,11 @@ from app.main import app  # noqa: E402
 from app.models.user import User  # noqa: E402
 
 DATABASE_TEST_MODULES = {
+    "test_flashcard_drafts_postgresql.py",
     "test_flashcards.py",
     "test_ingestion_jobs.py",
     "test_m3_api.py",
+    "test_processing.py",
     "test_retrieval_chat_integration.py",
     "test_search.py",
     "test_source_imports.py",
@@ -33,6 +60,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     for item in items:
         if item.path.name in DATABASE_TEST_MODULES:
             item.add_marker(pytest.mark.database)
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    if item.get_closest_marker("database") is not None and not HAS_SAFE_TEST_DATABASE:
+        pytest.exit("database tests require a safe TEST_DATABASE_URL")
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:

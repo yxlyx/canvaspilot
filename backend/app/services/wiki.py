@@ -1,3 +1,4 @@
+import hashlib
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -7,11 +8,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.exceptions import NotFoundError, WikiBaseError
+from app.models.curriculum import ModuleEnrollment
 from app.models.m3 import WikiRevision
 from app.models.source import Source, SourceStatus
-from app.models.source_chunk import SourceChunk
+from app.models.source_chunk import (
+    SourceChunk,
+    active_source_chunk_predicate,
+    is_active_source_chunk,
+)
 from app.models.user import User
 from app.models.wiki import WikiCitation, WikiPage
+from app.schemas.wiki import WikiPageResponse
+from app.services.curriculum_coverage import current_confirmed_source_ids
 
 
 @dataclass
@@ -40,6 +48,9 @@ class PageDraft:
 
 _slug_re = re.compile(r"[^a-z0-9]+")
 _wiki_link_re = re.compile(r"\[\[([^\]]+)\]\]")
+_generated_backlinks_re = re.compile(
+    r"(?m)^## Backlinks\n\n(?:- \[\[[^\n]+\]\](?:\n|$))+(?=\n## References\n|\Z)"
+)
 MAX_WIKI_PAGES = 99
 MAX_WIKI_CONTENT_CHARS = 5_000_000
 
@@ -126,7 +137,10 @@ def _citation_from_source(source: Source) -> CitationDraft:
 
 
 def build_source_page_draft(source: Source, slug: str) -> PageDraft:
-    chunks = sorted(source.chunks, key=lambda chunk: chunk.chunk_index)
+    chunks = sorted(
+        (chunk for chunk in source.chunks if is_active_source_chunk(chunk, source)),
+        key=lambda chunk: chunk.chunk_index,
+    )
     sections: list[str] = []
     citations: list[CitationDraft] = []
 
@@ -237,7 +251,11 @@ async def _load_sources(
     content_size_statement = (
         select(func.coalesce(func.sum(func.length(SourceChunk.content)), 0))
         .join(Source, SourceChunk.source_id == Source.id)
-        .where(Source.user_id == user.id, Source.status == SourceStatus.READY)
+        .where(
+            Source.user_id == user.id,
+            Source.status == SourceStatus.READY,
+            active_source_chunk_predicate(SourceChunk, Source),
+        )
     )
     if source_ids is not None:
         content_size_statement = content_size_statement.where(Source.id.in_(source_ids))
@@ -252,9 +270,15 @@ async def _load_sources(
         .where(
             Source.user_id == user.id,
             Source.status == SourceStatus.READY,
-            Source.chunks.any(),
+            Source.chunks.any(active_source_chunk_predicate(SourceChunk, Source)),
         )
-        .options(selectinload(Source.chunks))
+        .options(
+            selectinload(
+                Source.chunks.and_(
+                    SourceChunk.source.has(active_source_chunk_predicate(SourceChunk, Source))
+                )
+            )
+        )
         .order_by(Source.title.asc(), Source.id.asc())
         .limit(MAX_WIKI_PAGES + 1)
     )
@@ -324,6 +348,8 @@ async def compile_workspace_wiki(
     user: User,
     db: AsyncSession,
     source_ids: list[uuid.UUID] | None = None,
+    *,
+    commit: bool = True,
 ) -> list[WikiPage]:
     await _lock_user_wiki(user, db)
 
@@ -371,6 +397,7 @@ async def compile_workspace_wiki(
     for draft in drafts:
         page = source_pages.get(draft.source_ids[0])
         markdown = render_page_markdown(draft, pages_by_slug)
+        input_fingerprint = hashlib.sha256(markdown.encode()).hexdigest()
         created = page is None
         if page is None:
             page = WikiPage(
@@ -393,6 +420,7 @@ async def compile_workspace_wiki(
                 page.markdown != markdown,
                 page.source_ids != draft.source_ids,
                 page.backlinks != draft.backlinks,
+                page.input_fingerprint != input_fingerprint,
             )
         )
         page.slug = draft.slug
@@ -402,6 +430,7 @@ async def compile_workspace_wiki(
         page.summary = draft.summary
         page.source_ids = draft.source_ids
         page.citation_count = len(draft.citations)
+        page.input_fingerprint = input_fingerprint
         page.backlinks = draft.backlinks
         page.citations.clear()
         for citation in draft.citations:
@@ -425,6 +454,7 @@ async def compile_workspace_wiki(
         stored_pages.append(page)
 
     index_markdown = render_index_page(drafts)
+    index_fingerprint = hashlib.sha256(index_markdown.encode()).hexdigest()
     index_created = index_page is None
     if index_page is None:
         index_page = WikiPage(
@@ -441,7 +471,11 @@ async def compile_workspace_wiki(
         )
         db.add(index_page)
         await db.flush()
-    index_changed = index_created or index_page.markdown != index_markdown
+    index_changed = (
+        index_created
+        or index_page.markdown != index_markdown
+        or index_page.input_fingerprint != index_fingerprint
+    )
     index_page.slug = "index"
     index_page.is_current = True
     index_page.title = "Workspace Wiki Index"
@@ -449,6 +483,7 @@ async def compile_workspace_wiki(
     index_page.summary = f"{len(drafts)} compiled pages"
     index_page.source_ids = [source.id for source in sources]
     index_page.citation_count = sum(len(draft.citations) for draft in drafts)
+    index_page.input_fingerprint = index_fingerprint
     index_page.backlinks = []
     index_page.citations.clear()
     if index_changed:
@@ -466,34 +501,108 @@ async def compile_workspace_wiki(
             page.is_current = False
             page.slug = f"__retired-{page.id}"
 
-    await db.commit()
-    for page in stored_pages:
-        await db.refresh(page, attribute_names=["citations", "updated_at"])
+    if commit:
+        await db.commit()
+        for page in stored_pages:
+            await db.refresh(page, attribute_names=["citations", "updated_at"])
+    else:
+        await db.flush()
     return stored_pages
 
 
-async def list_wiki_pages(user: User, db: AsyncSession) -> list[WikiPage]:
+async def _wiki_source_scope(
+    user: User, enrollment_id: uuid.UUID, db: AsyncSession
+) -> set[uuid.UUID]:
+    enrollment = await db.scalar(
+        select(ModuleEnrollment).where(
+            ModuleEnrollment.id == enrollment_id,
+            ModuleEnrollment.user_id == user.id,
+            ModuleEnrollment.archived.is_(False),
+        )
+    )
+    if enrollment is None:
+        raise NotFoundError("Active module enrollment not found")
+    direct_ids = set(
+        (
+            await db.execute(
+                select(Source.id).where(
+                    Source.user_id == user.id,
+                    Source.enrollment_id == enrollment.id,
+                )
+            )
+        ).scalars()
+    )
+    return direct_ids | await current_confirmed_source_ids(enrollment, db)
+
+
+def _scoped_page_response(page: WikiPage, allowed_pages: dict[str, str]) -> WikiPageResponse:
+    backlinks = [slug for slug in page.backlinks if slug in allowed_pages]
+    backlink_lines = [f"- [[{allowed_pages[slug]}]]" for slug in backlinks]
+    replacement = "## Backlinks\n\n" + "\n".join(backlink_lines) if backlink_lines else ""
+    markdown = page.markdown
+    if page.backlinks:
+        matches = list(_generated_backlinks_re.finditer(markdown))
+        if matches:
+            generated = matches[-1]
+            markdown = markdown[: generated.start()] + replacement + markdown[generated.end() :]
+    markdown = markdown.strip() + "\n"
+    response = WikiPageResponse.model_validate(page)
+    return response.model_copy(update={"backlinks": backlinks, "markdown": markdown})
+
+
+async def list_wiki_pages(
+    user: User, db: AsyncSession, enrollment_id: uuid.UUID | None = None
+) -> list[WikiPage | WikiPageResponse]:
+    statement = select(WikiPage).where(WikiPage.user_id == user.id, WikiPage.is_current.is_(True))
+    if enrollment_id is not None:
+        source_ids = await _wiki_source_scope(user, enrollment_id, db)
+        if not source_ids:
+            return []
+        statement = statement.where(
+            WikiPage.page_type != "index", WikiPage.source_ids.overlap(list(source_ids))
+        )
     result = await db.execute(
-        select(WikiPage)
-        .where(WikiPage.user_id == user.id, WikiPage.is_current.is_(True))
-        .options(selectinload(WikiPage.citations))
+        statement.options(selectinload(WikiPage.citations))
         .order_by(WikiPage.page_type.asc(), WikiPage.title.asc())
         .limit(MAX_WIKI_PAGES + 1)
     )
-    return list(result.scalars().unique().all())
+    pages = list(result.scalars().unique().all())
+    if enrollment_id is not None:
+        allowed_pages = {page.slug: page.title for page in pages}
+        return [_scoped_page_response(page, allowed_pages) for page in pages]
+    return pages
 
 
-async def get_wiki_page(user: User, slug: str, db: AsyncSession) -> WikiPage:
-    result = await db.execute(
-        select(WikiPage)
-        .where(
-            WikiPage.user_id == user.id,
-            WikiPage.slug == slug,
-            WikiPage.is_current.is_(True),
-        )
-        .options(selectinload(WikiPage.citations))
+async def get_wiki_page(
+    user: User,
+    slug: str,
+    db: AsyncSession,
+    enrollment_id: uuid.UUID | None = None,
+) -> WikiPage | WikiPageResponse:
+    statement = select(WikiPage).where(
+        WikiPage.user_id == user.id,
+        WikiPage.slug == slug,
+        WikiPage.is_current.is_(True),
     )
+    allowed_pages: dict[str, str] | None = None
+    if enrollment_id is not None:
+        source_ids = await _wiki_source_scope(user, enrollment_id, db)
+        if not source_ids:
+            raise NotFoundError("Wiki page not found")
+        scope_conditions = (
+            WikiPage.user_id == user.id,
+            WikiPage.is_current.is_(True),
+            WikiPage.page_type != "index",
+            WikiPage.source_ids.overlap(list(source_ids)),
+        )
+        allowed_pages = dict(
+            (await db.execute(select(WikiPage.slug, WikiPage.title).where(*scope_conditions))).all()
+        )
+        statement = statement.where(*scope_conditions[1:])
+    result = await db.execute(statement.options(selectinload(WikiPage.citations)))
     page = result.scalar_one_or_none()
     if page is None:
         raise NotFoundError("Wiki page not found")
+    if allowed_pages is not None:
+        return _scoped_page_response(page, allowed_pages)
     return page

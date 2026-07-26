@@ -16,3 +16,4 @@ pub const m3 = @import("lib/m3.zig");
 pub const mutation = @import("lib/mutation.zig");
 pub const navigation = @import("lib/navigation.zig");
 pub const settings_ui = @import("lib/settings_ui.zig");
+pub const processing_ui = @import("lib/processing_ui.zig");

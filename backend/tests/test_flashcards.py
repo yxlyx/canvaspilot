@@ -392,7 +392,18 @@ async def test_attempt_logging_creates_learning_evidence(flashcard_client):
         "/api/flashcards/decks/generate",
         json={"source_ids": [str(source.id)], "limit": 1},
     )
-    card = deck_response.json()["deck"]["cards"][0]
+    deck = deck_response.json()["deck"]
+    card = deck["cards"][0]
+    approve_response = await client.post(
+        f"/api/flashcards/drafts/{deck['id']}/approve",
+        json={"expected_revision": deck["revision"], "card_ids": [card["id"]]},
+    )
+    assert approve_response.status_code == 200
+    publish_response = await client.post(
+        f"/api/flashcards/decks/{deck['id']}/publish",
+        json={"expected_revision": approve_response.json()["revision"]},
+    )
+    assert publish_response.status_code == 200
 
     response = await client.post(
         f"/api/flashcards/cards/{card['id']}/attempts",
@@ -403,7 +414,7 @@ async def test_attempt_logging_creates_learning_evidence(flashcard_client):
     attempt = response.json()
     assert attempt["card_id"] == card["id"]
     assert attempt["is_correct"] is True
-    assert attempt["confidence"] == 4
+    assert attempt["confidence"] == 3
     evidence = attempt["evidence"]
     assert evidence["evidence_type"] == "flashcard_attempt"
     assert evidence["topic_tag"] == "calculus"

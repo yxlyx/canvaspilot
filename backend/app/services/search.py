@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.source_chunk import active_source_chunk_sql
 from app.schemas.search import WorkspaceSearchResult
 from app.services.embedding import embed_query
 
@@ -136,7 +137,7 @@ async def _source_chunk_candidates(
 
     result = await db.execute(
         text(
-            """
+            f"""
             SELECT *
             FROM (
                 SELECT sc.id AS source_chunk_id, sc.content, sc.citation_ref,
@@ -165,6 +166,7 @@ async def _source_chunk_candidates(
                 FROM source_chunks sc
                 JOIN sources s ON sc.source_id = s.id
                 WHERE s.user_id = :user_id AND s.status = 'ready' AND sc.embedding IS NOT NULL
+                  AND {active_source_chunk_sql("sc", "s")}
             ) ranked
             WHERE (1.0 - distance) >= :score_threshold
             ORDER BY boosted_score DESC, updated_at DESC, title ASC

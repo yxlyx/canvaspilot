@@ -21,7 +21,7 @@ pub fn render(req: mer.Request) mer.Response {
     choice(w, "reminder_health_attention", "A health finding needs action", "Warnings and failures affecting evidence quality.", preferences.reminder_health_attention) catch return mer.internalError("notification settings render failed");
     w.writeAll("</fieldset>") catch return mer.internalError("notification settings render failed");
     if (demo) w.writeAll("<p class=\"cp-settings-readonly\">This synthetic preview is read-only.</p>") catch return mer.internalError("notification settings render failed") else w.writeAll("<button class=\"cp-btn cp-btn-primary\" type=\"submit\">Save notifications</button><p class=\"cp-form-status\" role=\"status\" tabindex=\"-1\"></p>") catch return mer.internalError("notification settings render failed");
-    w.writeAll("</form></section></div><script src=\"/settings.js?v=20260724-2\" defer></script>") catch return mer.internalError("notification settings render failed");
+    w.writeAll("</form></section></div><script src=\"/settings.js?v=20260728-1\" defer></script>") catch return mer.internalError("notification settings render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
@@ -30,5 +30,5 @@ fn choice(w: *@import("std").Io.Writer, name: []const u8, title: []const u8, det
 }
 
 fn demoPreferences() lib.types.UserPreferenceResponse {
-    return .{ .theme = "system", .motion_preference = "system", .default_module_id = null, .daily_review_target = 10, .reminder_daily_review = true, .reminder_processing_attention = true, .reminder_paper_review = true, .reminder_health_attention = true, .updated_at = "" };
+    return .{ .theme = "system", .motion_preference = "system", .default_module_id = null, .default_enrollment_id = null, .daily_review_target = 10, .reminder_daily_review = true, .reminder_processing_attention = true, .reminder_paper_review = true, .reminder_health_attention = true, .updated_at = "" };
 }

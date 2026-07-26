@@ -31,6 +31,9 @@ class UserPreference(TimestampMixin, Base):
     default_module_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("modules.id", ondelete="SET NULL")
     )
+    default_enrollment_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("module_enrollments.id", ondelete="SET NULL")
+    )
     daily_review_target: Mapped[int] = mapped_column(Integer, default=10, server_default="10")
     reminder_daily_review: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"

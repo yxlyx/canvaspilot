@@ -11,7 +11,8 @@ FROM python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed3356887313
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN adduser -S -u 10001 -h /home/wikibase wikibase
+RUN apk add --no-cache tesseract-ocr tesseract-ocr-data-eng \
+    && adduser -S -u 10001 -h /home/wikibase wikibase
 WORKDIR /app
 COPY --from=build /install /usr/local
 COPY alembic.ini ./

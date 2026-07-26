@@ -3,8 +3,8 @@
 // Proposal M1 1c: "user can ask a question, system retrieves relevant chunks
 // via cosine similarity and returns a grounded response with source links".
 //
-// The browser POSTs JSON {message, module_id, history} here. We re-serialize
-// the body, forward it to FastAPI /api/chat with the user's bearer token
+// The browser POSTs a message, optional local enrollment scope, and history here.
+// We re-serialize the body and forward it to FastAPI /api/chat with the user's bearer token
 // (read from the HttpOnly cp_session cookie — never exposed to the browser),
 // then read the Server-Sent Events response, aggregate the streamed tokens
 // and citations, and return a single JSON {message, citations, grounded}
@@ -26,6 +26,7 @@ const log = std.log.scoped(.chat_api);
 const ChatBody = struct {
     message: []const u8 = "",
     module_id: ?[]const u8 = null,
+    enrollment_id: ?[]const u8 = null,
     history: []const lib.types.ChatMessage = &.{},
 };
 
@@ -35,6 +36,13 @@ pub fn render(req: mer.Request) mer.Response {
     if (req.method != .POST) {
         return .{ .status = .method_not_allowed, .content_type = .text, .body = "POST only" };
     }
+
+    const explicit_demo = lib.m3.isExplicitDemo(req);
+    const session = lib.session.fromRequest(req);
+    if (!explicit_demo and session.isAuthenticated()) {
+        if (lib.mutation.guard(req, 128 * 1024)) |response| return response;
+    }
+
     if (req.body.len == 0) {
         return mer.badRequest("expected JSON body");
     }
@@ -53,18 +61,21 @@ pub fn render(req: mer.Request) mer.Response {
     if (body.message.len == 0) {
         return mer.badRequest("empty message");
     }
-    if (body.message.len > 8000 or body.history.len > 40 or (body.module_id != null and body.module_id.?.len > 256)) {
+    if (body.message.len > 8000 or body.history.len > 40 or
+        (body.module_id != null and body.module_id.?.len > 256) or
+        (body.enrollment_id != null and body.enrollment_id.?.len > 256))
+    {
         return mer.badRequest("chat request is too large");
     }
+    if (body.module_id != null and body.enrollment_id != null) return mer.badRequest("choose one chat scope");
     for (body.history) |entry| {
         if (entry.content.len > 8000) return mer.badRequest("chat history entry is too large");
     }
 
-    if (lib.m3.isExplicitDemo(req)) {
+    if (explicit_demo) {
         return mockReply(req.allocator, body.message, true);
     }
 
-    const session = lib.session.fromRequest(req);
     if (!session.isAuthenticated()) {
         return .{
             .status = .unauthorized,
@@ -78,6 +89,24 @@ pub fn render(req: mer.Request) mer.Response {
         return mer.typedJson(req.allocator, reply);
     } else |e| {
         log.warn("chat: authenticated backend error: {s}", .{@errorName(e)});
+        if (e == error.AuthFailed) {
+            const cookies = req.allocator.alloc(mer.SetCookie, 1) catch {
+                return mer.internalError("could not clear session cookie");
+            };
+            cookies[0] = lib.session.clearCookie();
+            return mer.withCookies(.{
+                .status = .unauthorized,
+                .content_type = .json,
+                .body = "{\"error\":\"authentication required\"}",
+            }, cookies);
+        }
+        if (e == error.Forbidden) {
+            return .{
+                .status = .forbidden,
+                .content_type = .json,
+                .body = "{\"error\":\"chat access forbidden\"}",
+            };
+        }
         return .{
             .status = .bad_gateway,
             .content_type = .json,
@@ -93,6 +122,7 @@ const BackendError = error{
     BackendBadStatus,
     SerializeFailed,
     AuthFailed,
+    Forbidden,
 };
 
 fn callBackend(
@@ -129,7 +159,8 @@ fn callBackend(
     defer res.deinit(allocator);
 
     const status_int: u16 = @intFromEnum(res.status);
-    if (status_int == 401 or status_int == 403) return error.AuthFailed;
+    if (status_int == 401) return error.AuthFailed;
+    if (status_int == 403) return error.Forbidden;
     if (status_int >= 400) {
         log.warn("chat: backend returned HTTP {d}", .{status_int});
         return error.BackendBadStatus;

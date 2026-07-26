@@ -105,9 +105,23 @@
     try {
       const response = await request(form, body, release);
       if (!response.ok) { let message = "Request failed (" + response.status + ")."; try { message = errorMessage(await response.json(), message); } catch (_) {} throw new Error(message); }
+      if (body.action === "provider.auth.start") {
+        const result = await response.json();
+        if (!result.authorization_url) throw new Error("The provider did not return a sign-in URL.");
+        status(form, "Opening secure browser sign-in…", false);
+        window.location.assign(result.authorization_url);
+        return;
+      }
+      if (body.action === "provider.save" && form.hasAttribute("data-provider-save")) {
+        status(form, "Configuration saved. Testing the connection…", false);
+        const tested = await request(form, { action: "provider.test", id: body.payload.provider, idempotency_key: idempotencyKey() }, release);
+        if (!tested.ok) { let message = "The connection test failed (" + tested.status + ")."; try { message = errorMessage(await tested.json(), message); } catch (_) {} throw new Error(message); }
+        const result = await tested.json();
+        if (result.status !== "connected") throw new Error(result.last_error || "The provider rejected the key, endpoint, or model.");
+      }
       status(form, "Saved.", false);
       const target = form.dataset.success;
-      if (target !== undefined) window.location.assign(target || window.location.href); else release();
+      if (target !== undefined) { release(); window.location.assign(target || window.location.href); } else release();
     } catch (error) { status(form, error.message || "Request failed.", true); release(); }
   }
   document.querySelectorAll("[data-m3-form]").forEach((form) => {
@@ -132,7 +146,7 @@
       const body = { action: "paper.upload", payload: { filename: file.name, content_type: fallback, content_base64: btoa(binary) } };
       const response = await request(upload, body, release);
       if (!response.ok) { let message = "Upload failed (" + response.status + ")."; try { message = errorMessage(await response.json(), message); } catch (_) {} throw new Error(message); }
-      status(upload, "Saved.", false); window.location.assign(upload.dataset.success || window.location.href);
+      status(upload, "Saved.", false); release(); window.location.assign(upload.dataset.success || window.location.href);
     } catch (error) { status(upload, error.message || "Upload failed.", true); release(); }
   });
 

@@ -1,5 +1,6 @@
 (() => {
   const forms = document.querySelectorAll("[data-settings-form]");
+  const notificationsLedger = document.querySelector(".cp-notification-ledger");
   const message = (form, text, error = false, focusStatus = true) => {
     const status = form.querySelector(".cp-form-status");
     if (!status) return;
@@ -32,6 +33,74 @@
     const name = explicit || mapped;
     if (!name) return null;
     return form.querySelector(`[name="${CSS.escape(String(name))}"]`);
+  };
+
+  const syncNotificationBell = async () => {
+    try {
+      const response = await fetch("/api/notifications/unread-count", {
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+      });
+      if (!response.ok) return;
+      const body = await response.json();
+      const count = Number.isFinite(body.unread_count) ? Math.max(0, body.unread_count) : 0;
+      document.querySelectorAll("[data-cp-notification-link]").forEach((link) => {
+        const dot = link.querySelector("i");
+        if (dot) dot.hidden = count === 0;
+        link.setAttribute("aria-label", count ? `Notifications, ${count} unread` : "Notifications");
+      });
+    } catch (_) {}
+  };
+
+  const showCaughtUp = () => {
+    if (!notificationsLedger || notificationsLedger.querySelector(".cp-notification-item")) return;
+    const empty = document.createElement("div");
+    empty.className = "cp-empty";
+    empty.innerHTML = "<div><h2>You are caught up</h2><p>New actionable reminders will appear here.</p></div>";
+    notificationsLedger.appendChild(empty);
+  };
+
+  const markNotificationRead = (form) => {
+    const item = form.closest(".cp-notification-item");
+    if (!item) return;
+    if (new URLSearchParams(window.location.search).get("state") === "unread") {
+      item.remove();
+      showCaughtUp();
+      return;
+    }
+    item.classList.remove("is-unread");
+    item.querySelector(".cp-notification-mark")?.setAttribute("aria-label", "Read");
+    const state = document.createElement("span");
+    state.className = "cp-read-state";
+    state.textContent = "Read";
+    form.replaceWith(state);
+  };
+
+  const markAllNotificationsRead = (form) => {
+    if (!notificationsLedger) return;
+    const unreadOnly = new URLSearchParams(window.location.search).get("state") === "unread";
+    notificationsLedger.querySelectorAll(".cp-notification-item").forEach((item) => {
+      if (unreadOnly) {
+        item.remove();
+        return;
+      }
+      item.classList.remove("is-unread");
+      item.querySelector(".cp-notification-mark")?.setAttribute("aria-label", "Read");
+      const action = item.querySelector("[data-notification-read]");
+      if (action) {
+        const state = document.createElement("span");
+        state.className = "cp-read-state";
+        state.textContent = "Read";
+        action.replaceWith(state);
+      }
+    });
+    showCaughtUp();
+    const submit = form.querySelector("button[type='submit']");
+    if (submit) {
+      submit.textContent = "All read";
+      submit.setAttribute("disabled", "");
+      form.dataset.complete = "true";
+    }
   };
 
   const passwordForm = document.querySelector("[data-settings-password-change]");
@@ -128,6 +197,16 @@
           if (form.matches("[data-appearance-form]")) {
             applyMotionPreference(form.querySelector("input[name='motion_preference']:checked")?.value, true);
           }
+          if (form.matches("[data-notification-read]")) {
+            markNotificationRead(form);
+            await syncNotificationBell();
+            return;
+          }
+          if (form.matches("[data-notifications-read-all]")) {
+            markAllNotificationsRead(form);
+            await syncNotificationBell();
+            return;
+          }
           message(form, "Saved.");
         }
       } catch (error) {
@@ -137,7 +216,7 @@
         }
         message(form, error.message || "That change could not be saved.", true, !error.field);
       } finally {
-        submit?.removeAttribute("disabled");
+        if (form.dataset.complete !== "true") submit?.removeAttribute("disabled");
       }
     });
   });
@@ -165,6 +244,44 @@
 
   document.querySelectorAll("[data-appearance-form] input[name='motion_preference']").forEach((radio) => {
     radio.addEventListener("change", () => applyMotionPreference(radio.value));
+  });
+
+  const policyForm = document.querySelector("[data-processing-policy-form]");
+  if (policyForm) policyForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!policyForm.reportValidity()) return;
+    const submit = policyForm.querySelector("button[type='submit']");
+    submit?.setAttribute("disabled", "");
+    message(policyForm, "Saving durable processing policy…");
+    const random = window.crypto?.randomUUID ? window.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    try {
+      const response = await fetch("/api/processing", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          action: "policy.update",
+          idempotency_key: `policy-${random}`,
+          payload: {
+            process_sources: policyForm.elements.process_sources.checked,
+            map_topics: policyForm.elements.map_topics.checked,
+            compile_wiki: policyForm.elements.compile_wiki.checked,
+            flashcard_mode: policyForm.elements.flashcard_mode.value,
+          },
+        }),
+      });
+      if (!response.ok) {
+        let detail = "The processing policy could not be saved.";
+        try { const body = await response.json(); detail = body.detail?.message || body.detail || body.error || detail; } catch (_) {}
+        throw new Error(detail);
+      }
+      const policy = await response.json();
+      message(policyForm, policy.process_sources ? "Processing policy saved." : "Policy saved. Queued source runs are paused. Re-enable source processing before retrying them.");
+    } catch (error) {
+      message(policyForm, error.message || "The processing policy could not be saved.", true);
+    } finally {
+      submit?.removeAttribute("disabled");
+    }
   });
 
   const activeSettingsTab = document.querySelector('.cp-local-tabs[aria-label="Settings"] a[aria-current="page"]');

@@ -1,30 +1,46 @@
 import asyncio
 import base64
+import gzip
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
+from urllib.parse import parse_qs, urlparse
 
+import jwt
 import pytest
 import respx
-from httpx import ASGITransport, AsyncClient, Response
+from cryptography.hazmat.primitives.asymmetric import rsa
+from httpx import ASGITransport, AsyncByteStream, AsyncClient, Request, Response
+from openai import AuthenticationError
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import async_session_factory, engine, get_db
 from app.dependencies import get_current_user
+from app.exceptions import WikiBaseError
 from app.main import app
 from app.models.base import Base
 from app.models.flashcard import LearningEvidence
-from app.models.m3 import IdempotencyRecord, MarkedPaperQuestion, SourceChange
+from app.models.m3 import (
+    IdempotencyRecord,
+    MarkedPaperQuestion,
+    ProviderAuthorizationSession,
+    ProviderSetting,
+    SourceChange,
+)
 from app.models.source import SourceStatus
 from app.models.source_chunk import SourceChunk
 from app.models.user import User
+from app.routers import chat as chat_router
 from app.schemas.sources import SourceCreate
 from app.services import idempotency as idempotency_service
+from app.services import llm as llm_service
 from app.services import meters as meter_service
+from app.services import provider_auth as provider_auth_service
 from app.services import providers as provider_service
 from app.services.idempotency import execute_idempotent
+from app.services.retrieval import RetrievedChunk
 from app.services.sources import create_or_update_source
 
 
@@ -34,6 +50,56 @@ async def _add_idempotency_key(request) -> None:
         and "Idempotency-Key" not in request.headers
     ):
         request.headers["Idempotency-Key"] = str(uuid.uuid4())
+
+
+def _oauth_identity(
+    nonce: str,
+    audience: str,
+    *,
+    issuer: str = "https://auth.openai.com",
+    account_id: str = "acct-123",
+    subject_id: str = "openai-user-123",
+) -> tuple[str, dict]:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_numbers = private_key.public_key().public_numbers()
+    key_id = f"test-signing-key-{uuid.uuid4()}"
+    now = datetime.now(UTC)
+    token = jwt.encode(
+        {
+            "iss": issuer,
+            "aud": audience,
+            "iat": now,
+            "exp": now + timedelta(minutes=10),
+            "nonce": nonce,
+            "sub": subject_id,
+            "email": "student@example.com",
+            "https://api.openai.com/auth": {"chatgpt_account_id": account_id},
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": key_id},
+    )
+    jwks = {
+        "keys": [
+            {
+                "kty": "RSA",
+                "kid": key_id,
+                "use": "sig",
+                "alg": "RS256",
+                "n": base64.urlsafe_b64encode(
+                    public_numbers.n.to_bytes((public_numbers.n.bit_length() + 7) // 8, "big")
+                )
+                .rstrip(b"=")
+                .decode(),
+                "e": base64.urlsafe_b64encode(
+                    public_numbers.e.to_bytes((public_numbers.e.bit_length() + 7) // 8, "big")
+                )
+                .rstrip(b"=")
+                .decode(),
+            }
+        ]
+    }
+    return token, jwks
 
 
 async def _require_database(session: AsyncSession) -> None:
@@ -224,6 +290,194 @@ async def test_real_sessions_isolate_users_and_serialize_duplicate_writes(
     settings = (await owner_client.get("/api/providers/settings")).json()
     assert len(settings) == 1
     assert (await other_client.get("/api/providers/settings")).json() == []
+
+
+@pytest.mark.asyncio
+async def test_provider_test_serializes_configuration_and_disconnect(
+    authenticated_m3_clients,
+):
+    owner_client, _, parallel_owner_client = authenticated_m3_clients
+    configured = await owner_client.put(
+        "/api/providers/settings",
+        json={"provider": "openai", "api_key": "initial-key", "model": "gpt-4o-mini"},
+    )
+    assert configured.status_code == 200
+
+    probe_started = asyncio.Event()
+    release_probe = asyncio.Event()
+
+    async def slow_probe(_request):
+        probe_started.set()
+        await release_probe.wait()
+        return Response(200, json={"data": [{"id": "gpt-4o-mini"}]})
+
+    with respx.mock:
+        respx.get("https://api.openai.com/v1/models").mock(side_effect=slow_probe)
+        test_task = asyncio.create_task(owner_client.post("/api/providers/openai/test"))
+        await probe_started.wait()
+        configure_task = asyncio.create_task(
+            parallel_owner_client.put(
+                "/api/providers/settings",
+                json={"provider": "openai", "api_key": "replacement-key", "model": "gpt-4o"},
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert not configure_task.done()
+        release_probe.set()
+        tested, reconfigured = await asyncio.gather(test_task, configure_task)
+    assert tested.status_code == reconfigured.status_code == 200
+    current = (await owner_client.get("/api/providers/settings")).json()[0]
+    assert current["model"] == "gpt-4o"
+    assert current["status"] == "configured"
+
+    probe_started = asyncio.Event()
+    release_probe = asyncio.Event()
+
+    async def slow_replacement_probe(_request):
+        probe_started.set()
+        await release_probe.wait()
+        return Response(200, json={"data": [{"id": "gpt-4o"}]})
+
+    with respx.mock:
+        respx.get("https://api.openai.com/v1/models").mock(side_effect=slow_replacement_probe)
+        test_task = asyncio.create_task(owner_client.post("/api/providers/openai/test"))
+        await probe_started.wait()
+        disconnect_task = asyncio.create_task(parallel_owner_client.delete("/api/providers/openai"))
+        await asyncio.sleep(0.05)
+        assert not disconnect_task.done()
+        release_probe.set()
+        tested, disconnected = await asyncio.gather(test_task, disconnect_task)
+    assert tested.status_code == 200
+    assert disconnected.status_code == 204
+    assert (await owner_client.get("/api/providers/settings")).json() == []
+
+
+@pytest.mark.asyncio
+async def test_provider_probes_stop_reading_oversized_responses(
+    authenticated_m3_clients, monkeypatch
+):
+    owner_client, _, _ = authenticated_m3_clients
+    compatible_endpoint = "https://provider.example"
+    azure_endpoint = "https://resource.openai.azure.com"
+    settings = provider_service.get_settings().model_copy(
+        update={
+            "provider_allowed_endpoints": f"{compatible_endpoint},{azure_endpoint}",
+        }
+    )
+    monkeypatch.setattr(provider_service, "get_settings", lambda: settings)
+
+    async def public_endpoint(_endpoint: str) -> None:
+        return None
+
+    monkeypatch.setattr(provider_service, "_ensure_public_endpoint", public_endpoint)
+
+    class OversizedResponseStream(AsyncByteStream):
+        def __init__(self):
+            self.chunks_read = 0
+
+        async def __aiter__(self):
+            for _ in range(3):
+                self.chunks_read += 1
+                yield b"x" * (provider_service.PROVIDER_TEST_RESPONSE_MAX_BYTES // 2 + 1)
+
+        async def aclose(self) -> None:
+            return None
+
+    probes = [
+        (
+            {"provider": "openai", "api_key": "test-key", "model": "gpt-4o-mini"},
+            "GET",
+            "https://api.openai.com/v1/models",
+        ),
+        (
+            {"provider": "google_gemini", "api_key": "test-key", "model": "gemini-2.0-flash"},
+            "GET",
+            "https://generativelanguage.googleapis.com/v1beta/openai/models",
+        ),
+        (
+            {
+                "provider": "openai_compatible",
+                "api_key": "test-key",
+                "model": "custom-model",
+                "endpoint": compatible_endpoint,
+            },
+            "GET",
+            f"{compatible_endpoint}/models",
+        ),
+        (
+            {
+                "provider": "azure_openai",
+                "api_key": "test-key",
+                "model": "course-deployment",
+                "endpoint": azure_endpoint,
+            },
+            "POST",
+            f"{azure_endpoint}/openai/deployments/course-deployment/chat/completions"
+            "?api-version=2024-10-21",
+        ),
+    ]
+
+    for configuration, method, url in probes:
+        configured = await owner_client.put("/api/providers/settings", json=configuration)
+        assert configured.status_code == 200
+        stream = OversizedResponseStream()
+        with respx.mock:
+            route = respx.route(method=method, url=url).mock(
+                return_value=Response(200, stream=stream)
+            )
+            tested = await owner_client.post(f"/api/providers/{configuration['provider']}/test")
+        assert route.called
+        assert tested.status_code == 200
+        assert tested.json()["status"] == "invalid"
+        assert tested.json()["last_error"] == "The provider response exceeded the allowed size."
+        assert stream.chunks_read == 2
+
+    openai = {"provider": "openai", "api_key": "test-key", "model": "gpt-4o-mini"}
+    configured = await owner_client.put("/api/providers/settings", json=openai)
+    assert configured.status_code == 200
+    compressed = gzip.compress(b"x" * (provider_service.PROVIDER_TEST_RESPONSE_MAX_BYTES * 10))
+    assert len(compressed) < provider_service.PROVIDER_TEST_RESPONSE_MAX_BYTES
+
+    class CompressedResponseStream(AsyncByteStream):
+        def __init__(self):
+            self.chunks_read = 0
+
+        async def __aiter__(self):
+            self.chunks_read += 1
+            yield compressed
+
+        async def aclose(self) -> None:
+            return None
+
+    compressed_stream = CompressedResponseStream()
+    with respx.mock:
+        route = respx.get("https://api.openai.com/v1/models").mock(
+            return_value=Response(
+                200,
+                headers={"Content-Encoding": "gzip"},
+                stream=compressed_stream,
+            )
+        )
+        tested = await owner_client.post("/api/providers/openai/test")
+    assert route.called
+    assert route.calls.last.request.headers["accept-encoding"] == "identity"
+    assert tested.status_code == 200
+    assert tested.json()["status"] == "invalid"
+    assert (
+        tested.json()["last_error"] == "The provider returned an unsupported compressed response."
+    )
+    assert compressed_stream.chunks_read == 0
+
+    configured = await owner_client.put("/api/providers/settings", json=openai)
+    assert configured.status_code == 200
+    with respx.mock:
+        respx.get("https://api.openai.com/v1/models").mock(
+            return_value=Response(200, json={"data": {"id": "gpt-4o-mini"}})
+        )
+        tested = await owner_client.post("/api/providers/openai/test")
+    assert tested.status_code == 200
+    assert tested.json()["status"] == "invalid"
+    assert tested.json()["last_error"] == "The provider returned an unexpected response."
 
 
 @pytest.mark.asyncio
@@ -973,7 +1227,17 @@ async def test_marked_paper_manual_lifecycle_validation_meter_and_isolation(m3_c
     stored_question = await session.get(MarkedPaperQuestion, uuid.UUID(question["id"]))
     stored_question.reviewed_at = datetime.now(UTC) - timedelta(days=45)
     await session.commit()
-    assert (await client.get("/api/meters/topics")).json()[0]["stale"] is True
+    legacy_meter = (await client.get("/api/meters/topics")).json()[0]
+    assert legacy_meter["stale"] is True
+    assert legacy_meter["estimated_completion"] is None
+    assert legacy_meter["evidence_confidence"] is None
+    assert legacy_meter["reason_code"] == "legacy_meter_non_authoritative"
+    assert [signal["name"] for signal in legacy_meter["signals"]] == [
+        "source_count",
+        "flashcard_recall",
+        "marked_paper_score",
+        "self_reported_confidence",
+    ]
     refreshed = await client.patch(
         f"/api/marked-papers/{paper['id']}/questions/{question['id']}",
         json={"feedback": "Freshly reviewed"},
@@ -1010,7 +1274,9 @@ async def test_marked_paper_manual_lifecycle_validation_meter_and_isolation(m3_c
     )
     assert nullable.status_code == 422
     meter = (await client.get("/api/meters/topics")).json()[0]
-    confidence = next(signal for signal in meter["signals"] if signal["name"] == "self_confidence")
+    confidence = next(
+        signal for signal in meter["signals"] if signal["name"] == "self_reported_confidence"
+    )
     assert confidence["value"] == pytest.approx(0.8)
 
     stored_question.reviewed_at = datetime.now(UTC) - timedelta(days=45)
@@ -1056,7 +1322,7 @@ async def test_marked_paper_manual_lifecycle_validation_meter_and_isolation(m3_c
 
 @pytest.mark.asyncio
 async def test_provider_lifecycle_fixed_target_and_two_user_isolation(m3_client, monkeypatch):
-    client, _, owner, other, principal = m3_client
+    client, session, owner, other, principal = m3_client
     assert (await client.get("/api/providers")).status_code == 200
     configured = await client.put(
         "/api/providers/settings",
@@ -1074,21 +1340,42 @@ async def test_provider_lifecycle_fixed_target_and_two_user_isolation(m3_client,
         )
         route.mock(return_value=Response(200, json={"data": [{"id": "gpt-4o-mini"}]}))
         tested = await client.post(
-            "/api/providers/openai/test", headers={"Idempotency-Key": provider_test_key}
+            "/api/providers/openai/test", headers={"Idempotency-Key": str(uuid.uuid4())}
         )
         replayed_test = await client.post(
-            "/api/providers/openai/test", headers={"Idempotency-Key": provider_test_key}
+            "/api/providers/openai/test",
+            headers={"Idempotency-Key": tested.request.headers["Idempotency-Key"]},
         )
-    assert rejected_model.status_code == 422
+    assert rejected_model.status_code == 200
+    assert rejected_model.json()["status"] == "invalid"
+    assert rejected_model.json()["last_error"]
     assert tested.status_code == 200
+    assert tested.json()["active_for_generation"] is True
     assert replayed_test.json() == tested.json()
     assert route.call_count == 2
+    runtime = await provider_service.resolve_generation_provider(owner, session)
+    assert runtime.provider == "openai"
+    assert runtime.model == "gpt-4o-mini"
+    assert runtime.api_key == "test-api-key"
+
+    updated = await client.put(
+        "/api/providers/settings",
+        json={"provider": "openai", "model": "gpt-4o"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["status"] == "configured"
+    assert updated.json()["active_for_generation"] is False
 
     azure_endpoint = "https://resource.openai.azure.com"
     allowed_settings = provider_service.get_settings().model_copy(
         update={"provider_allowed_endpoints": azure_endpoint}
     )
     monkeypatch.setattr(provider_service, "get_settings", lambda: allowed_settings)
+
+    async def public_endpoint(_endpoint: str) -> None:
+        return None
+
+    monkeypatch.setattr(provider_service, "_ensure_public_endpoint", public_endpoint)
     configured_azure = await client.put(
         "/api/providers/settings",
         json={
@@ -1109,9 +1396,709 @@ async def test_provider_lifecycle_fixed_target_and_two_user_isolation(m3_client,
     assert tested_azure.status_code == 200
     assert azure_probe.called
 
+    removed_allowlist_settings = allowed_settings.model_copy(
+        update={"provider_allowed_endpoints": ""}
+    )
+    monkeypatch.setattr(provider_service, "get_settings", lambda: removed_allowlist_settings)
+    with pytest.raises(WikiBaseError) as exc_info:
+        await provider_service.resolve_generation_provider(owner, session)
+    assert exc_info.value.error == "unsafe_endpoint"
+
     principal["user"] = other
     assert (await client.get("/api/providers/settings")).json() == []
     assert (await client.post("/api/providers/openai/test")).status_code == 404
     assert (await client.delete("/api/providers/openai")).status_code == 404
     principal["user"] = owner
     assert (await client.delete("/api/providers/openai")).status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_custom_provider_endpoint_rejects_private_resolution(monkeypatch):
+    monkeypatch.setattr(
+        provider_service.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(2, 1, 6, "", ("127.0.0.1", 443))],
+    )
+
+    with pytest.raises(WikiBaseError) as exc_info:
+        await provider_service._ensure_public_endpoint("https://provider.example")
+
+    assert exc_info.value.error == "unsafe_endpoint"
+
+
+@pytest.mark.asyncio
+async def test_expired_browser_auth_sessions_do_not_consume_pending_quota(m3_client, monkeypatch):
+    client, session, owner, _, _ = m3_client
+    oauth_settings = provider_service.get_settings().model_copy(
+        update={"chatgpt_oauth_client_id": "approved-client"}
+    )
+    monkeypatch.setattr(provider_service, "get_settings", lambda: oauth_settings)
+    monkeypatch.setattr(provider_auth_service, "get_settings", lambda: oauth_settings)
+    for _ in range(provider_auth_service.MAX_PENDING_SESSIONS):
+        response = await client.post(
+            "/api/providers/chatgpt/auth-sessions",
+            json={"return_path": "/settings/providers?provider=chatgpt"},
+        )
+        assert response.status_code == 201
+    blocked = await client.post(
+        "/api/providers/chatgpt/auth-sessions",
+        json={"return_path": "/settings/providers?provider=chatgpt"},
+    )
+    assert blocked.status_code == 429
+    sessions = list(
+        (
+            await session.execute(
+                select(ProviderAuthorizationSession).where(
+                    ProviderAuthorizationSession.user_id == owner.id
+                )
+            )
+        ).scalars()
+    )
+    for auth_session in sessions:
+        auth_session.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    await session.commit()
+    replacement = await client.post(
+        "/api/providers/chatgpt/auth-sessions",
+        json={"return_path": "/settings/providers?provider=chatgpt"},
+    )
+    assert replacement.status_code == 201
+    remaining = await session.scalar(
+        select(func.count(ProviderAuthorizationSession.id)).where(
+            ProviderAuthorizationSession.user_id == owner.id
+        )
+    )
+    assert remaining == 1
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_browser_auth_is_pkce_bound_durable_and_replay_safe(m3_client, monkeypatch):
+    client, session, owner, other, principal = m3_client
+    oauth_settings = provider_service.get_settings().model_copy(
+        update={
+            "chatgpt_oauth_client_id": "approved-client",
+            "chatgpt_oauth_redirect_uri": ("http://test/api/providers/chatgpt/oauth/callback"),
+            "frontend_url": "http://frontend.test",
+        }
+    )
+    monkeypatch.setattr(provider_service, "get_settings", lambda: oauth_settings)
+    monkeypatch.setattr(provider_auth_service, "get_settings", lambda: oauth_settings)
+
+    descriptors = (await client.get("/api/providers")).json()
+    chatgpt = next(item for item in descriptors if item["id"] == "chatgpt")
+    assert chatgpt["auth_methods"] == [
+        {
+            "kind": "oauth_code",
+            "label": "Sign in through browser",
+            "recommended": True,
+            "enabled": True,
+            "unavailable_reason": None,
+        }
+    ]
+
+    started = await client.post(
+        "/api/providers/chatgpt/auth-sessions",
+        json={"return_path": "/settings/providers?provider=chatgpt"},
+    )
+    assert started.status_code == 201
+    started_payload = started.json()
+    authorization_url = urlparse(started_payload["authorization_url"])
+    query = parse_qs(authorization_url.query)
+    assert query["client_id"] == ["approved-client"]
+    assert query["code_challenge_method"] == ["S256"]
+    assert query["code_challenge"][0]
+    assert "code_verifier" not in query
+    state = query["state"][0]
+    session_id = started_payload["id"]
+    browser_binding = started_payload["browser_binding"]
+
+    principal["user"] = other
+    assert (await client.get(f"/api/providers/auth-sessions/{session_id}")).status_code == 404
+    principal["user"] = owner
+
+    principal["user"] = other
+    mismatched = await client.post(
+        "/api/providers/chatgpt/oauth/callback",
+        json={
+            "state": state,
+            "code": "stolen-code",
+            "browser_binding": browser_binding,
+        },
+    )
+    assert mismatched.status_code == 403
+    principal["user"] = owner
+    wrong_browser = await client.post(
+        "/api/providers/chatgpt/oauth/callback",
+        json={
+            "state": state,
+            "code": "other-browser-code",
+            "browser_binding": "different-browser-binding-value-1234567890",
+        },
+    )
+    assert wrong_browser.status_code == 403
+
+    id_token, jwks = _oauth_identity(query["nonce"][0], "approved-client")
+    with respx.mock:
+        token_route = respx.post(oauth_settings.chatgpt_oauth_token_url).mock(
+            return_value=Response(
+                200,
+                json={
+                    "access_token": "access-secret",
+                    "refresh_token": "refresh-secret",
+                    "expires_in": 900,
+                    "id_token": id_token,
+                    "scope": "openid profile email offline_access",
+                },
+            )
+        )
+        respx.get(oauth_settings.chatgpt_oauth_jwks_url).mock(return_value=Response(200, json=jwks))
+        completed = await client.post(
+            "/api/providers/chatgpt/oauth/callback",
+            json={
+                "state": state,
+                "code": "one-time-code",
+                "browser_binding": browser_binding,
+            },
+        )
+    assert completed.status_code == 200
+    assert completed.json()["return_path"] == (
+        "/settings/providers?provider=chatgpt&auth=connected"
+    )
+    request_body = token_route.calls[0].request.content.decode()
+    assert "code_verifier=" in request_body
+    assert "one-time-code" in request_body
+
+    connected = (await client.get("/api/providers/settings")).json()
+    chatgpt_setting = next(item for item in connected if item["provider"] == "chatgpt")
+    assert chatgpt_setting["auth_method"] == "oauth_code"
+    assert chatgpt_setting["provider_account_label"] == "student@example.com"
+    assert chatgpt_setting["status"] == "connected"
+    assert chatgpt_setting["active_for_generation"] is True
+    assert "access-secret" not in str(chatgpt_setting)
+    assert "refresh-secret" not in str(chatgpt_setting)
+
+    replay = await client.post(
+        "/api/providers/chatgpt/oauth/callback",
+        json={
+            "state": state,
+            "code": "replayed-code",
+            "browser_binding": browser_binding,
+        },
+    )
+    assert replay.status_code == 409
+
+    runtime = await provider_service.resolve_generation_provider(owner, session)
+    assert runtime.provider == "chatgpt"
+    assert runtime.transport == "responses"
+    assert runtime.account_id == "acct-123"
+    assert runtime.api_key == "access-secret"
+
+    stored = await session.scalar(
+        select(ProviderSetting).where(
+            ProviderSetting.user_id == owner.id,
+            ProviderSetting.provider == "chatgpt",
+        )
+    )
+    stored.endpoint = "https://attacker.example/steal"
+    stored.access_token_expires_at = datetime.now(UTC) + timedelta(minutes=10)
+    await session.flush()
+    pinned_runtime = await provider_service.resolve_generation_provider(owner, session)
+    assert pinned_runtime.endpoint == oauth_settings.chatgpt_responses_endpoint
+
+    async def one_chunk(**_kwargs):
+        return [
+            RetrievedChunk(
+                content="Local evidence",
+                score=0.9,
+                source_title="Source",
+                source_url="",
+                source_type="file",
+            )
+        ]
+
+    class RevokedResponses:
+        async def create(self, **_kwargs):
+            raise AuthenticationError(
+                "revoked",
+                response=Response(
+                    401,
+                    request=Request("POST", oauth_settings.chatgpt_responses_endpoint),
+                ),
+                body={},
+            )
+
+    class RevokedOpenAI:
+        def __init__(self, **_kwargs):
+            self.responses = RevokedResponses()
+
+    monkeypatch.setattr(chat_router, "retrieve", one_chunk)
+    monkeypatch.setattr(llm_service, "AsyncOpenAI", RevokedOpenAI)
+    with respx.mock:
+        respx.post(oauth_settings.chatgpt_oauth_token_url).mock(
+            return_value=Response(400, json={"error": "invalid_grant"})
+        )
+        revoked_chat = await client.post("/api/chat", json={"message": "Use my sources"})
+    assert revoked_chat.status_code == 409
+    assert revoked_chat.json()["error"] == "reauth_required"
+    stored.status = "connected"
+    stored.last_error = None
+    stored.last_error_code = None
+
+    stored.access_token_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    await session.flush()
+    with respx.mock:
+        refresh_route = respx.post(oauth_settings.chatgpt_oauth_token_url).mock(
+            return_value=Response(
+                200,
+                json={
+                    "access_token": "rotated-access",
+                    "refresh_token": "rotated-refresh",
+                    "expires_in": 900,
+                },
+            )
+        )
+        refreshed_runtime = await provider_service.resolve_generation_provider(owner, session)
+    assert refreshed_runtime.api_key == "rotated-access"
+    assert "grant_type=refresh_token" in refresh_route.calls[0].request.content.decode()
+    assert stored.last_refreshed_at is not None
+    async with async_session_factory() as fresh_session:
+        rotated = await fresh_session.scalar(
+            select(ProviderSetting).where(ProviderSetting.id == stored.id)
+        )
+        assert (
+            provider_service.decrypt_provider_key(
+                rotated.encrypted_refresh_token,
+                rotated.encryption_key_id,
+                oauth_settings,
+            )
+            == "rotated-refresh"
+        )
+
+    preserved_access = stored.encrypted_access_token
+    stored.access_token_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    await session.flush()
+    with respx.mock:
+        respx.post(oauth_settings.chatgpt_oauth_token_url).mock(
+            return_value=Response(
+                200,
+                json={
+                    "access_token": "bad-rotation",
+                    "refresh_token": {"not": "a token"},
+                    "expires_in": "soon",
+                },
+            )
+        )
+        with pytest.raises(WikiBaseError) as malformed_info:
+            await provider_service.resolve_generation_provider(owner, session)
+    assert malformed_info.value.error == "invalid_token_response"
+    assert stored.encrypted_access_token == preserved_access
+
+    stored.access_token_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    await session.flush()
+    with respx.mock:
+        respx.post(oauth_settings.chatgpt_oauth_token_url).mock(
+            return_value=Response(400, json={"error": "invalid_grant"})
+        )
+        with pytest.raises(WikiBaseError) as exc_info:
+            await provider_service.resolve_generation_provider(owner, session)
+    assert exc_info.value.error == "reauth_required"
+    assert stored.status == "reauth_required"
+    assert stored.active_for_generation is True
+    with pytest.raises(WikiBaseError) as blocked_generation:
+        await provider_service.resolve_generation_provider(owner, session)
+    assert blocked_generation.value.error == "reauth_required"
+    blocked_chat = await client.post("/api/chat", json={"message": "Use my sources"})
+    assert blocked_chat.status_code == 409
+    assert blocked_chat.json()["error"] == "reauth_required"
+
+    stored.status = "connected"
+    stored.access_token_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    await session.flush()
+    test_key = str(uuid.uuid4())
+    with respx.mock:
+        rejected_refresh = respx.post(oauth_settings.chatgpt_oauth_token_url).mock(
+            return_value=Response(400, json={"error": "invalid_grant"})
+        )
+        tested = await client.post(
+            "/api/providers/chatgpt/test",
+            headers={"Idempotency-Key": test_key},
+        )
+        replayed = await client.post(
+            "/api/providers/chatgpt/test",
+            headers={"Idempotency-Key": test_key},
+        )
+    assert tested.status_code == replayed.status_code == 200
+    assert tested.json() == replayed.json()
+    assert tested.json()["status"] == "reauth_required"
+    assert rejected_refresh.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_browser_callbacks_serialize_provider_creation(
+    authenticated_m3_clients, monkeypatch
+):
+    owner_client, _, parallel_owner_client = authenticated_m3_clients
+    oauth_settings = provider_service.get_settings().model_copy(
+        update={"chatgpt_oauth_client_id": "approved-client"}
+    )
+    monkeypatch.setattr(provider_service, "get_settings", lambda: oauth_settings)
+    monkeypatch.setattr(provider_auth_service, "get_settings", lambda: oauth_settings)
+    first, second = await asyncio.gather(
+        owner_client.post(
+            "/api/providers/chatgpt/auth-sessions",
+            json={"return_path": "/settings/providers?provider=chatgpt"},
+        ),
+        parallel_owner_client.post(
+            "/api/providers/chatgpt/auth-sessions",
+            json={"return_path": "/settings/providers?provider=chatgpt"},
+        ),
+    )
+    first_query = parse_qs(urlparse(first.json()["authorization_url"]).query)
+    second_query = parse_qs(urlparse(second.json()["authorization_url"]).query)
+    first_token, first_jwks = _oauth_identity(first_query["nonce"][0], "approved-client")
+    second_token, second_jwks = _oauth_identity(second_query["nonce"][0], "approved-client")
+    combined_jwks = {"keys": first_jwks["keys"] + second_jwks["keys"]}
+
+    def exchange(request):
+        token = first_token if b"code=first-code" in request.content else second_token
+        return Response(
+            200,
+            json={
+                "access_token": "shared-access",
+                "refresh_token": "shared-refresh",
+                "expires_in": 900,
+                "id_token": token,
+            },
+        )
+
+    with respx.mock:
+        respx.post(oauth_settings.chatgpt_oauth_token_url).mock(side_effect=exchange)
+        respx.get(oauth_settings.chatgpt_oauth_jwks_url).mock(
+            return_value=Response(200, json=combined_jwks)
+        )
+        results = await asyncio.gather(
+            owner_client.post(
+                "/api/providers/chatgpt/oauth/callback",
+                json={
+                    "state": first_query["state"][0],
+                    "code": "first-code",
+                    "browser_binding": first.json()["browser_binding"],
+                },
+            ),
+            parallel_owner_client.post(
+                "/api/providers/chatgpt/oauth/callback",
+                json={
+                    "state": second_query["state"][0],
+                    "code": "second-code",
+                    "browser_binding": second.json()["browser_binding"],
+                },
+            ),
+        )
+    assert [response.status_code for response in results] == [200, 200]
+    assert all(response.json()["return_path"].endswith("auth=connected") for response in results)
+    settings_response = (await owner_client.get("/api/providers/settings")).json()
+    assert len(settings_response) == 1
+    assert settings_response[0]["provider"] == "chatgpt"
+
+    configured = await owner_client.put(
+        "/api/providers/settings",
+        json={"provider": "openai", "api_key": "race-test-key", "model": "gpt-4o-mini"},
+    )
+    assert configured.status_code == 200
+    with respx.mock:
+        respx.get("https://api.openai.com/v1/models").mock(
+            return_value=Response(200, json={"data": [{"id": "gpt-4o-mini"}]})
+        )
+        assert (await owner_client.post("/api/providers/openai/test")).status_code == 200
+    owner_id = uuid.UUID((await owner_client.get("/api/auth/me")).json()["id"])
+    async with async_session_factory() as direct_session:
+        await direct_session.execute(
+            ProviderSetting.__table__.update()
+            .where(ProviderSetting.user_id == owner_id)
+            .values(active_for_generation=False)
+        )
+        await direct_session.commit()
+
+    reconnect = await owner_client.post(
+        "/api/providers/chatgpt/auth-sessions",
+        json={"return_path": "/settings/providers?provider=chatgpt"},
+    )
+    reconnect_query = parse_qs(urlparse(reconnect.json()["authorization_url"]).query)
+    reconnect_token, reconnect_jwks = _oauth_identity(
+        reconnect_query["nonce"][0], "approved-client"
+    )
+    with respx.mock:
+        respx.post(oauth_settings.chatgpt_oauth_token_url).mock(
+            return_value=Response(
+                200,
+                json={
+                    "access_token": "race-access",
+                    "refresh_token": "race-refresh",
+                    "expires_in": 900,
+                    "id_token": reconnect_token,
+                },
+            )
+        )
+        respx.get(oauth_settings.chatgpt_oauth_jwks_url).mock(
+            return_value=Response(200, json=reconnect_jwks)
+        )
+        callback_result, activation_result = await asyncio.gather(
+            owner_client.post(
+                "/api/providers/chatgpt/oauth/callback",
+                json={
+                    "state": reconnect_query["state"][0],
+                    "code": "race-code",
+                    "browser_binding": reconnect.json()["browser_binding"],
+                },
+            ),
+            parallel_owner_client.post("/api/providers/openai/activate"),
+        )
+    assert callback_result.status_code == activation_result.status_code == 200
+    async with async_session_factory() as direct_session:
+        active_count = await direct_session.scalar(
+            select(func.count(ProviderSetting.id)).where(
+                ProviderSetting.user_id == owner_id,
+                ProviderSetting.active_for_generation.is_(True),
+            )
+        )
+        assert active_count == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_auth_callback_persists_with_request_scoped_sessions(
+    authenticated_m3_clients, monkeypatch
+):
+    owner_client, other_client, parallel_owner_client = authenticated_m3_clients
+    oauth_settings = provider_service.get_settings().model_copy(
+        update={
+            "chatgpt_oauth_client_id": "approved-client",
+            "chatgpt_oauth_redirect_uri": (
+                "http://frontend.test/api/providers/chatgpt/oauth/callback"
+            ),
+        }
+    )
+    monkeypatch.setattr(provider_service, "get_settings", lambda: oauth_settings)
+    monkeypatch.setattr(provider_auth_service, "get_settings", lambda: oauth_settings)
+    owner_id = uuid.UUID((await owner_client.get("/api/auth/me")).json()["id"])
+
+    started = await owner_client.post(
+        "/api/providers/chatgpt/auth-sessions",
+        json={"return_path": "/settings/providers?provider=chatgpt"},
+    )
+    query = parse_qs(urlparse(started.json()["authorization_url"]).query)
+    state = query["state"][0]
+    browser_binding = started.json()["browser_binding"]
+    rejected = await other_client.post(
+        "/api/providers/chatgpt/oauth/callback",
+        json={
+            "state": state,
+            "code": "wrong-browser",
+            "browser_binding": browser_binding,
+        },
+    )
+    assert rejected.status_code == 403
+
+    id_token, jwks = _oauth_identity(query["nonce"][0], "approved-client")
+    with respx.mock:
+        respx.post(oauth_settings.chatgpt_oauth_token_url).mock(
+            return_value=Response(
+                200,
+                json={
+                    "access_token": "durable-access",
+                    "refresh_token": "durable-refresh",
+                    "expires_in": 900,
+                    "id_token": id_token,
+                },
+            )
+        )
+        respx.get(oauth_settings.chatgpt_oauth_jwks_url).mock(return_value=Response(200, json=jwks))
+        completed = await owner_client.post(
+            "/api/providers/chatgpt/oauth/callback",
+            json={
+                "state": state,
+                "code": "right-browser",
+                "browser_binding": browser_binding,
+            },
+        )
+    assert completed.status_code == 200
+    settings_response = (await owner_client.get("/api/providers/settings")).json()
+    assert settings_response[0]["provider"] == "chatgpt"
+    assert settings_response[0]["status"] == "connected"
+    async with async_session_factory() as fresh_session:
+        persisted = await fresh_session.scalar(
+            select(ProviderSetting).where(
+                ProviderSetting.user_id == owner_id,
+                ProviderSetting.provider == "chatgpt",
+            )
+        )
+        assert persisted is not None
+        assert persisted.status == "connected"
+        assert persisted.encrypted_access_token is not None
+
+    replacement = await owner_client.post(
+        "/api/providers/chatgpt/auth-sessions",
+        json={"return_path": "/settings/providers?provider=chatgpt"},
+    )
+    replacement_query = parse_qs(urlparse(replacement.json()["authorization_url"]).query)
+    replacement_token, replacement_jwks = _oauth_identity(
+        replacement_query["nonce"][0],
+        "approved-client",
+        account_id="acct-other",
+        subject_id="openai-user-other",
+    )
+    with respx.mock:
+        respx.post(oauth_settings.chatgpt_oauth_token_url).mock(
+            return_value=Response(
+                200,
+                json={
+                    "access_token": "replacement-access",
+                    "refresh_token": "replacement-refresh",
+                    "expires_in": 900,
+                    "id_token": replacement_token,
+                },
+            )
+        )
+        respx.get(oauth_settings.chatgpt_oauth_jwks_url).mock(
+            return_value=Response(200, json=replacement_jwks)
+        )
+        replacement_result = await owner_client.post(
+            "/api/providers/chatgpt/oauth/callback",
+            json={
+                "state": replacement_query["state"][0],
+                "code": "replacement-code",
+                "browser_binding": replacement.json()["browser_binding"],
+            },
+        )
+    assert replacement_result.json()["return_path"].endswith("auth=failed")
+    async with async_session_factory() as fresh_session:
+        unchanged = await fresh_session.scalar(
+            select(ProviderSetting).where(
+                ProviderSetting.user_id == owner_id,
+                ProviderSetting.provider == "chatgpt",
+            )
+        )
+        assert unchanged.provider_account_id == "acct-123"
+        assert unchanged.provider_subject_id == "openai-user-123"
+
+    forged = await owner_client.post(
+        "/api/providers/chatgpt/auth-sessions",
+        json={"return_path": "/settings/providers?provider=chatgpt"},
+    )
+    forged_query = parse_qs(urlparse(forged.json()["authorization_url"]).query)
+    forged_binding = forged.json()["browser_binding"]
+    forged_token, forged_jwks = _oauth_identity(
+        forged_query["nonce"][0],
+        "approved-client",
+        issuer="https://attacker.example",
+    )
+    with respx.mock:
+        respx.post(oauth_settings.chatgpt_oauth_token_url).mock(
+            return_value=Response(
+                200,
+                json={
+                    "access_token": "forged-access",
+                    "refresh_token": "forged-refresh",
+                    "expires_in": 900,
+                    "id_token": forged_token,
+                },
+            )
+        )
+        respx.get(oauth_settings.chatgpt_oauth_jwks_url).mock(
+            return_value=Response(200, json=forged_jwks)
+        )
+        forged_result = await owner_client.post(
+            "/api/providers/chatgpt/oauth/callback",
+            json={
+                "state": forged_query["state"][0],
+                "code": "forged-code",
+                "browser_binding": forged_binding,
+            },
+        )
+    assert forged_result.status_code == 200
+    assert forged_result.json()["return_path"].endswith("auth=failed")
+
+    oversized = await owner_client.post(
+        "/api/providers/chatgpt/auth-sessions",
+        json={"return_path": "/settings/providers?provider=chatgpt"},
+    )
+    oversized_query = parse_qs(urlparse(oversized.json()["authorization_url"]).query)
+    oversized_token, oversized_jwks = _oauth_identity(
+        oversized_query["nonce"][0],
+        "approved-client",
+        account_id="x" * 256,
+    )
+    with respx.mock:
+        respx.post(oauth_settings.chatgpt_oauth_token_url).mock(
+            return_value=Response(
+                200,
+                json={
+                    "access_token": "oversized-access",
+                    "refresh_token": "oversized-refresh",
+                    "expires_in": 900,
+                    "id_token": oversized_token,
+                },
+            )
+        )
+        respx.get(oauth_settings.chatgpt_oauth_jwks_url).mock(
+            return_value=Response(200, json=oversized_jwks)
+        )
+        oversized_result = await owner_client.post(
+            "/api/providers/chatgpt/oauth/callback",
+            json={
+                "state": oversized_query["state"][0],
+                "code": "oversized-code",
+                "browser_binding": oversized.json()["browser_binding"],
+            },
+        )
+    assert oversized_result.status_code == 200
+    assert oversized_result.json()["return_path"].endswith("auth=failed")
+
+    reconnect = await owner_client.post(
+        "/api/providers/chatgpt/auth-sessions",
+        json={"return_path": "/settings/providers?provider=chatgpt"},
+    )
+    reconnect_query = parse_qs(urlparse(reconnect.json()["authorization_url"]).query)
+    reconnect_token, reconnect_jwks = _oauth_identity(
+        reconnect_query["nonce"][0], "approved-client"
+    )
+    exchange_started = asyncio.Event()
+    release_exchange = asyncio.Event()
+
+    async def slow_exchange(_request):
+        exchange_started.set()
+        await release_exchange.wait()
+        return Response(
+            200,
+            json={
+                "access_token": "reconnect-access",
+                "refresh_token": "reconnect-refresh",
+                "expires_in": 900,
+                "id_token": reconnect_token,
+            },
+        )
+
+    with respx.mock:
+        respx.post(oauth_settings.chatgpt_oauth_token_url).mock(side_effect=slow_exchange)
+        respx.get(oauth_settings.chatgpt_oauth_jwks_url).mock(
+            return_value=Response(200, json=reconnect_jwks)
+        )
+        callback_task = asyncio.create_task(
+            owner_client.post(
+                "/api/providers/chatgpt/oauth/callback",
+                json={
+                    "state": reconnect_query["state"][0],
+                    "code": "reconnect-code",
+                    "browser_binding": reconnect.json()["browser_binding"],
+                },
+            )
+        )
+        await exchange_started.wait()
+        disconnect_task = asyncio.create_task(
+            parallel_owner_client.delete("/api/providers/chatgpt")
+        )
+        await asyncio.sleep(0.05)
+        assert not disconnect_task.done()
+        release_exchange.set()
+        callback_result, disconnect_result = await asyncio.gather(callback_task, disconnect_task)
+    assert callback_result.status_code == 200
+    assert disconnect_result.status_code == 204
+    assert (await owner_client.get("/api/providers/settings")).json() == []
