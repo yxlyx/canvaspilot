@@ -285,12 +285,18 @@ assert_status 401
 assert_json_field error 'authentication required'
 assert_backend_count 0
 
-request "$BASE_URL/api/sync?mock=1" --header 'Cookie: cp_session=chat-boundary' --data 'action=sync'
+request "$BASE_URL/api/sync?mock=1" \
+    --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
+    --data 'action=sync'
 assert_status 400
 assert_contains 'sync is unavailable in demo mode'
 
 request "$BASE_URL/api/flashcards/attempt?mock=1" \
     --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
     --data 'card_id=card-1&deck_id=deck-1&correct=true&confidence=5'
 assert_status 400
 assert_contains 'flashcard attempts are unavailable in demo mode'
@@ -310,12 +316,16 @@ pathlib.Path(sys.argv[1]).write_text(json.dumps({"message": "x" * 9000}), encodi
 PY
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
     --header 'Content-Type: application/json' \
     --data-binary "@$TMP_DIR/oversized-request.json"
 assert_status 400
 
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
     --header 'Content-Type: application/json' \
     --data "$(python3 - <<'PY'
 import json
@@ -351,11 +361,12 @@ assert_backend_count 8
 # Authenticated live requests contact the backend and never substitute demo output.
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
     --header 'Content-Type: application/json' \
     --data '{"message":"live unavailable boundary"}'
-assert_status 503
-assert_json_field error 'retrieval_unavailable'
-assert_json_field detail 'Source retrieval stopped before an answer was created.'
+assert_status 502
+assert_json_field error 'live chat is unavailable; no demo answer was substituted'
 assert_json_absent source
 assert_json_absent message
 assert_json_absent citations
@@ -363,6 +374,8 @@ assert_backend_count 9
 
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
     --header 'Content-Type: application/json' \
     --data '{"message":"valid live boundary"}'
 assert_status 200
@@ -372,24 +385,30 @@ assert_backend_count 10
 
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
     --header 'Content-Type: application/json' \
     --data '{"message":"truncated live boundary"}'
-assert_status 503
-assert_json_field error 'retrieval_unavailable'
-assert_json_field detail 'Source retrieval stopped before an answer was created.'
+assert_status 502
+assert_json_field error 'live chat is unavailable; no demo answer was substituted'
 assert_json_absent message
 assert_backend_count 11
 
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
     --header 'Content-Type: application/json' \
     --data '{"message":"oversized response boundary"}'
 assert_status 502
-assert_json_field error 'backend_unavailable'
-assert_json_field detail 'WikiBase could not reach the local backend. Your question and source data are safe.'
+assert_json_field error 'live chat is unavailable; no demo answer was substituted'
 assert_backend_count 12
 
-request "$BASE_URL/api/sync" --header 'Cookie: cp_session=chat-boundary' --data 'action=sync'
+request "$BASE_URL/api/sync" \
+    --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
+    --data 'action=sync'
 assert_status 303
 grep -Eiq '^location:[[:space:]]*/dashboard\?synced=1[[:space:]]*\r?$' "$HEADERS" || fail 'authenticated live sync did not return its success redirect'
 assert_backend_count 13
