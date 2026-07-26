@@ -141,6 +141,46 @@ test("ordinary M3 forms retain a no-JavaScript submission path", async ({ browse
   await context.close();
 });
 
+test("successful data-success navigation releases its lock before leaving", async ({ page }) => {
+  await page.goto("/login");
+  await page.route("**/api/m3", (route) => route.fulfill({ status: 201, contentType: "application/json", body: "{}" }));
+  await page.setContent(`<main><form data-m3-form data-success="/wiki?mock=1">
+    <input name="action" value="page.create"><input name="title" value="Recursion">
+    <button type="submit">Create page</button><p class="cp-form-status"></p></form>
+    <script src="/m3.js"></script></main>`);
+  await page.evaluate(() => window.addEventListener("beforeunload", () => {
+    const form = document.querySelector("[data-m3-form]");
+    sessionStorage.setItem("m3-lock-before-navigation", JSON.stringify({
+      inFlight: form.dataset.inFlight || null,
+      disabled: form.querySelector("button").disabled,
+    }));
+  }));
+
+  await page.getByRole("button", { name: "Create page" }).click();
+  await expect(page).toHaveURL(/\/wiki\?mock=1$/);
+  expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem("m3-lock-before-navigation")))).toEqual({ inFlight: null, disabled: false });
+});
+
+test("successful paper upload releases its lock before leaving", async ({ page }) => {
+  await page.goto("/login");
+  await page.route("**/api/m3", (route) => route.fulfill({ status: 201, contentType: "application/json", body: "{}" }));
+  await page.setContent(`<main><form data-paper-upload data-success="/wiki?mock=1&amp;upload=1">
+    <input type="file" name="paper"><button type="submit">Upload paper</button>
+    <p class="cp-form-status"></p></form><script src="/m3.js"></script></main>`);
+  await page.evaluate(() => window.addEventListener("beforeunload", () => {
+    const form = document.querySelector("[data-paper-upload]");
+    sessionStorage.setItem("upload-lock-before-navigation", JSON.stringify({
+      inFlight: form.dataset.inFlight || null,
+      disabled: form.querySelector("button").disabled,
+    }));
+  }));
+
+  await page.locator('[name="paper"]').setInputFiles({ name: "paper.txt", mimeType: "text/plain", buffer: Buffer.from("Exam paper") });
+  await page.getByRole("button", { name: "Upload paper" }).click();
+  await expect(page).toHaveURL(/\/wiki\?mock=1&upload=1$/);
+  expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem("upload-lock-before-navigation")))).toEqual({ inFlight: null, disabled: false });
+});
+
 test("live mutation payload and canonical download work without secret URLs", async ({ page }) => {
   await page.goto("/login");
   const requests = [];
