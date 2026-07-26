@@ -1405,7 +1405,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 .cp-skip:focus { left: 10px; transform: translateY(0); }
 
 /* Application shell */
-.cp-app-shell { min-height: 100vh; display: grid; grid-template-columns: 216px minmax(0, 1fr); background: var(--cp-bg); }
+.cp-app-shell { min-height: 100vh; display: grid; grid-template-columns: 256px minmax(0, 1fr); background: var(--cp-bg); }
 .cp-sidebar { height: 100vh; padding: 24px 14px 16px; position: sticky; top: 0; z-index: 20; display: flex; flex-direction: column; gap: 0; border-right: 1px solid var(--cp-border); background: #ece9e0; backdrop-filter: none; }
 :root[data-theme="dark"] .cp-sidebar { background: #1e1e1b; }
 .cp-brand { min-height: 42px; padding: 0 8px 18px; display: inline-flex; align-items: center; gap: 9px; color: var(--cp-heading); }
@@ -2015,16 +2015,6 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 .wb-footer { max-width: 1400px; margin: 0 auto; padding: 32px 18px 20px; display: flex; justify-content: space-between; color: var(--cp-muted); font-size: 12px; }
 .wb-footer div { display: flex; gap: 28px; }
 
-@media (min-width: 901px) and (max-width: 1180px) {
-    .cp-app-shell { grid-template-columns: 78px minmax(0, 1fr); }
-    .cp-sidebar { padding-left: 10px; padding-right: 10px; }
-    .cp-sidebar .cp-brand { justify-content: center; padding-left: 0; padding-right: 0; }
-    .cp-sidebar .cp-brand-name, .cp-course-switcher > span:nth-child(2), .cp-course-switcher > svg, .cp-tab > span, .cp-sidebar-foot > span:nth-child(2), .cp-sidebar-foot > :last-child { display: none; }
-    .cp-course-switcher { grid-template-columns: 1fr; place-items: center; }
-    .cp-tab { padding: 0; justify-content: center; }
-    .cp-sidebar-foot { grid-template-columns: 1fr; place-items: center; }
-}
-
 @media (max-width: 900px) {
     .cp-app-shell { grid-template-columns: 1fr; }
     .cp-sidebar { display: none; }
@@ -2283,7 +2273,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 [hidden] { display: none !important; }
 
 @media (min-width: 901px) {
-  .cp-page-header { margin-left: -41px; margin-right: -40px; }
+  .cp-page-header { margin-left: -28px; margin-right: -28px; }
   .cp-main:has(.sources-page) .cp-page-header { margin: 0 0 28px; }
 }
 

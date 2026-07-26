@@ -1413,7 +1413,18 @@
         if (button.dataset.move === "up") list.insertBefore(card, sibling); else list.insertBefore(sibling, card);
         action = "reorder"; payload = { card_ids: ids(false) };
       } else if (button.hasAttribute("data-approve")) { action = "approve"; payload = { card_ids: [card.dataset.cardId] }; }
-      else if (button.hasAttribute("data-discard")) { action = "discard"; payload = { card_ids: [card.dataset.cardId] }; }
+      else if (button.hasAttribute("data-discard")) {
+        const reasonSelect = card.querySelector("[data-rejection-reason]");
+        const reason = reasonSelect ? reasonSelect.value : "";
+        if (!reason) {
+          status.className = "cp-status-banner cp-status-error";
+          status.textContent = "Choose why this card is not useful before discarding it.";
+          if (reasonSelect) reasonSelect.focus();
+          return;
+        }
+        action = "discard";
+        payload = { card_ids: [card.dataset.cardId], rejection_reason: reason };
+      }
       else if (button.hasAttribute("data-restore")) { action = "restore"; payload = { card_ids: [card.dataset.cardId] }; }
       else if (button.hasAttribute("data-approve-selected")) {
         const selected = Array.from(page.querySelectorAll("[data-card-select]:checked")).map(function (input) { return input.closest("[data-card-id]").dataset.cardId; });
