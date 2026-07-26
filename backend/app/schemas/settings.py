@@ -34,6 +34,7 @@ class UserPreferenceResponse(BaseModel):
     theme: Literal["system", "light", "dark"]
     motion_preference: Literal["system", "reduce"]
     default_module_id: uuid.UUID | None
+    default_enrollment_id: uuid.UUID | None
     daily_review_target: int
     reminder_daily_review: bool
     reminder_processing_attention: bool
@@ -48,6 +49,7 @@ class UserPreferenceUpdateRequest(BaseModel):
     theme: Literal["system", "light", "dark"] | None = None
     motion_preference: Literal["system", "reduce"] | None = None
     default_module_id: uuid.UUID | None = None
+    default_enrollment_id: uuid.UUID | None = None
     daily_review_target: int | None = Field(default=None, ge=1, le=100)
     reminder_daily_review: bool | None = None
     reminder_processing_attention: bool | None = None
@@ -56,7 +58,7 @@ class UserPreferenceUpdateRequest(BaseModel):
 
     @model_validator(mode="after")
     def reject_explicit_nulls(self):
-        nullable = {"default_module_id"}
+        nullable = {"default_module_id", "default_enrollment_id"}
         invalid = [
             name
             for name in self.model_fields_set
@@ -64,6 +66,8 @@ class UserPreferenceUpdateRequest(BaseModel):
         ]
         if invalid:
             raise ValueError(f"Fields cannot be null: {', '.join(sorted(invalid))}")
+        if self.default_module_id is not None and self.default_enrollment_id is not None:
+            raise ValueError("Choose either a connected module or a local enrollment")
         return self
 
 
@@ -99,6 +103,7 @@ class ActivityEntryResponse(BaseModel):
         "outline",
         "study_guide",
         "processing_failure",
+        "processing_event",
     ]
     category: Literal["content", "evidence", "study_guides"]
     title: str

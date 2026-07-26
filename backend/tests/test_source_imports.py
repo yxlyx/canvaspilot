@@ -1,8 +1,12 @@
+import base64
 import uuid
 from collections.abc import AsyncGenerator
+from io import BytesIO
+from types import SimpleNamespace
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from PIL import Image
 from sqlalchemy import delete, inspect, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +20,7 @@ from app.models.source_chunk import SourceChunk
 from app.models.user import User
 from app.schemas.sources import SourceCreate
 from app.services.ingestion_jobs import create_queued_ingestion_job
+from app.services.processing import claim_stage, execute_claimed_stage
 from app.services.retrieval import retrieve
 from app.services.sources import create_or_update_source
 
@@ -135,6 +140,156 @@ async def _fake_embed_chunks(chunks: list[SourceChunk], db: AsyncSession) -> Non
     for chunk in chunks:
         chunk.embedding = [0.1] * 1536
     await db.flush()
+
+
+@pytest.mark.asyncio
+async def test_unified_source_intake_imports_pasted_text_and_deduplicates(
+    source_import_client,
+    monkeypatch,
+):
+    client, session, _, _ = source_import_client
+    monkeypatch.setattr("app.services.source_imports.embed_chunks", _fake_embed_chunks)
+    payload = {
+        "mode": "paste",
+        "title": "Recursion notes",
+        "course_context": "CS2030S",
+        "source_type": "plain_text",
+        "content": "A recursive function needs a base case and a smaller subproblem.",
+    }
+
+    first = await client.post("/api/sources/import", json=payload)
+    second = await client.post("/api/sources/import", json=payload)
+
+    assert first.status_code == 201
+    assert first.json()["import_status"] == "queued"
+    assert first.json()["duplicate"] is False
+    assert second.status_code == 201
+    assert second.json()["duplicate"] is True
+    assert second.json()["source"]["id"] == first.json()["source"]["id"]
+    source_id = uuid.UUID(first.json()["source"]["id"])
+    chunks = (
+        (await session.execute(select(SourceChunk).where(SourceChunk.source_id == source_id)))
+        .scalars()
+        .all()
+    )
+    assert chunks == []
+
+
+@pytest.mark.asyncio
+async def test_completed_unified_source_intake_replay_preserves_ready_source(
+    source_import_client,
+    monkeypatch,
+):
+    client, session, user, _ = source_import_client
+    monkeypatch.setattr("app.services.processing.embed_chunks", _fake_embed_chunks)
+    monkeypatch.setattr(
+        "app.services.processing.get_settings",
+        lambda: SimpleNamespace(openai_api_key="test"),
+    )
+    monkeypatch.setattr("app.services.retrieval.embed_query", lambda _: _query_embedding())
+    payload = {
+        "mode": "paste",
+        "title": "Replay-safe notes",
+        "course_context": "CS2030S",
+        "source_type": "plain_text",
+        "content": "A completed idempotent import keeps its current evidence retrievable.",
+    }
+
+    first = await client.post("/api/sources/import", json=payload)
+    assert first.status_code == 201
+    first_body = first.json()
+    run_id = uuid.UUID(first_body["job_id"])
+    for position in range(5):
+        worker_id = f"intake-replay-worker-{position}"
+        stage = await claim_stage(session, worker_id)
+        assert stage is not None and stage.run_id == run_id
+        await execute_claimed_stage(session, stage.id, worker_id)
+
+    replay = await client.post("/api/sources/import", json=payload)
+
+    assert replay.status_code == 201
+    replay_body = replay.json()
+    assert replay_body["job_id"] == first_body["job_id"]
+    assert replay_body["import_status"] == "completed"
+    assert replay_body["duplicate"] is True
+    assert replay_body["source"]["status"] == "ready"
+    source = await session.get(Source, uuid.UUID(first_body["source"]["id"]))
+    assert source is not None and source.current_version_id is not None
+    current_chunks = (
+        (
+            await session.execute(
+                select(SourceChunk).where(
+                    SourceChunk.source_id == source.id,
+                    SourceChunk.source_version_id == source.current_version_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(current_chunks) == 1
+    retrieved = await retrieve("current evidence", user.id, session)
+    assert [chunk.content for chunk in retrieved] == [current_chunks[0].content]
+
+
+@pytest.mark.asyncio
+async def test_unified_source_intake_ocr_imports_png(source_import_client, monkeypatch):
+    client, session, _, _ = source_import_client
+    monkeypatch.setattr("app.services.source_imports.embed_chunks", _fake_embed_chunks)
+    monkeypatch.setattr(
+        "app.services.source_parsers.pytesseract.image_to_string",
+        lambda image, **kwargs: "A monad sequences computations while preserving context.",
+    )
+    image = BytesIO()
+    Image.new("RGB", (160, 90), "white").save(image, format="PNG")
+
+    response = await client.post(
+        "/api/sources/import",
+        json={
+            "mode": "upload",
+            "title": "Functional programming note",
+            "course_context": "CS2030S",
+            "source_type": "image",
+            "filename": "note.png",
+            "content_base64": base64.b64encode(image.getvalue()).decode(),
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["import_status"] == "queued"
+    assert body["source"]["source_type"] == "image"
+    source_id = uuid.UUID(body["source"]["id"])
+    chunks = (
+        (await session.execute(select(SourceChunk).where(SourceChunk.source_id == source_id)))
+        .scalars()
+        .all()
+    )
+    assert chunks == []
+
+
+@pytest.mark.asyncio
+async def test_unified_source_intake_saves_links_as_truthful_metadata(source_import_client):
+    client, session, _, _ = source_import_client
+    response = await client.post(
+        "/api/sources/import",
+        json={
+            "mode": "link",
+            "title": "Module reference",
+            "source_type": "link",
+            "source_url": "https://example.com/reference",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["import_status"] == "saved"
+    assert body["job_id"] is None
+    assert body["source"]["status"] == "pending"
+    source_id = uuid.UUID(body["source"]["id"])
+    assert (
+        await session.execute(select(SourceChunk).where(SourceChunk.source_id == source_id))
+    ).scalars().all() == []
 
 
 @pytest.mark.asyncio
@@ -324,7 +479,7 @@ async def test_parse_run_marks_parser_errors_failed(source_import_client):
 
 
 @pytest.mark.asyncio
-async def test_run_ingestion_job_replaces_stale_chunks(source_import_client, monkeypatch):
+async def test_run_ingestion_job_retains_versioned_chunks(source_import_client, monkeypatch):
     client, session, user, _ = source_import_client
     monkeypatch.setattr("app.services.source_imports.embed_chunks", _fake_embed_chunks)
 
@@ -348,8 +503,18 @@ async def test_run_ingestion_job_replaces_stale_chunks(source_import_client, mon
         .scalars()
         .all()
     )
-    assert len(chunks) == 1
-    assert chunks[0].content == "Updated replacement text."
+    await session.refresh(source)
+    assert len(chunks) == 2
+    assert {chunk.content for chunk in chunks} == {
+        "Original text.",
+        "Updated replacement text.",
+    }
+    assert all(chunk.source_version_id is not None for chunk in chunks)
+    current_chunks = [
+        chunk for chunk in chunks if chunk.source_version_id == source.current_version_id
+    ]
+    assert len(current_chunks) == 1
+    assert current_chunks[0].content == "Updated replacement text."
     assert source.citation_label == "Changing Notes Citation"
 
 
@@ -450,6 +615,8 @@ async def test_source_chunks_schema_has_required_indexes(source_import_session):
     column_names = {column["name"] for column in columns}
     assert {
         "source_id",
+        "source_version_id",
+        "fingerprint",
         "chunk_index",
         "citation_ref",
         "location_label",
@@ -461,6 +628,6 @@ async def test_source_chunks_schema_has_required_indexes(source_import_session):
     index_names = {index["name"] for index in indexes}
     assert {
         "ix_source_chunks_source_id",
-        "uq_source_chunks_source_index",
+        "uq_source_chunks_version_index",
         "ix_source_chunks_embedding",
     } <= index_names

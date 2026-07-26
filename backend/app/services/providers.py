@@ -1,16 +1,24 @@
+import asyncio
+import ipaddress
+import socket
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from urllib.parse import quote, urlparse
 
 import httpx
 from cryptography.fernet import Fernet, InvalidToken
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
 from app.exceptions import NotFoundError, WikiBaseError
-from app.models.m3 import ProviderSetting
+from app.models.m3 import ProviderAuthorizationSession, ProviderSetting
 from app.models.user import User
-from app.schemas.m3 import ProviderConfigureRequest, ProviderDescriptor
+from app.schemas.m3 import (
+    ProviderAuthMethodDescriptor,
+    ProviderConfigureRequest,
+    ProviderDescriptor,
+)
 
 PROVIDERS = {
     "openai": ProviderDescriptor(
@@ -18,20 +26,203 @@ PROVIDERS = {
         name="OpenAI",
         models=["gpt-4o-mini", "gpt-4o"],
         endpoint="https://api.openai.com/v1",
+        description="A straightforward default for cited, source-grounded answers.",
+        capabilities=["Cited answers", "Streaming responses"],
+        setup_url="https://platform.openai.com/api-keys",
+        billing_note=(
+            "Uses developer API billing. A consumer subscription does not include API usage."
+        ),
+        auth_methods=[ProviderAuthMethodDescriptor(kind="api_key", label="OpenAI API key")],
+    ),
+    "chatgpt": ProviderDescriptor(
+        id="chatgpt",
+        name="ChatGPT",
+        models=[],
+        endpoint="",
+        description="Connect an approved ChatGPT account through a secure browser sign-in.",
+        capabilities=["Cited answers", "Browser sign-in", "Automatic token refresh"],
+        billing_note=(
+            "Uses the connected ChatGPT account. Availability depends on the approved OAuth "
+            "client, account plan, and provider terms."
+        ),
+        auth_methods=[
+            ProviderAuthMethodDescriptor(
+                kind="oauth_code",
+                label="Sign in through browser",
+                recommended=True,
+            )
+        ],
     ),
     "openai_compatible": ProviderDescriptor(
-        id="openai_compatible", name="OpenAI-compatible", models=[], endpoint=""
+        id="openai_compatible",
+        name="OpenAI-compatible",
+        models=[],
+        endpoint="",
+        description="Connect a trusted OpenAI-compatible endpoint approved by the workspace owner.",
+        capabilities=["Cited answers", "Custom models"],
+        billing_note="Usage and retention depend on the service behind the endpoint.",
+        endpoint_mode="custom",
     ),
     "azure_openai": ProviderDescriptor(
-        id="azure_openai", name="Azure OpenAI", models=[], endpoint=""
+        id="azure_openai",
+        name="Azure OpenAI",
+        models=[],
+        endpoint="",
+        description="Use an Azure OpenAI deployment managed in your Azure subscription.",
+        capabilities=["Cited answers", "Azure-managed deployment"],
+        setup_url="https://portal.azure.com/",
+        billing_note=(
+            "Requires an Azure OpenAI resource and deployment. Azure usage is billed separately."
+        ),
+        endpoint_mode="custom",
     ),
     "google_gemini": ProviderDescriptor(
         id="google_gemini",
         name="Google Gemini",
         models=["gemini-2.0-flash"],
-        endpoint="https://generativelanguage.googleapis.com/v1beta",
+        endpoint="https://generativelanguage.googleapis.com/v1beta/openai",
+        description="Use a Gemini developer key through Google's OpenAI-compatible endpoint.",
+        capabilities=["Cited answers", "Streaming responses"],
+        setup_url="https://aistudio.google.com/apikey",
+        billing_note=(
+            "Uses Gemini API quotas and billing. A Google consumer subscription is separate."
+        ),
     ),
 }
+
+
+def provider_descriptors(settings: Settings | None = None) -> list[ProviderDescriptor]:
+    settings = settings or get_settings()
+    descriptors: list[ProviderDescriptor] = []
+    for descriptor in PROVIDERS.values():
+        copy = descriptor.model_copy(deep=True)
+        if copy.id == "chatgpt":
+            enabled = bool(settings.chatgpt_oauth_client_id.strip())
+            copy.models = [settings.chatgpt_default_model]
+            copy.endpoint = settings.chatgpt_responses_endpoint
+            copy.auth_methods[0].enabled = enabled
+            copy.auth_methods[0].unavailable_reason = (
+                None
+                if enabled
+                else "An approved OAuth client must be configured by the workspace owner."
+            )
+        elif not copy.auth_methods:
+            copy.auth_methods = [ProviderAuthMethodDescriptor(kind="api_key", label="API key")]
+        descriptors.append(copy)
+    return descriptors
+
+
+@dataclass(frozen=True)
+class GenerationProvider:
+    provider: str
+    model: str
+    endpoint: str
+    api_key: str
+    auth_method: str = "api_key"
+    account_id: str = ""
+    transport: str = "chat_completions"
+
+
+async def resolve_generation_provider(
+    user: User | None,
+    db: AsyncSession | None,
+) -> GenerationProvider:
+    settings = get_settings()
+    if user is not None and db is not None:
+        result = await db.execute(
+            select(ProviderSetting).where(
+                ProviderSetting.user_id == user.id,
+                ProviderSetting.active_for_generation.is_(True),
+                ProviderSetting.status == "connected",
+            )
+        )
+        selected = result.scalar_one_or_none()
+        if selected is not None:
+            if selected.auth_method == "oauth_code":
+                if selected.provider != "chatgpt" or selected.encrypted_access_token is None:
+                    raise WikiBaseError(
+                        409,
+                        "reauth_required",
+                        "The active provider must be reconnected",
+                    )
+                from app.services.provider_auth import refresh_browser_credential
+
+                token = await refresh_browser_credential(selected, db)
+                return GenerationProvider(
+                    provider=selected.provider,
+                    model=selected.model,
+                    endpoint=settings.chatgpt_responses_endpoint,
+                    api_key=token,
+                    auth_method=selected.auth_method,
+                    account_id=selected.provider_account_id or "",
+                    transport="responses",
+                )
+            if selected.encrypted_api_key is None:
+                raise WikiBaseError(
+                    409,
+                    "credential_unavailable",
+                    "The active provider credential is unavailable",
+                )
+            return GenerationProvider(
+                provider=selected.provider,
+                model=selected.model,
+                endpoint=selected.endpoint,
+                api_key=decrypt_provider_key(
+                    selected.encrypted_api_key,
+                    selected.encryption_key_id,
+                    settings,
+                ),
+            )
+        reconnect_required = await db.scalar(
+            select(ProviderSetting.id).where(
+                ProviderSetting.user_id == user.id,
+                ProviderSetting.active_for_generation.is_(True),
+                ProviderSetting.status == "reauth_required",
+            )
+        )
+        if reconnect_required is not None:
+            raise WikiBaseError(
+                409,
+                "reauth_required",
+                "Reconnect the selected provider before generating another answer",
+            )
+    return GenerationProvider(
+        provider="openai",
+        model="gpt-4o",
+        endpoint=PROVIDERS["openai"].endpoint,
+        api_key=settings.openai_api_key,
+    )
+
+
+async def force_refresh_generation_provider(
+    user: User | None,
+    db: AsyncSession | None,
+) -> GenerationProvider:
+    if user is None or db is None:
+        raise WikiBaseError(401, "reauth_required", "Reconnect the active provider")
+    selected = await db.scalar(
+        select(ProviderSetting).where(
+            ProviderSetting.user_id == user.id,
+            ProviderSetting.active_for_generation.is_(True),
+            ProviderSetting.provider == "chatgpt",
+            ProviderSetting.auth_method == "oauth_code",
+        )
+    )
+    if selected is None:
+        raise WikiBaseError(401, "reauth_required", "Reconnect the active provider")
+    from app.services.provider_auth import refresh_browser_credential
+
+    settings = get_settings()
+    token = await refresh_browser_credential(selected, db, force=True)
+    return GenerationProvider(
+        provider=selected.provider,
+        model=selected.model,
+        endpoint=settings.chatgpt_responses_endpoint,
+        api_key=token,
+        auth_method=selected.auth_method,
+        account_id=selected.provider_account_id or "",
+        transport="responses",
+    )
 
 
 def _encryption_keys(settings: Settings) -> dict[str, Fernet]:
@@ -101,6 +292,20 @@ def endpoint_for(payload: ProviderConfigureRequest, settings: Settings | None = 
     return endpoint
 
 
+async def lock_provider_mutation(user_id, provider: str, db: AsyncSession) -> None:
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+        {"lock_key": f"provider:{user_id}:{provider}"},
+    )
+
+
+async def lock_provider_selection(user_id, db: AsyncSession) -> None:
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+        {"lock_key": f"provider-selection:{user_id}"},
+    )
+
+
 async def list_settings(user: User, db: AsyncSession) -> list[ProviderSetting]:
     result = await db.execute(
         select(ProviderSetting)
@@ -115,10 +320,8 @@ async def configure_provider(
     user: User, payload: ProviderConfigureRequest, db: AsyncSession
 ) -> ProviderSetting:
     endpoint = endpoint_for(payload)
-    await db.execute(
-        text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
-        {"lock_key": f"provider:{user.id}:{payload.provider}"},
-    )
+    await lock_provider_mutation(user.id, payload.provider, db)
+    await lock_provider_selection(user.id, db)
     result = await db.execute(
         select(ProviderSetting).where(
             ProviderSetting.user_id == user.id,
@@ -126,24 +329,43 @@ async def configure_provider(
         )
     )
     setting = result.scalar_one_or_none()
-    encrypted, key_id = encrypt_provider_key(payload.api_key, get_settings())
     if setting is None:
+        if payload.api_key is None:
+            raise WikiBaseError(422, "credential_required", "An API key is required to connect")
+        encrypted, key_id = encrypt_provider_key(payload.api_key, get_settings())
         setting = ProviderSetting(
             user_id=user.id,
             provider=payload.provider,
             model=payload.model,
             endpoint=endpoint,
+            auth_method="api_key",
             encrypted_api_key=encrypted,
             encryption_key_id=key_id,
             status="configured",
+            active_for_generation=False,
+            last_error=None,
         )
         db.add(setting)
     else:
         setting.model = payload.model
         setting.endpoint = endpoint
-        setting.encrypted_api_key = encrypted
-        setting.encryption_key_id = key_id
+        setting.auth_method = "api_key"
+        if payload.api_key is not None:
+            encrypted, key_id = encrypt_provider_key(payload.api_key, get_settings())
+            setting.encrypted_api_key = encrypted
+            setting.encryption_key_id = key_id
+        if setting.encrypted_api_key is None:
+            raise WikiBaseError(422, "credential_required", "An API key is required to connect")
+        setting.encrypted_access_token = None
+        setting.encrypted_refresh_token = None
+        setting.access_token_expires_at = None
+        setting.provider_account_id = None
+        setting.provider_subject_id = None
+        setting.provider_account_label = None
+        setting.granted_scopes = None
         setting.status = "configured"
+        setting.active_for_generation = False
+        setting.last_error = None
         setting.last_tested_at = None
     await db.flush()
     await db.refresh(setting)
@@ -165,8 +387,30 @@ async def _owned_setting(user: User, provider: str, db: AsyncSession) -> Provide
 
 
 async def test_provider(user: User, provider: str, db: AsyncSession) -> ProviderSetting:
+    await lock_provider_mutation(user.id, provider, db)
     setting = await _owned_setting(user, provider, db)
     settings = get_settings()
+    if provider == "chatgpt":
+        if setting.auth_method != "oauth_code" or setting.encrypted_access_token is None:
+            raise WikiBaseError(409, "reauth_required", "Reconnect ChatGPT through the browser")
+        from app.services.provider_auth import refresh_browser_credential
+
+        try:
+            await refresh_browser_credential(setting, db, commit=False)
+        except WikiBaseError as exc:
+            if exc.error != "reauth_required":
+                raise
+            setting.last_tested_at = datetime.now(UTC)
+            await db.flush()
+            await db.refresh(setting)
+            return setting
+        setting.status = "connected"
+        setting.last_error = None
+        setting.last_error_code = None
+        setting.last_tested_at = datetime.now(UTC)
+        await db.flush()
+        await db.refresh(setting)
+        return setting
     if provider in {"openai", "google_gemini"}:
         endpoint = PROVIDERS[provider].endpoint
         if setting.endpoint != endpoint:
@@ -177,11 +421,12 @@ async def test_provider(user: User, provider: str, db: AsyncSession) -> Provider
             ".openai.azure.com"
         ):
             raise WikiBaseError(422, "unsafe_endpoint", "Azure endpoint is not allowed")
+        await _ensure_public_endpoint(endpoint)
     key = decrypt_provider_key(setting.encrypted_api_key, setting.encryption_key_id, settings)
     headers: dict[str, str]
     method = "GET"
     body = None
-    if provider in {"openai", "openai_compatible"}:
+    if provider in {"openai", "openai_compatible", "google_gemini"}:
         url = f"{endpoint}/models"
         headers = {"Authorization": f"Bearer {key}"}
     elif provider == "azure_openai":
@@ -190,38 +435,124 @@ async def test_provider(user: User, provider: str, db: AsyncSession) -> Provider
         headers = {"api-key": key}
         method = "POST"
         body = {"messages": [{"role": "user", "content": "Reply OK"}], "max_tokens": 1}
-    else:
-        url = f"{endpoint}/models"
-        headers = {"x-goog-api-key": key}
+    failure: str | None = None
     try:
         async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
             response = await client.request(method, url, headers=headers, json=body)
         valid = 200 <= response.status_code < 300
+        if response.status_code in {401, 403}:
+            failure = "The provider rejected the credential. Check the key and its permissions."
+        elif response.status_code == 404:
+            failure = "The configured endpoint or model was not found."
+        elif response.status_code == 429:
+            failure = "The provider rate limit was reached. Try again after checking its quota."
+        elif response.status_code >= 500:
+            failure = "The provider is temporarily unavailable. Try again later."
+        elif not valid:
+            failure = "The provider rejected the endpoint or model."
         if valid and provider != "azure_openai":
             payload = response.json()
-            models = payload.get("models" if provider == "google_gemini" else "data", [])
+            models = payload.get("data", [])
             model_ids = {
-                str(item.get("name" if provider == "google_gemini" else "id", "")).removeprefix(
-                    "models/"
-                )
+                str(item.get("id", "")).removeprefix("models/")
                 for item in models
                 if isinstance(item, dict)
             }
             valid = setting.model in model_ids
+            if not valid:
+                failure = "The configured model is not available for this credential."
+    except httpx.TimeoutException:
+        valid = False
+        failure = "The connection timed out. Check the endpoint and try again."
+    except (httpx.ConnectError, httpx.NetworkError):
+        valid = False
+        failure = "A network or TLS connection could not be established."
     except (AttributeError, httpx.HTTPError, ValueError):
         valid = False
+        failure = "The provider returned an unexpected response."
+    await lock_provider_selection(user.id, db)
     setting.status = "connected" if valid else "invalid"
+    setting.last_error = None if valid else failure
+    if not valid:
+        setting.active_for_generation = False
     setting.last_tested_at = datetime.now(UTC)
+    if valid:
+        active = await db.scalar(
+            select(ProviderSetting.id).where(
+                ProviderSetting.user_id == user.id,
+                ProviderSetting.active_for_generation.is_(True),
+            )
+        )
+        if active is None:
+            setting.active_for_generation = True
     await db.flush()
     await db.refresh(setting)
-    if not valid:
-        raise WikiBaseError(
-            422, "provider_validation_failed", "Provider rejected the configuration"
+    return setting
+
+
+async def _ensure_public_endpoint(endpoint: str) -> None:
+    hostname = urlparse(endpoint).hostname
+    if not hostname:
+        raise WikiBaseError(422, "unsafe_endpoint", "Provider endpoint has no hostname")
+
+    def resolve() -> list[str]:
+        return list(
+            {item[4][0] for item in socket.getaddrinfo(hostname, 443, type=socket.SOCK_STREAM)}
         )
+
+    try:
+        addresses = await asyncio.wait_for(asyncio.to_thread(resolve), timeout=3)
+    except (OSError, TimeoutError) as exc:
+        raise WikiBaseError(
+            422,
+            "unsafe_endpoint",
+            "Custom provider endpoint could not be resolved safely",
+        ) from exc
+    if not addresses or any(not ipaddress.ip_address(address).is_global for address in addresses):
+        raise WikiBaseError(
+            422,
+            "unsafe_endpoint",
+            "Custom provider endpoint resolves to a private or reserved network",
+        )
+
+
+async def activate_provider(user: User, provider: str, db: AsyncSession) -> ProviderSetting:
+    await lock_provider_mutation(user.id, provider, db)
+    setting = await _owned_setting(user, provider, db)
+    if setting.status != "connected":
+        raise WikiBaseError(
+            409,
+            "provider_not_connected",
+            "Test this provider successfully before making it active",
+        )
+    await lock_provider_selection(user.id, db)
+    await db.refresh(setting)
+    if setting.status != "connected":
+        raise WikiBaseError(
+            409,
+            "provider_not_connected",
+            "Test this provider successfully before making it active",
+        )
+    await db.execute(
+        ProviderSetting.__table__.update()
+        .where(ProviderSetting.user_id == user.id)
+        .values(active_for_generation=False)
+    )
+    setting.active_for_generation = True
+    await db.flush()
+    await db.refresh(setting)
     return setting
 
 
 async def disconnect_provider(user: User, provider: str, db: AsyncSession) -> None:
+    await lock_provider_mutation(user.id, provider, db)
     setting = await _owned_setting(user, provider, db)
+    await lock_provider_selection(user.id, db)
+    await db.execute(
+        delete(ProviderAuthorizationSession).where(
+            ProviderAuthorizationSession.user_id == user.id,
+            ProviderAuthorizationSession.provider == provider,
+        )
+    )
     await db.delete(setting)
     await db.flush()

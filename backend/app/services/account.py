@@ -23,7 +23,11 @@ from app.models.m3 import (
 )
 from app.models.settings import UserPreference
 from app.models.source import Source
-from app.models.source_chunk import SourceChunk
+from app.models.source_chunk import (
+    SourceChunk,
+    active_source_chunk_predicate,
+    is_active_source_chunk,
+)
 from app.models.user import User
 from app.models.wiki import WikiPage
 from app.services.exports import ExportFile, canonical_markdown
@@ -81,6 +85,7 @@ def _account_export_preflight_statement(user_id):
                 preferences.c.theme,
                 preferences.c.motion_preference,
                 preferences.c.default_module_id,
+                preferences.c.default_enrollment_id,
                 preferences.c.daily_review_target,
                 preferences.c.reminder_daily_review,
                 preferences.c.reminder_processing_attention,
@@ -113,6 +118,7 @@ def _account_export_preflight_statement(user_id):
             [chunks.c.location_label, chunks.c.chunk_index, chunks.c.content],
             chunks.join(sources, chunks.c.source_id == sources.c.id),
             sources.c.user_id == user_id,
+            active_source_chunk_predicate(chunks, sources),
         ),
         _projected_table_bytes(
             [
@@ -293,13 +299,21 @@ async def export_account(user: User, db: AsyncSession) -> ExportFile:
                         Source.course_context,
                         Source.project_context,
                         Source.import_error,
+                        Source.current_version_id,
                         Source.created_at,
                         Source.updated_at,
                         raiseload=True,
                     ),
-                    selectinload(Source.chunks)
+                    selectinload(
+                        Source.chunks.and_(
+                            SourceChunk.source.has(
+                                active_source_chunk_predicate(SourceChunk, Source)
+                            )
+                        )
+                    )
                     .load_only(
                         SourceChunk.chunk_index,
+                        SourceChunk.source_version_id,
                         SourceChunk.location_label,
                         SourceChunk.content,
                         raiseload=True,
@@ -511,6 +525,8 @@ async def export_account(user: User, db: AsyncSession) -> ExportFile:
                         ProviderSetting.provider,
                         ProviderSetting.model,
                         ProviderSetting.endpoint,
+                        ProviderSetting.auth_method,
+                        ProviderSetting.provider_account_label,
                         ProviderSetting.status,
                         ProviderSetting.last_tested_at,
                         raiseload=True,
@@ -529,6 +545,7 @@ async def export_account(user: User, db: AsyncSession) -> ExportFile:
                     UserPreference.theme,
                     UserPreference.motion_preference,
                     UserPreference.default_module_id,
+                    UserPreference.default_enrollment_id,
                     UserPreference.daily_review_target,
                     UserPreference.reminder_daily_review,
                     UserPreference.reminder_processing_attention,
@@ -559,6 +576,7 @@ async def export_account(user: User, db: AsyncSession) -> ExportFile:
                             "theme": preferences.theme,
                             "motion_preference": preferences.motion_preference,
                             "default_module_id": preferences.default_module_id,
+                            "default_enrollment_id": preferences.default_enrollment_id,
                             "daily_review_target": preferences.daily_review_target,
                             "reminders": {
                                 "daily_review": preferences.reminder_daily_review,
@@ -601,6 +619,7 @@ async def export_account(user: User, db: AsyncSession) -> ExportFile:
             readable = "\n\n".join(
                 f"## {chunk.location_label or f'Chunk {chunk.chunk_index + 1}'}\n\n{chunk.content}"
                 for chunk in sorted(source.chunks, key=lambda item: item.chunk_index)
+                if is_active_source_chunk(chunk, source)
             )
             _write(archive, f"{source_dir}/parsed-content.md", readable.encode(), total)
         for page in pages:
@@ -764,6 +783,8 @@ async def export_account(user: User, db: AsyncSession) -> ExportFile:
                         "provider": item.provider,
                         "model": item.model,
                         "endpoint": item.endpoint,
+                        "auth_method": item.auth_method,
+                        "provider_account_label": item.provider_account_label,
                         "status": item.status,
                         "last_tested_at": item.last_tested_at,
                     }

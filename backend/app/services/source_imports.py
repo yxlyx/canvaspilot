@@ -1,20 +1,23 @@
 import hashlib
+import json
 import uuid
 from datetime import UTC, datetime
 
 from pydantic import ValidationError
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.exceptions import IngestionJobStateError, NotFoundError
 from app.models.content import SourceType
 from app.models.ingestion_job import IngestionJob
 from app.models.m3 import SourceChange
+from app.models.processing import SourceVersion
 from app.models.source import Source, SourceStatus
 from app.models.source_chunk import SourceChunk
 from app.models.user import User
 from app.schemas.source_imports import (
     MAX_IMPORT_TEXT_CHARS,
+    MAX_SOURCE_CHUNKS,
     SourceImportItem,
     SourceImportSection,
     SourceParseItem,
@@ -98,7 +101,38 @@ async def _replace_source_chunks(
     item: SourceImportItem,
     db: AsyncSession,
 ) -> list[SourceChunk]:
-    await db.execute(delete(SourceChunk).where(SourceChunk.source_id == source.id))
+    payload = item.model_dump(mode="json")
+    fingerprint = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    version = await db.scalar(
+        select(SourceVersion).where(
+            SourceVersion.source_id == source.id,
+            SourceVersion.fingerprint == fingerprint,
+        )
+    )
+    if version is None:
+        version_number = (
+            await db.scalar(
+                select(func.max(SourceVersion.version_number)).where(
+                    SourceVersion.source_id == source.id
+                )
+            )
+            or 0
+        ) + 1
+        version = SourceVersion(
+            source_id=source.id,
+            version_number=version_number,
+            fingerprint=fingerprint,
+            payload=payload,
+            status="processing",
+        )
+        db.add(version)
+        await db.flush()
+    else:
+        version.status = "processing"
+        version.error = None
+    await db.execute(delete(SourceChunk).where(SourceChunk.source_version_id == version.id))
     if item.metadata_only:
         raise ValueError("Metadata-only sources cannot be published as ready content")
 
@@ -112,12 +146,27 @@ async def _replace_source_chunks(
     chunks: list[SourceChunk] = []
     for section in _import_sections(item):
         text_chunks = chunk_text(section.content, meta)
+        if len(chunks) + len(text_chunks) > MAX_SOURCE_CHUNKS:
+            raise ValueError("Source exceeds the maximum supported chunk count")
         for section_chunk_index, text_chunk in enumerate(text_chunks):
             chunk_index = len(chunks)
+            citation_ref = _citation_ref(source, section, chunk_index, section_chunk_index)
             chunk = SourceChunk(
                 source_id=source.id,
+                source_version_id=version.id,
+                fingerprint=hashlib.sha256(
+                    json.dumps(
+                        {
+                            "content": text_chunk.content,
+                            "citation": citation_ref,
+                            "location": section.location_label,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest(),
                 chunk_index=chunk_index,
-                citation_ref=_citation_ref(source, section, chunk_index, section_chunk_index),
+                citation_ref=citation_ref,
                 location_label=section.location_label,
                 content=text_chunk.content,
                 token_count=text_chunk.token_count,
@@ -129,6 +178,15 @@ async def _replace_source_chunks(
         raise ValueError("No importable text found")
 
     await db.flush()
+    current = (
+        await db.get(SourceVersion, source.current_version_id)
+        if source.current_version_id is not None
+        else None
+    )
+    if current is None or current.version_number <= version.version_number:
+        source.current_version_id = version.id
+    version.status = "ready"
+    version.ready_at = datetime.now(UTC)
     return chunks
 
 
@@ -151,7 +209,12 @@ async def import_ingestion_job_sources(
     errors: list[str] = []
 
     for source_id, source_title in source_refs:
-        source = await db.get(Source, source_id)
+        await db.execute(
+            select(func.pg_advisory_xact_lock(func.hashtextextended(f"source:{source_id}", 0)))
+        )
+        source = (
+            await db.execute(select(Source).where(Source.id == source_id).with_for_update())
+        ).scalar_one_or_none()
         if source is None or source.user_id != user_id:
             raise NotFoundError("Source not found")
         before_snapshot = _content_snapshot(source, list(source.chunks))
@@ -173,7 +236,12 @@ async def import_ingestion_job_sources(
             failed_source = await db.get(Source, source_id)
             error_message = str(exc) or "Import failed"
             if failed_source is not None:
-                failed_source.status = SourceStatus.FAILED
+                failed_status = (
+                    SourceStatus.READY
+                    if failed_source.current_version_id is not None
+                    else SourceStatus.FAILED
+                )
+                failed_source.status = failed_status
                 failed_source.import_error = error_message
                 db.add(
                     SourceChange(
@@ -184,7 +252,7 @@ async def import_ingestion_job_sources(
                         before_snapshot=before_snapshot,
                         after_snapshot={
                             **before_snapshot,
-                            "status": SourceStatus.FAILED.value,
+                            "status": failed_status.value,
                             "import_error": error_message,
                         },
                     )

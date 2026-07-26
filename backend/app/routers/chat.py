@@ -9,7 +9,8 @@ from app.db.database import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
 from app.schemas.chat import ChatRequest
-from app.services.llm import stream_rag_response
+from app.services.llm import prepare_rag_stream, stream_rag_response
+from app.services.providers import resolve_generation_provider
 from app.services.retrieval import build_context, retrieve
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -34,11 +35,13 @@ async def chat(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    provider = await resolve_generation_provider(user, db)
     chunks = await retrieve(
         query=chat_request.message,
         user_id=user.id,
         db=db,
         module_id=chat_request.module_id,
+        enrollment_id=chat_request.enrollment_id,
     )
 
     if not chunks:
@@ -58,6 +61,14 @@ async def chat(
         return _event_stream(no_results())
 
     context = build_context(chunks)
+    prepared = await prepare_rag_stream(
+        chat_request.message,
+        context,
+        chat_request.history,
+        user,
+        db,
+        provider,
+    )
 
     return _event_stream(
         stream_rag_response(
@@ -65,5 +76,9 @@ async def chat(
             context=context,
             chunks=chunks,
             history=chat_request.history,
+            user=user,
+            db=db,
+            provider=provider,
+            prepared=prepared,
         )
     )

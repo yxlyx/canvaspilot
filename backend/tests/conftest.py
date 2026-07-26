@@ -16,9 +16,11 @@ from app.main import app  # noqa: E402
 from app.models.user import User  # noqa: E402
 
 DATABASE_TEST_MODULES = {
+    "test_flashcard_drafts_postgresql.py",
     "test_flashcards.py",
     "test_ingestion_jobs.py",
     "test_m3_api.py",
+    "test_processing.py",
     "test_retrieval_chat_integration.py",
     "test_search.py",
     "test_source_imports.py",

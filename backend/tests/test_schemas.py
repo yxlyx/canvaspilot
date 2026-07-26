@@ -1,6 +1,9 @@
 import uuid
 from datetime import UTC, datetime
 
+import pytest
+from pydantic import ValidationError
+
 from app.schemas.auth import UserResponse
 from app.schemas.chat import ChatMessage, ChatRequest, Citation
 from app.schemas.ingestion_jobs import IngestionJobResponse
@@ -73,6 +76,17 @@ class TestSnakeCaseSerialization:
         )
         data = req.model_dump()
         assert "module_id" in data
+
+    def test_chat_request_accepts_one_local_enrollment_scope(self):
+        enrollment_id = uuid.uuid4()
+        request = ChatRequest(enrollment_id=enrollment_id, message="Summarise my sources")
+        assert request.enrollment_id == enrollment_id
+        with pytest.raises(ValidationError):
+            ChatRequest(
+                module_id=uuid.uuid4(),
+                enrollment_id=enrollment_id,
+                message="Ambiguous scope",
+            )
 
     def test_citation(self):
         c = Citation(title="Notes", url="http://x.com", snippet="Some text")

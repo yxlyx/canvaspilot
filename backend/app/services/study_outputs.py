@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.exceptions import NotFoundError
 from app.models.m3 import StudyOutput, StudyOutputCitation
 from app.models.source import Source, SourceStatus
-from app.models.source_chunk import SourceChunk
+from app.models.source_chunk import SourceChunk, active_source_chunk_predicate
 from app.models.user import User
 from app.models.wiki import WikiPage
 from app.schemas.m3 import StudyOutputGenerateRequest
@@ -90,6 +90,7 @@ async def _evidence_for_request(
                     .where(
                         Source.user_id == user.id,
                         SourceChunk.id.in_([citation.source_chunk_id for citation in selected]),
+                        active_source_chunk_predicate(SourceChunk, Source),
                     )
                 )
             ).all()
@@ -117,6 +118,7 @@ async def _evidence_for_request(
                     Source.user_id == user.id,
                     Source.status == SourceStatus.READY,
                     SourceChunk.id.in_(payload.source_chunk_ids),
+                    active_source_chunk_predicate(SourceChunk, Source),
                 )
                 .order_by(Source.title.asc(), SourceChunk.chunk_index.asc(), SourceChunk.id.asc())
             )
@@ -130,7 +132,7 @@ async def _evidence_for_request(
             .where(
                 Source.user_id == user.id,
                 Source.status == SourceStatus.READY,
-                Source.chunks.any(),
+                Source.chunks.any(active_source_chunk_predicate(SourceChunk, Source)),
             )
             .order_by(Source.title.asc(), Source.id.asc())
         )
@@ -152,7 +154,10 @@ async def _evidence_for_request(
                 await db.execute(
                     select(SourceChunk, Source)
                     .join(Source, SourceChunk.source_id == Source.id)
-                    .where(SourceChunk.source_id == source.id)
+                    .where(
+                        SourceChunk.source_id == source.id,
+                        active_source_chunk_predicate(SourceChunk, Source),
+                    )
                     .order_by(SourceChunk.chunk_index.asc(), SourceChunk.id.asc())
                     .limit(MAX_EVIDENCE_PER_SOURCE + 1)
                 )

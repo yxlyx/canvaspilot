@@ -1,4 +1,5 @@
 from functools import lru_cache
+from urllib.parse import urlparse
 
 from cryptography.fernet import Fernet
 from pydantic import model_validator
@@ -24,6 +25,14 @@ class Settings(BaseSettings):
     provider_encryption_previous_secrets: str = ""
     provider_allowed_endpoints: str = ""
     openai_api_key: str = ""
+    chatgpt_oauth_client_id: str = ""
+    chatgpt_oauth_client_secret: str = ""
+    chatgpt_oauth_authorize_url: str = "https://auth.openai.com/oauth/authorize"
+    chatgpt_oauth_token_url: str = "https://auth.openai.com/oauth/token"
+    chatgpt_oauth_jwks_url: str = "https://auth.openai.com/.well-known/jwks.json"
+    chatgpt_oauth_redirect_uri: str = "http://localhost:3000/api/providers/chatgpt/oauth/callback"
+    chatgpt_responses_endpoint: str = "https://chatgpt.com/backend-api/codex"
+    chatgpt_default_model: str = "gpt-5-codex"
     frontend_url: str = "http://localhost:3000"
     backend_url: str = "http://localhost:8000"
     cors_origins: str = "http://localhost:3000"
@@ -68,6 +77,55 @@ class Settings(BaseSettings):
             raise ValueError("ENVIRONMENT must be an explicit supported mode")
         if environment in {"production", "prod", "staging"} and not self.secure_cookies:
             raise ValueError("SECURE_COOKIES must be enabled in production and staging")
+        oauth_urls = {
+            "CHATGPT_OAUTH_AUTHORIZE_URL": (
+                self.chatgpt_oauth_authorize_url,
+                "auth.openai.com",
+                "/oauth/authorize",
+            ),
+            "CHATGPT_OAUTH_TOKEN_URL": (
+                self.chatgpt_oauth_token_url,
+                "auth.openai.com",
+                "/oauth/token",
+            ),
+            "CHATGPT_OAUTH_JWKS_URL": (
+                self.chatgpt_oauth_jwks_url,
+                "auth.openai.com",
+                "/.well-known/jwks.json",
+            ),
+            "CHATGPT_RESPONSES_ENDPOINT": (
+                self.chatgpt_responses_endpoint,
+                "chatgpt.com",
+                "/backend-api/codex",
+            ),
+        }
+        for name, (value, hostname, path) in oauth_urls.items():
+            parsed = urlparse(value)
+            if (
+                parsed.scheme != "https"
+                or parsed.hostname != hostname
+                or parsed.port not in (None, 443)
+                or parsed.username
+                or parsed.password
+                or parsed.path != path
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(f"{name} must use its fixed official HTTPS endpoint")
+        redirect = urlparse(self.chatgpt_oauth_redirect_uri)
+        if (
+            redirect.scheme
+            not in (
+                {"https"} if environment in {"production", "prod", "staging"} else {"http", "https"}
+            )
+            or not redirect.hostname
+            or redirect.username
+            or redirect.password
+            or redirect.query
+            or redirect.fragment
+            or redirect.path != "/api/providers/chatgpt/oauth/callback"
+        ):
+            raise ValueError("CHATGPT_OAUTH_REDIRECT_URI must be the configured callback URL")
         return self
 
     @property

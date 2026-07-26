@@ -29,88 +29,53 @@ class TopicEvidence:
 
 
 def calculate_topic_meter(topic: str, evidence: TopicEvidence, now: datetime) -> TopicMeterResponse:
-    source_value = min(evidence.source_count / 2, 1.0) if evidence.source_count else None
-    performance_values: list[tuple[float, int]] = []
-    if evidence.attempts:
-        performance_values.append((evidence.correct / evidence.attempts, evidence.attempts))
-    if evidence.marked_score_count:
-        performance_values.append(
-            (evidence.marked_score_total / evidence.marked_score_count, evidence.marked_score_count)
-        )
-    performance = (
-        sum(value * count for value, count in performance_values)
-        / sum(count for _, count in performance_values)
-        if performance_values
+    flashcard_recall = evidence.correct / evidence.attempts if evidence.attempts else None
+    marked_paper_score = (
+        evidence.marked_score_total / evidence.marked_score_count
+        if evidence.marked_score_count
         else None
     )
     confidence = (
         evidence.confidence_total / evidence.confidence_count if evidence.confidence_count else None
     )
     age_days = (now - evidence.latest_at).days if evidence.latest_at else None
-    recency = max(0.0, 1 - age_days / 60) if age_days is not None else None
     stale = age_days is not None and age_days > STALE_DAYS
     evidence_count = evidence.source_count + evidence.attempts + evidence.marked_score_count
-    signal_values = [source_value, performance, confidence, recency]
-    available = [value for value in signal_values if value is not None]
-    evidence_confidence = min(1.0, evidence_count / 8) * (len(available) / 4)
-
-    estimated: float | None = None
-    if len(available) >= 2 and evidence_count >= 2:
-        weighted = [
-            (source_value, 0.25),
-            (performance, 0.45),
-            (confidence, 0.15),
-            (recency, 0.15),
-        ]
-        denominator = sum(weight for value, weight in weighted if value is not None)
-        estimated = round(
-            100
-            * sum(value * weight for value, weight in weighted if value is not None)
-            / denominator,
-            1,
-        )
-
-    if estimated is None:
-        state = "uncertain"
-        recommendation = "Add source and reviewed practice evidence before estimating completion."
-    elif stale:
-        state = "stale"
-        recommendation = "Refresh this stale topic with a cited review and a new flashcard attempt."
-    elif estimated < 60:
-        state = "measured"
-        recommendation = "Review the cited wiki page, then retry weak flashcards for this topic."
-    else:
-        state = "measured"
-        recommendation = "Maintain this topic with spaced review and recent cited practice."
 
     return TopicMeterResponse(
         topic=topic,
-        estimated_completion=estimated,
-        evidence_confidence=round(evidence_confidence, 3),
+        estimated_completion=None,
+        evidence_confidence=None,
         evidence_count=evidence_count,
-        state=state,
+        state="stale" if stale else "uncertain",
         stale=stale,
         signals=[
             MeterSignal(
-                name="source_coverage",
-                value=source_value,
+                name="source_count",
+                value=float(evidence.source_count) if evidence.source_count else None,
                 evidence_count=evidence.source_count,
             ),
             MeterSignal(
-                name="practice_performance",
-                value=performance,
-                evidence_count=evidence.attempts + evidence.marked_score_count,
+                name="flashcard_recall",
+                value=flashcard_recall,
+                evidence_count=evidence.attempts,
             ),
             MeterSignal(
-                name="self_confidence",
+                name="marked_paper_score",
+                value=marked_paper_score,
+                evidence_count=evidence.marked_score_count,
+            ),
+            MeterSignal(
+                name="self_reported_confidence",
                 value=confidence,
                 evidence_count=evidence.confidence_count,
             ),
-            MeterSignal(
-                name="recency", value=recency, evidence_count=1 if evidence.latest_at else 0
-            ),
         ],
-        recommendation=recommendation,
+        recommendation=(
+            "Use enrollment-scoped source coverage and recall metrics; "
+            "this legacy view is non-authoritative."
+        ),
+        reason_code="legacy_meter_non_authoritative",
     )
 
 
@@ -145,7 +110,7 @@ async def topic_meters(user: User, db: AsyncSession) -> list[TopicMeterResponse]
         await db.execute(
             select(FlashcardAttempt, Flashcard)
             .join(Flashcard, FlashcardAttempt.card_id == Flashcard.id)
-            .where(FlashcardAttempt.user_id == user.id)
+            .where(FlashcardAttempt.user_id == user.id, Flashcard.user_id == user.id)
             .order_by(FlashcardAttempt.created_at.desc())
             .limit(MAX_EVIDENCE_ROWS)
         )

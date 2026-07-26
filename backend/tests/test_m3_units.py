@@ -67,6 +67,9 @@ def test_production_accepts_independent_strong_secrets():
         session_secret="a-strong-independent-session-secret-1234",
         canvas_token_secret=Fernet.generate_key().decode(),
         provider_encryption_secret=Fernet.generate_key().decode(),
+        chatgpt_oauth_redirect_uri=(
+            "https://study.example.com/api/providers/chatgpt/oauth/callback"
+        ),
     )
     assert settings.environment == "production"
 
@@ -80,6 +83,26 @@ def test_deployed_environments_require_secure_cookies(environment):
             session_secret="a-strong-independent-session-secret-1234",
             canvas_token_secret=Fernet.generate_key().decode(),
             provider_encryption_secret=Fernet.generate_key().decode(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("chatgpt_oauth_authorize_url", "https://auth.openai.com/oauth/authorize/"),
+        ("chatgpt_oauth_token_url", "https://attacker.example/token"),
+        ("chatgpt_oauth_jwks_url", "https://attacker.example/jwks"),
+        ("chatgpt_responses_endpoint", "https://attacker.example/responses"),
+    ],
+)
+def test_browser_auth_endpoints_are_pinned(field, value):
+    with pytest.raises(ValidationError):
+        Settings(
+            environment="test",
+            session_secret="test-session-secret-with-at-least-32-bytes",
+            canvas_token_secret=Fernet.generate_key().decode(),
+            provider_encryption_secret=Fernet.generate_key().decode(),
+            **{field: value},
         )
 
 
@@ -170,7 +193,7 @@ def test_workspace_status_requires_resources_for_healthy_state(resource_count, c
         assert "finish indexing a source" in finding.recommendation
 
 
-def test_meter_states_are_deterministic_for_uncertain_stale_and_weak_topics():
+def test_legacy_meter_exposes_factual_signals_without_completion_scores():
     now = datetime(2026, 7, 20, tzinfo=UTC)
     uncertain = calculate_topic_meter("sparse", TopicEvidence(source_count=1), now)
     assert uncertain.state == "uncertain"
@@ -191,7 +214,7 @@ def test_meter_states_are_deterministic_for_uncertain_stale_and_weak_topics():
     assert stale.state == "stale"
     assert stale.stale is True
 
-    weak = calculate_topic_meter(
+    current = calculate_topic_meter(
         "weak",
         TopicEvidence(
             source_count=2,
@@ -203,8 +226,17 @@ def test_meter_states_are_deterministic_for_uncertain_stale_and_weak_topics():
         ),
         now,
     )
-    assert weak.estimated_completion is not None and weak.estimated_completion < 60
-    assert "retry" in weak.recommendation.lower()
+    assert current.estimated_completion is None
+    assert current.evidence_confidence is None
+    assert current.state == "uncertain"
+    assert current.reason_code == "legacy_meter_non_authoritative"
+    assert [(signal.name, signal.value) for signal in current.signals] == [
+        ("source_count", 2.0),
+        ("flashcard_recall", 0.0),
+        ("marked_paper_score", None),
+        ("self_reported_confidence", 0.25),
+    ]
+    assert "non-authoritative" in current.recommendation
 
 
 def test_marked_paper_parser_uses_only_explicit_structured_text():

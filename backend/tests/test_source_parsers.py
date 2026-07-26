@@ -1,18 +1,27 @@
 import base64
 import uuid
+from io import BytesIO
 
 import pytest
+from PIL import Image
 
 from app.models.source import Source, SourceKind
 from app.schemas.source_imports import SourceParseItem
 from app.services import source_parsers
 from app.services.source_parsers import (
     SourceParseError,
+    parse_image,
     parse_markdown,
     parse_pdf,
     parse_plain_text,
     parse_source_payload,
 )
+
+
+def _encoded_image(image_format: str = "PNG") -> str:
+    output = BytesIO()
+    Image.new("RGB", (120, 60), "white").save(output, format=image_format)
+    return base64.b64encode(output.getvalue()).decode()
 
 
 def test_parse_markdown_strips_frontmatter_and_tracks_headings():
@@ -60,6 +69,48 @@ def test_parse_pdf_extracts_page_labels(monkeypatch):
 def test_parse_pdf_rejects_invalid_base64():
     with pytest.raises(SourceParseError, match="base64"):
         parse_pdf("not base64")
+
+
+def test_parse_image_extracts_ocr_text_with_location(monkeypatch):
+    monkeypatch.setattr(
+        source_parsers.pytesseract,
+        "image_to_string",
+        lambda image, **kwargs: "Binary search trees preserve ordering.",
+    )
+
+    sections = parse_image(_encoded_image(), "lecture.png")
+
+    assert len(sections) == 1
+    assert sections[0].location_label == "Image OCR"
+    assert sections[0].content == "Binary search trees preserve ordering."
+
+
+def test_parse_image_rejects_non_png_or_jpeg(monkeypatch):
+    monkeypatch.setattr(
+        source_parsers.pytesseract,
+        "image_to_string",
+        lambda image, **kwargs: "text",
+    )
+
+    with pytest.raises(SourceParseError, match="Only PNG and JPEG"):
+        parse_image(_encoded_image("GIF"), "lecture.gif")
+
+
+def test_parse_image_enforces_pixel_limit(monkeypatch):
+    monkeypatch.setattr(source_parsers, "MAX_IMAGE_PIXELS", 100)
+
+    with pytest.raises(SourceParseError, match="decoded safely|25 megapixel OCR limit"):
+        parse_image(_encoded_image(), "lecture.png")
+
+
+def test_parse_image_reports_ocr_timeout(monkeypatch):
+    def timeout(*_args, **_kwargs):
+        raise RuntimeError("Tesseract process timeout")
+
+    monkeypatch.setattr(source_parsers.pytesseract, "image_to_string", timeout)
+
+    with pytest.raises(SourceParseError, match="OCR timed out"):
+        parse_image(_encoded_image(), "lecture.png")
 
 
 def test_pdf_extracted_text_limit_stops_per_page_extraction(monkeypatch):

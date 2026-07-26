@@ -1,8 +1,13 @@
 import base64
+import binascii
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from io import BytesIO
+
+import pytesseract
+from PIL import Image, UnidentifiedImageError
+from pytesseract import TesseractError, TesseractNotFoundError
 
 from app.models.source import Source, SourceKind
 from app.schemas.source_imports import SourceImportItem, SourceImportSection, SourceParseItem
@@ -10,6 +15,10 @@ from app.schemas.source_imports import SourceImportItem, SourceImportSection, So
 MAX_PDF_BYTES = 10 * 1024 * 1024
 MAX_PDF_PAGES = 200
 MAX_PDF_TEXT_CHARS = 2_000_000
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+MAX_IMAGE_PIXELS = 25_000_000
+MAX_OCR_TEXT_CHARS = 2_000_000
+OCR_TIMEOUT_SECONDS = 20
 
 
 class SourceParseError(ValueError):
@@ -126,6 +135,58 @@ def parse_pdf(content_base64: str | None) -> list[SourceImportSection]:
     return sections
 
 
+def parse_image(
+    content_base64: str | None,
+    filename: str | None,
+) -> list[SourceImportSection]:
+    if not content_base64 or not filename:
+        raise SourceParseError("Image content and filename are required")
+    try:
+        image_bytes = base64.b64decode(content_base64, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise SourceParseError("Image content must be base64 encoded") from exc
+    if not image_bytes:
+        raise SourceParseError("Image file is empty")
+    if len(image_bytes) > MAX_IMAGE_BYTES:
+        raise SourceParseError("Image exceeds the 10 MiB decoded size limit")
+
+    try:
+        Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+        with Image.open(BytesIO(image_bytes)) as image:
+            if image.format not in {"PNG", "JPEG"}:
+                raise SourceParseError("Only PNG and JPEG images are supported")
+            width, height = image.size
+            if width < 1 or height < 1:
+                raise SourceParseError("Image dimensions are invalid")
+            if width * height > MAX_IMAGE_PIXELS:
+                raise SourceParseError("Image exceeds the 25 megapixel OCR limit")
+            image.load()
+            prepared = image.convert("RGB")
+            text = pytesseract.image_to_string(
+                prepared,
+                lang="eng",
+                config="--psm 3",
+                timeout=OCR_TIMEOUT_SECONDS,
+            )
+    except SourceParseError:
+        raise
+    except (UnidentifiedImageError, Image.DecompressionBombError) as exc:
+        raise SourceParseError("Image could not be decoded safely") from exc
+    except TesseractNotFoundError as exc:
+        raise SourceParseError("Image OCR is not available on this server") from exc
+    except TesseractError as exc:
+        raise SourceParseError("Image could not be read by OCR") from exc
+    except RuntimeError as exc:
+        raise SourceParseError("Image OCR timed out") from exc
+
+    text = _normalize_text(text)
+    if not text:
+        raise SourceParseError("No readable text found in image")
+    if len(text) > MAX_OCR_TEXT_CHARS:
+        raise SourceParseError("Image OCR text exceeds 2,000,000 characters")
+    return [SourceImportSection(content=text, location_label="Image OCR")]
+
+
 def _extract_pdf_page_texts(pdf_bytes: bytes) -> Iterator[str]:
     from pypdf import PdfReader
 
@@ -159,6 +220,12 @@ def parse_source_payload(source: Source, payload: SourceParseItem) -> SourceImpo
 
     if source.source_type == SourceKind.PDF:
         return SourceImportItem(source_id=source.id, sections=parse_pdf(payload.content_base64))
+
+    if source.source_type == SourceKind.IMAGE:
+        return SourceImportItem(
+            source_id=source.id,
+            sections=parse_image(payload.content_base64, payload.filename),
+        )
 
     if source.source_type in (SourceKind.LINK, SourceKind.REPOSITORY):
         return SourceImportItem(source_id=source.id, metadata_only=True)
