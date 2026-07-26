@@ -9,6 +9,9 @@ export SESSION_SECRET=test-session-secret-with-at-least-32-bytes
 export CANVAS_TOKEN_SECRET=eE-4RX-m39GFpdZXEDBtsaKZoOlMC7EpNlV9XiFrOO8=
 export PROVIDER_ENCRYPTION_SECRET=XRoe-9icgC8y3-AtmJVDwhbrRraWTUXCsSu013nHztY=
 export SECURE_COOKIES=false
+if [[ -n "${TEST_DATABASE_URL:-}" ]]; then
+    export DATABASE_URL="$TEST_DATABASE_URL"
+fi
 
 # Every request is bounded so a half-open local service cannot stall the smoke
 # indefinitely inside an otherwise bounded readiness loop.

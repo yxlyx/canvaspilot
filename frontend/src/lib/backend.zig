@@ -345,6 +345,14 @@ pub fn providerDescriptors(allocator: std.mem.Allocator, token: []const u8) Resu
 pub fn providerSettings(allocator: std.mem.Allocator, token: []const u8) Result([]types.ProviderStatusResponse) {
     return requestJson([]types.ProviderStatusResponse, allocator, token, .GET, "/api/providers/settings", null);
 }
+pub fn providerAuthorization(allocator: std.mem.Allocator, token: []const u8, id: []const u8) Result(types.ProviderAuthorizationSessionResponse) {
+    const path = std.fmt.allocPrint(allocator, "/api/providers/auth-sessions/{s}", .{id}) catch return .{ .status = 0, .err = "alloc" };
+    return requestJson(types.ProviderAuthorizationSessionResponse, allocator, token, .GET, path, null);
+}
+pub fn providerModels(allocator: std.mem.Allocator, token: []const u8, provider: []const u8) Result([]types.ProviderModelOption) {
+    const path = std.fmt.allocPrint(allocator, "/api/providers/{s}/models", .{provider}) catch return .{ .status = 0, .err = "alloc" };
+    return requestJson([]types.ProviderModelOption, allocator, token, .GET, path, null);
+}
 pub fn preferences(allocator: std.mem.Allocator, token: []const u8) Result(types.UserPreferenceResponse) {
     return requestJson(types.UserPreferenceResponse, allocator, token, .GET, "/api/settings/preferences", null);
 }
