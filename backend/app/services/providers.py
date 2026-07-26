@@ -1,6 +1,6 @@
 import asyncio
 import ipaddress
-import json
+import re
 import socket
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -19,20 +19,27 @@ from app.schemas.m3 import (
     ProviderAuthMethodDescriptor,
     ProviderConfigureRequest,
     ProviderDescriptor,
+    ProviderModelOption,
 )
 
-PROVIDER_TEST_RESPONSE_MAX_BYTES = 1024 * 1024
-
-
-class _ProviderResponseTooLargeError(Exception):
-    pass
-
-
-class _ProviderResponseEncodingError(Exception):
-    pass
-
-
 PROVIDERS = {
+    "codegraff": ProviderDescriptor(
+        id="codegraff",
+        name="Codegraff",
+        models=[],
+        endpoint="https://gateway.codegraff.com/v1",
+        description="Use one Codegraff balance across a live selection of answer models.",
+        capabilities=["Cited answers", "Live model catalog", "Device-code connection"],
+        auth_methods=[
+            ProviderAuthMethodDescriptor(
+                kind="device_code", label="Connect Codegraff", recommended=True
+            )
+        ],
+        setup_url="https://codegraff.com/",
+        billing_note="Credits and current pricing are managed through Codegraff.",
+        recommended=True,
+        catalog_mode="live",
+    ),
     "openai": ProviderDescriptor(
         id="openai",
         name="OpenAI",
@@ -51,19 +58,32 @@ PROVIDERS = {
         name="ChatGPT",
         models=[],
         endpoint="",
-        description="Connect an approved ChatGPT account through a secure browser sign-in.",
-        capabilities=["Cited answers", "Browser sign-in", "Automatic token refresh"],
+        description=(
+            "Connect an approved ChatGPT account through browser sign-in, or use this machine's "
+            "existing Codex CLI login in local development."
+        ),
+        capabilities=[
+            "Cited answers",
+            "Browser sign-in",
+            "Local Codex CLI",
+            "Automatic token refresh",
+        ],
         billing_note=(
-            "Uses the connected ChatGPT account. Availability depends on the approved OAuth "
-            "client, account plan, and provider terms."
+            "Browser sign-in uses the connected account. The local CLI option uses the Codex "
+            "account already signed in on this machine and is never available in deployment."
         ),
         auth_methods=[
             ProviderAuthMethodDescriptor(
                 kind="oauth_code",
                 label="Sign in through browser",
                 recommended=True,
-            )
+            ),
+            ProviderAuthMethodDescriptor(
+                kind="local_cli",
+                label="Use local Codex CLI login",
+            ),
         ],
+        legacy=True,
     ),
     "openai_compatible": ProviderDescriptor(
         id="openai_compatible",
@@ -102,13 +122,25 @@ PROVIDERS = {
     ),
 }
 
+MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$")
+MODEL_CACHE_TTL_SECONDS = 300
+MAX_PROVIDER_RESPONSE_BYTES = 256 * 1024
+_model_cache: dict[str, tuple[float, list[ProviderModelOption]]] = {}
+
 
 def provider_descriptors(settings: Settings | None = None) -> list[ProviderDescriptor]:
     settings = settings or get_settings()
     descriptors: list[ProviderDescriptor] = []
     for descriptor in PROVIDERS.values():
         copy = descriptor.model_copy(deep=True)
-        if copy.id == "chatgpt":
+        if copy.id == "codegraff":
+            copy.models = [
+                settings.codegraff_balanced_model,
+                settings.codegraff_thorough_model,
+                settings.codegraff_economy_model,
+            ]
+            copy.endpoint = f"{settings.codegraff_gateway_url}/v1"
+        elif copy.id == "chatgpt":
             enabled = bool(settings.chatgpt_oauth_client_id.strip())
             copy.models = [settings.chatgpt_default_model]
             copy.endpoint = settings.chatgpt_responses_endpoint
@@ -118,10 +150,50 @@ def provider_descriptors(settings: Settings | None = None) -> list[ProviderDescr
                 if enabled
                 else "An approved OAuth client must be configured by the workspace owner."
             )
+            local_cli = copy.auth_methods[1]
+            local_cli.enabled = settings.local_codex_cli_enabled
+            local_cli.unavailable_reason = (
+                None
+                if local_cli.enabled
+                else (
+                    "Local Codex CLI access is available only in an explicitly enabled "
+                    "development workspace."
+                )
+            )
         elif not copy.auth_methods:
             copy.auth_methods = [ProviderAuthMethodDescriptor(kind="api_key", label="API key")]
         descriptors.append(copy)
     return descriptors
+
+
+def _require_local_codex_request(
+    user: User,
+    settings: Settings,
+    client_host: str,
+) -> None:
+    environment = settings.environment.strip().lower()
+    if environment not in {"development", "dev"}:
+        raise WikiBaseError(
+            409,
+            "local_codex_unavailable",
+            "Local Codex CLI access is restricted to local development",
+        )
+    if user.email.strip().lower() != settings.local_codex_cli_allowed_email.strip().lower():
+        raise WikiBaseError(
+            403,
+            "local_codex_forbidden",
+            "Local Codex CLI access is restricted to the configured workspace owner",
+        )
+    try:
+        loopback = ipaddress.ip_address(client_host).is_loopback
+    except ValueError:
+        loopback = client_host == "localhost"
+    if not loopback:
+        raise WikiBaseError(
+            403,
+            "local_codex_forbidden",
+            "Local Codex CLI access accepts loopback requests only",
+        )
 
 
 @dataclass(frozen=True)
@@ -138,6 +210,8 @@ class GenerationProvider:
 async def resolve_generation_provider(
     user: User | None,
     db: AsyncSession | None,
+    *,
+    client_host: str = "",
 ) -> GenerationProvider:
     settings = get_settings()
     if user is not None and db is not None:
@@ -150,6 +224,23 @@ async def resolve_generation_provider(
         )
         selected = result.scalar_one_or_none()
         if selected is not None:
+            if selected.auth_method == "local_cli":
+                _require_local_codex_request(user, settings, client_host)
+                if selected.provider != "chatgpt":
+                    raise WikiBaseError(
+                        409,
+                        "local_codex_unavailable",
+                        "The active local CLI provider is invalid",
+                    )
+                return GenerationProvider(
+                    provider=selected.provider,
+                    model=selected.model,
+                    endpoint="local://codex-cli",
+                    api_key="",
+                    auth_method=selected.auth_method,
+                    account_id="",
+                    transport="codex_cli",
+                )
             if selected.auth_method == "oauth_code":
                 if selected.provider != "chatgpt" or selected.encrypted_access_token is None:
                     raise WikiBaseError(
@@ -175,19 +266,10 @@ async def resolve_generation_provider(
                     "credential_unavailable",
                     "The active provider credential is unavailable",
                 )
-            if selected.provider in {"openai", "google_gemini"}:
-                endpoint = PROVIDERS[selected.provider].endpoint
-            else:
-                endpoint = _safe_custom_endpoint(selected.endpoint, settings)
-                if selected.provider == "azure_openai" and not urlparse(endpoint).hostname.endswith(
-                    ".openai.azure.com"
-                ):
-                    raise WikiBaseError(422, "unsafe_endpoint", "Azure endpoint is not allowed")
-                await _ensure_public_endpoint(endpoint)
             return GenerationProvider(
                 provider=selected.provider,
                 model=selected.model,
-                endpoint=endpoint,
+                endpoint=selected.endpoint,
                 api_key=decrypt_provider_key(
                     selected.encrypted_api_key,
                     selected.encryption_key_id,
@@ -207,12 +289,44 @@ async def resolve_generation_provider(
                 "reauth_required",
                 "Reconnect the selected provider before generating another answer",
             )
+    if not settings.openai_api_key.strip():
+        raise WikiBaseError(
+            409,
+            "provider_not_configured",
+            "Connect an answer provider before generating workspace content",
+        )
     return GenerationProvider(
         provider="openai",
         model="gpt-4o",
         endpoint=PROVIDERS["openai"].endpoint,
         api_key=settings.openai_api_key,
     )
+
+
+async def mark_local_codex_unavailable(
+    user: User | None,
+    db: AsyncSession | None,
+    error_code: str,
+    detail: str,
+) -> None:
+    if user is None or db is None:
+        return
+    await lock_provider_mutation(user.id, "chatgpt", db)
+    setting = await db.scalar(
+        select(ProviderSetting).where(
+            ProviderSetting.user_id == user.id,
+            ProviderSetting.provider == "chatgpt",
+            ProviderSetting.auth_method == "local_cli",
+            ProviderSetting.active_for_generation.is_(True),
+        )
+    )
+    if setting is None:
+        return
+    setting.status = "reauth_required"
+    setting.last_error_code = error_code[:100]
+    setting.last_error = detail[:1000]
+    setting.last_tested_at = datetime.now(UTC)
+    await db.commit()
 
 
 async def force_refresh_generation_provider(
@@ -297,7 +411,7 @@ def _safe_custom_endpoint(value: str, settings: Settings) -> str:
 
 def endpoint_for(payload: ProviderConfigureRequest, settings: Settings | None = None) -> str:
     settings = settings or get_settings()
-    if payload.provider in {"openai", "google_gemini"}:
+    if payload.provider in {"codegraff", "openai", "google_gemini"}:
         if payload.endpoint is not None:
             raise WikiBaseError(
                 422, "fixed_endpoint", "This provider uses its fixed official endpoint"
@@ -337,6 +451,75 @@ async def list_settings(user: User, db: AsyncSession) -> list[ProviderSetting]:
     return list(result.scalars())
 
 
+async def connect_local_codex(
+    user: User,
+    db: AsyncSession,
+    *,
+    client_host: str,
+) -> ProviderSetting:
+    from app.services.local_codex import validate_local_codex
+
+    settings = get_settings()
+    _require_local_codex_request(user, settings, client_host)
+    await validate_local_codex(settings)
+    await lock_provider_mutation(user.id, "chatgpt", db)
+    await lock_provider_selection(user.id, db)
+    setting = await db.scalar(
+        select(ProviderSetting).where(
+            ProviderSetting.user_id == user.id,
+            ProviderSetting.provider == "chatgpt",
+        )
+    )
+    local_model = settings.local_codex_cli_model or "Codex CLI default"
+    if setting is not None and setting.auth_method != "local_cli":
+        raise WikiBaseError(
+            409,
+            "disconnect_required",
+            "Disconnect the existing ChatGPT connection before using the local Codex CLI",
+        )
+    if setting is None:
+        setting = ProviderSetting(
+            user_id=user.id,
+            provider="chatgpt",
+            model=local_model,
+            endpoint="local://codex-cli",
+            auth_method="local_cli",
+            encryption_key_id=settings.provider_encryption_key_id,
+            status="connected",
+            active_for_generation=False,
+        )
+        db.add(setting)
+    else:
+        setting.model = local_model
+        setting.endpoint = "local://codex-cli"
+        setting.auth_method = "local_cli"
+        setting.status = "connected"
+        setting.active_for_generation = False
+    setting.encrypted_api_key = None
+    setting.encrypted_access_token = None
+    setting.encrypted_refresh_token = None
+    setting.access_token_expires_at = None
+    setting.provider_account_id = None
+    setting.provider_subject_id = None
+    setting.provider_account_label = "Local Codex CLI"
+    setting.granted_scopes = None
+    setting.last_error = None
+    setting.last_error_code = None
+    setting.last_tested_at = datetime.now(UTC)
+    setting.last_refreshed_at = None
+    active = await db.scalar(
+        select(ProviderSetting.id).where(
+            ProviderSetting.user_id == user.id,
+            ProviderSetting.active_for_generation.is_(True),
+        )
+    )
+    if active is None:
+        setting.active_for_generation = True
+    await db.flush()
+    await db.refresh(setting)
+    return setting
+
+
 async def configure_provider(
     user: User, payload: ProviderConfigureRequest, db: AsyncSession
 ) -> ProviderSetting:
@@ -350,6 +533,31 @@ async def configure_provider(
         )
     )
     setting = result.scalar_one_or_none()
+    if payload.provider == "codegraff":
+        if payload.api_key is not None or payload.endpoint is not None:
+            raise WikiBaseError(
+                422,
+                "credential_not_accepted",
+                "Codegraff credentials are accepted only through the device connection",
+            )
+        if (
+            setting is None
+            or setting.auth_method != "device_code"
+            or setting.encrypted_api_key is None
+        ):
+            raise WikiBaseError(409, "provider_not_connected", "Connect Codegraff first")
+        available = await provider_models(user, "codegraff", db, refresh=True)
+        if payload.model not in {item.id for item in available}:
+            raise WikiBaseError(422, "invalid_model", "Choose a model from the live catalog")
+        setting.model = payload.model
+        setting.endpoint = PROVIDERS["codegraff"].endpoint
+        setting.status = "configured"
+        setting.last_error = None
+        setting.last_error_code = None
+        setting.last_tested_at = None
+        await db.flush()
+        await db.refresh(setting)
+        return setting
     if setting is None:
         if payload.api_key is None:
             raise WikiBaseError(422, "credential_required", "An API key is required to connect")
@@ -407,23 +615,38 @@ async def _owned_setting(user: User, provider: str, db: AsyncSession) -> Provide
     return setting
 
 
-async def _read_provider_response(response: httpx.Response) -> bytes:
-    content_encoding = response.headers.get("content-encoding", "identity").strip().lower()
-    if content_encoding not in {"", "identity"}:
-        raise _ProviderResponseEncodingError
-    content = bytearray()
-    async for chunk in response.aiter_raw():
-        if len(content) + len(chunk) > PROVIDER_TEST_RESPONSE_MAX_BYTES:
-            raise _ProviderResponseTooLargeError
-        content.extend(chunk)
-    return bytes(content)
-
-
-async def test_provider(user: User, provider: str, db: AsyncSession) -> ProviderSetting:
+async def test_provider(
+    user: User,
+    provider: str,
+    db: AsyncSession,
+    *,
+    client_host: str = "",
+) -> ProviderSetting:
     await lock_provider_mutation(user.id, provider, db)
     setting = await _owned_setting(user, provider, db)
     settings = get_settings()
     if provider == "chatgpt":
+        if setting.auth_method == "local_cli":
+            from app.services.local_codex import validate_local_codex
+
+            _require_local_codex_request(user, settings, client_host)
+            try:
+                await validate_local_codex(settings)
+            except WikiBaseError as exc:
+                setting.status = "reauth_required"
+                setting.last_error = exc.detail
+                setting.last_error_code = exc.error
+                setting.last_tested_at = datetime.now(UTC)
+                await db.flush()
+                await db.refresh(setting)
+                return setting
+            setting.status = "connected"
+            setting.last_error = None
+            setting.last_error_code = None
+            setting.last_tested_at = datetime.now(UTC)
+            await db.flush()
+            await db.refresh(setting)
+            return setting
         if setting.auth_method != "oauth_code" or setting.encrypted_access_token is None:
             raise WikiBaseError(409, "reauth_required", "Reconnect ChatGPT through the browser")
         from app.services.provider_auth import refresh_browser_credential
@@ -444,7 +667,7 @@ async def test_provider(user: User, provider: str, db: AsyncSession) -> Provider
         await db.flush()
         await db.refresh(setting)
         return setting
-    if provider in {"openai", "google_gemini"}:
+    if provider in {"codegraff", "openai", "google_gemini"}:
         endpoint = PROVIDERS[provider].endpoint
         if setting.endpoint != endpoint:
             raise WikiBaseError(422, "unsafe_endpoint", "Stored provider endpoint is not allowed")
@@ -459,39 +682,33 @@ async def test_provider(user: User, provider: str, db: AsyncSession) -> Provider
     headers: dict[str, str]
     method = "GET"
     body = None
-    if provider in {"openai", "openai_compatible", "google_gemini"}:
+    if provider in {"codegraff", "openai", "openai_compatible", "google_gemini"}:
         url = f"{endpoint}/models"
-        headers = {"Authorization": f"Bearer {key}", "Accept-Encoding": "identity"}
+        headers = {"Authorization": f"Bearer {key}"}
     elif provider == "azure_openai":
         deployment = quote(setting.model, safe="")
         url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version=2024-10-21"
-        headers = {"api-key": key, "Accept-Encoding": "identity"}
+        headers = {"api-key": key}
         method = "POST"
         body = {"messages": [{"role": "user", "content": "Reply OK"}], "max_tokens": 1}
     failure: str | None = None
     try:
         async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
-            async with client.stream(method, url, headers=headers, json=body) as response:
-                status_code = response.status_code
-                content = (
-                    await _read_provider_response(response) if 200 <= status_code < 300 else b""
-                )
-        valid = 200 <= status_code < 300
-        if status_code in {401, 403}:
+            response = await client.request(method, url, headers=headers, json=body)
+        valid = 200 <= response.status_code < 300
+        if response.status_code in {401, 403}:
             failure = "The provider rejected the credential. Check the key and its permissions."
-        elif status_code == 404:
+        elif response.status_code == 404:
             failure = "The configured endpoint or model was not found."
-        elif status_code == 429:
+        elif response.status_code == 429:
             failure = "The provider rate limit was reached. Try again after checking its quota."
-        elif status_code >= 500:
+        elif response.status_code >= 500:
             failure = "The provider is temporarily unavailable. Try again later."
         elif not valid:
             failure = "The provider rejected the endpoint or model."
         if valid and provider != "azure_openai":
-            payload = json.loads(content)
-            if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
-                raise ValueError("Provider model response has an invalid shape")
-            models = payload["data"]
+            payload = response.json()
+            models = payload.get("data", [])
             model_ids = {
                 str(item.get("id", "")).removeprefix("models/")
                 for item in models
@@ -500,19 +717,13 @@ async def test_provider(user: User, provider: str, db: AsyncSession) -> Provider
             valid = setting.model in model_ids
             if not valid:
                 failure = "The configured model is not available for this credential."
-    except _ProviderResponseTooLargeError:
-        valid = False
-        failure = "The provider response exceeded the allowed size."
-    except _ProviderResponseEncodingError:
-        valid = False
-        failure = "The provider returned an unsupported compressed response."
     except httpx.TimeoutException:
         valid = False
         failure = "The connection timed out. Check the endpoint and try again."
     except (httpx.ConnectError, httpx.NetworkError):
         valid = False
         failure = "A network or TLS connection could not be established."
-    except (AttributeError, httpx.HTTPError, RecursionError, ValueError):
+    except (AttributeError, httpx.HTTPError, ValueError):
         valid = False
         failure = "The provider returned an unexpected response."
     await lock_provider_selection(user.id, db)
@@ -600,4 +811,69 @@ async def disconnect_provider(user: User, provider: str, db: AsyncSession) -> No
         )
     )
     await db.delete(setting)
+    _model_cache.pop(str(setting.id), None)
     await db.flush()
+
+
+def _model_options(payload: object) -> list[ProviderModelOption]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+        raise WikiBaseError(502, "invalid_catalog", "The provider returned an invalid model list")
+    values: dict[str, ProviderModelOption] = {}
+    for item in payload["data"]:
+        if not isinstance(item, dict):
+            continue
+        model_id = item.get("id")
+        if not isinstance(model_id, str) or not MODEL_ID_PATTERN.fullmatch(model_id):
+            continue
+        label = item.get("name") or item.get("display_name") or model_id
+        if not isinstance(label, str) or not label.strip():
+            label = model_id
+        values[model_id] = ProviderModelOption(id=model_id, label=label.strip()[:100])
+    if not values:
+        raise WikiBaseError(502, "invalid_catalog", "The provider returned no usable models")
+    return sorted(values.values(), key=lambda item: item.label.casefold())
+
+
+async def provider_models(
+    user: User,
+    provider: str,
+    db: AsyncSession,
+    *,
+    refresh: bool = False,
+) -> list[ProviderModelOption]:
+    if provider != "codegraff":
+        descriptor = PROVIDERS.get(provider)
+        if descriptor is None:
+            raise NotFoundError("Provider not found")
+        return [ProviderModelOption(id=model, label=model) for model in descriptor.models]
+    setting = await _owned_setting(user, provider, db)
+    if setting.auth_method != "device_code" or setting.encrypted_api_key is None:
+        raise WikiBaseError(409, "provider_not_connected", "Connect Codegraff first")
+    cache_key = str(setting.id)
+    now = asyncio.get_running_loop().time()
+    cached = _model_cache.get(cache_key)
+    if not refresh and cached is not None and cached[0] > now:
+        return cached[1]
+    settings = get_settings()
+    key = decrypt_provider_key(setting.encrypted_api_key, setting.encryption_key_id, settings)
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+            response = await client.get(
+                f"{settings.codegraff_gateway_url}/v1/models",
+                headers={"Authorization": f"Bearer {key}"},
+            )
+        if len(response.content) > MAX_PROVIDER_RESPONSE_BYTES:
+            raise WikiBaseError(502, "invalid_catalog", "The provider response was too large")
+        if not response.is_success:
+            raise WikiBaseError(502, "catalog_unavailable", "The model catalog is unavailable")
+        options = _model_options(response.json())
+        _model_cache[cache_key] = (now + MODEL_CACHE_TTL_SECONDS, options)
+        return options
+    except WikiBaseError:
+        if setting.model and MODEL_ID_PATTERN.fullmatch(setting.model):
+            return [ProviderModelOption(id=setting.model, label=setting.model)]
+        raise
+    except (httpx.HTTPError, ValueError) as exc:
+        if setting.model and MODEL_ID_PATTERN.fullmatch(setting.model):
+            return [ProviderModelOption(id=setting.model, label=setting.model)]
+        raise WikiBaseError(502, "catalog_unavailable", "The model catalog is unavailable") from exc

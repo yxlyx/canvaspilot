@@ -3,7 +3,7 @@ import hashlib
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import httpx
 import jwt
@@ -64,6 +64,8 @@ async def create_authorization_session(
     db: AsyncSession,
 ) -> ProviderAuthorizationSessionResponse:
     settings = get_settings()
+    if provider == "codegraff":
+        return await _create_codegraff_session(user, payload, db, settings)
     if provider != "chatgpt":
         raise NotFoundError("Provider browser authentication is not available")
     if not browser_auth_enabled(settings):
@@ -153,6 +155,175 @@ async def create_authorization_session(
     )
 
 
+async def _prepare_authorization_start(user: User, provider: str, db: AsyncSession) -> datetime:
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+        {"lock_key": f"provider-auth-start:{user.id}:{provider}"},
+    )
+    now = datetime.now(UTC)
+    await db.execute(
+        delete(ProviderAuthorizationSession).where(
+            ProviderAuthorizationSession.user_id == user.id,
+            ProviderAuthorizationSession.provider == provider,
+            ProviderAuthorizationSession.created_at < now - AUTH_SESSION_RETENTION,
+        )
+    )
+    await db.execute(
+        delete(ProviderAuthorizationSession).where(
+            ProviderAuthorizationSession.user_id == user.id,
+            ProviderAuthorizationSession.provider == provider,
+            ProviderAuthorizationSession.status == "pending",
+            ProviderAuthorizationSession.expires_at <= now,
+        )
+    )
+    pending = await db.scalar(
+        select(func.count(ProviderAuthorizationSession.id)).where(
+            ProviderAuthorizationSession.user_id == user.id,
+            ProviderAuthorizationSession.provider == provider,
+            ProviderAuthorizationSession.status == "pending",
+        )
+    )
+    total = await db.scalar(
+        select(func.count(ProviderAuthorizationSession.id)).where(
+            ProviderAuthorizationSession.user_id == user.id,
+            ProviderAuthorizationSession.provider == provider,
+        )
+    )
+    if pending is not None and pending >= MAX_PENDING_SESSIONS:
+        raise WikiBaseError(
+            429,
+            "too_many_authorization_sessions",
+            "Cancel an earlier connection or wait for it to expire",
+        )
+    if total is not None and total >= MAX_SESSION_RECORDS:
+        raise WikiBaseError(
+            429,
+            "authorization_history_full",
+            "Connection history is full. Try again after older records expire.",
+        )
+    return now
+
+
+def _codegraff_verification_url(value: object, settings: Settings) -> str:
+    if not isinstance(value, str):
+        raise WikiBaseError(502, "invalid_device_response", "Codegraff omitted its approval URL")
+    parsed = urlparse(value)
+    expected = urlparse(settings.codegraff_verification_url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != expected.hostname
+        or parsed.port not in (None, 443)
+        or parsed.username
+        or parsed.password
+        or parsed.path.rstrip("/") != expected.path.rstrip("/")
+        or parsed.fragment
+    ):
+        raise WikiBaseError(502, "invalid_device_response", "Codegraff returned an unsafe URL")
+    return value
+
+
+async def _codegraff_request(path: str, body: dict[str, str], settings: Settings) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+            response = await client.post(f"{settings.codegraff_gateway_url}{path}", json=body)
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        raise WikiBaseError(
+            502, "provider_auth_unavailable", "Codegraff connection is temporarily unavailable"
+        ) from exc
+    if len(response.content) > MAX_TOKEN_RESPONSE_BYTES:
+        raise WikiBaseError(502, "invalid_device_response", "Codegraff returned too much data")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise WikiBaseError(
+            502, "invalid_device_response", "Codegraff returned invalid data"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise WikiBaseError(502, "invalid_device_response", "Codegraff returned invalid data")
+    if response.status_code >= 500:
+        raise WikiBaseError(
+            502, "provider_auth_unavailable", "Codegraff connection is temporarily unavailable"
+        )
+    return payload
+
+
+async def _create_codegraff_session(
+    user: User,
+    payload: ProviderAuthorizationRequest,
+    db: AsyncSession,
+    settings: Settings,
+) -> ProviderAuthorizationSessionResponse:
+    now = await _prepare_authorization_start(user, "codegraff", db)
+    result = await _codegraff_request("/v1/device/start", {"device_label": "wikibase"}, settings)
+    device_code = result.get("device_code")
+    user_code = result.get("user_code")
+    if (
+        not isinstance(device_code, str)
+        or not 8 <= len(device_code) <= 4096
+        or not isinstance(user_code, str)
+        or not 3 <= len(user_code) <= 100
+    ):
+        raise WikiBaseError(502, "invalid_device_response", "Codegraff omitted the one-time code")
+    verification_uri = _codegraff_verification_url(
+        result.get("verification_uri") or settings.codegraff_verification_url, settings
+    )
+    complete = result.get("verification_uri_complete")
+    verification_uri_complete = (
+        _codegraff_verification_url(complete, settings) if complete else verification_uri
+    )
+    interval = result.get("interval", 5)
+    expires_in = result.get("expires_in", 600)
+    if not isinstance(interval, int) or not isinstance(expires_in, int):
+        raise WikiBaseError(
+            502, "invalid_device_response", "Codegraff returned invalid timing data"
+        )
+    interval = min(max(interval, 2), 30)
+    expires_in = min(max(expires_in, 60), 900)
+    from app.services.providers import encrypt_provider_key
+
+    encrypted, key_id = encrypt_provider_key(device_code, settings)
+    auth_session = ProviderAuthorizationSession(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        provider="codegraff",
+        auth_method="device_code",
+        state_hash=None,
+        encrypted_pkce_verifier=None,
+        encrypted_device_code=encrypted,
+        encryption_key_id=key_id,
+        nonce_hash=None,
+        browser_binding_hash=None,
+        verification_uri=verification_uri,
+        verification_uri_complete=verification_uri_complete,
+        user_code=user_code,
+        poll_interval_seconds=interval,
+        next_poll_at=now,
+        return_path=payload.return_path,
+        status="pending",
+        expires_at=now + timedelta(seconds=expires_in),
+    )
+    db.add(auth_session)
+    await db.commit()
+    return _authorization_response(auth_session)
+
+
+def _authorization_response(
+    auth_session: ProviderAuthorizationSession,
+) -> ProviderAuthorizationSessionResponse:
+    return ProviderAuthorizationSessionResponse(
+        id=auth_session.id,
+        provider=auth_session.provider,
+        status=auth_session.status,
+        expires_at=auth_session.expires_at,
+        error_code=auth_session.error_code,
+        error_message=auth_session.error_message,
+        verification_uri=auth_session.verification_uri,
+        verification_uri_complete=auth_session.verification_uri_complete,
+        user_code=auth_session.user_code,
+        poll_interval_seconds=auth_session.poll_interval_seconds,
+    )
+
+
 async def get_authorization_session(
     user: User, session_id: uuid.UUID, db: AsyncSession
 ) -> ProviderAuthorizationSessionResponse:
@@ -171,15 +342,146 @@ async def get_authorization_session(
         auth_session.error_message = "Browser sign-in expired. Start again."
         auth_session.consumed_at = now
         auth_session.encrypted_pkce_verifier = None
+        auth_session.encrypted_device_code = None
         await db.commit()
-    return ProviderAuthorizationSessionResponse(
-        id=auth_session.id,
-        provider=auth_session.provider,
-        status=auth_session.status,
-        expires_at=auth_session.expires_at,
-        error_code=auth_session.error_code,
-        error_message=auth_session.error_message,
+    return _authorization_response(auth_session)
+
+
+async def poll_authorization_session(
+    user: User, session_id: uuid.UUID, db: AsyncSession
+) -> ProviderAuthorizationSessionResponse:
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+        {"lock_key": f"provider-auth:{session_id}"},
     )
+    auth_session = await db.scalar(
+        select(ProviderAuthorizationSession).where(
+            ProviderAuthorizationSession.id == session_id,
+            ProviderAuthorizationSession.user_id == user.id,
+        )
+    )
+    if auth_session is None:
+        raise NotFoundError("Provider authorization session not found")
+    if auth_session.provider != "codegraff" or auth_session.auth_method != "device_code":
+        raise WikiBaseError(
+            409, "invalid_authorization_session", "This connection cannot be polled"
+        )
+    if auth_session.status != "pending":
+        return _authorization_response(auth_session)
+    now = datetime.now(UTC)
+    if auth_session.expires_at <= now:
+        auth_session.status = "expired"
+        auth_session.error_code = "authorization_expired"
+        auth_session.error_message = "The one-time Codegraff code expired. Start again."
+        auth_session.consumed_at = now
+        auth_session.encrypted_device_code = None
+        await db.commit()
+        return _authorization_response(auth_session)
+    if auth_session.next_poll_at is not None and auth_session.next_poll_at > now:
+        return _authorization_response(auth_session)
+    if auth_session.encrypted_device_code is None:
+        raise WikiBaseError(409, "authorization_expired", "Start the Codegraff connection again")
+    settings = get_settings()
+    from app.services.providers import (
+        decrypt_provider_key,
+        encrypt_provider_key,
+        lock_provider_mutation,
+    )
+
+    device_code = decrypt_provider_key(
+        auth_session.encrypted_device_code, auth_session.encryption_key_id, settings
+    )
+    result = await _codegraff_request("/v1/device/poll", {"device_code": device_code}, settings)
+    state = str(result.get("status") or result.get("error") or "").lower()
+    interval = auth_session.poll_interval_seconds or 5
+    if state in {"pending", "authorization_pending", ""}:
+        auth_session.next_poll_at = now + timedelta(seconds=interval)
+        await db.commit()
+        return _authorization_response(auth_session)
+    if state in {"slow_down", "slowdown"}:
+        auth_session.poll_interval_seconds = min(interval + 5, 30)
+        auth_session.next_poll_at = now + timedelta(seconds=auth_session.poll_interval_seconds)
+        await db.commit()
+        return _authorization_response(auth_session)
+    if state in {"denied", "access_denied"}:
+        auth_session.status = "failed"
+        auth_session.error_code = "authorization_denied"
+        auth_session.error_message = "Codegraff connection was denied. Start again when ready."
+    elif state in {"expired", "expired_token"}:
+        auth_session.status = "expired"
+        auth_session.error_code = "authorization_expired"
+        auth_session.error_message = "The one-time Codegraff code expired. Start again."
+    elif state in {"ok", "approved", "completed", "success"}:
+        api_key = result.get("api_key") or result.get("access_token")
+        if not isinstance(api_key, str) or not 8 <= len(api_key) <= 4096:
+            raise WikiBaseError(502, "invalid_device_response", "Codegraff omitted the gateway key")
+        try:
+            async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+                catalog_response = await client.get(
+                    f"{settings.codegraff_gateway_url}/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+            if (
+                not catalog_response.is_success
+                or len(catalog_response.content) > MAX_TOKEN_RESPONSE_BYTES
+            ):
+                raise WikiBaseError(
+                    502, "catalog_unavailable", "Codegraff model catalog is unavailable"
+                )
+            from app.services.providers import _model_options
+
+            models = _model_options(catalog_response.json())
+        except (httpx.HTTPError, ValueError) as exc:
+            raise WikiBaseError(
+                502, "catalog_unavailable", "Codegraff model catalog is unavailable"
+            ) from exc
+        preset_order = [
+            settings.codegraff_balanced_model,
+            settings.codegraff_thorough_model,
+            settings.codegraff_economy_model,
+        ]
+        available = {model.id for model in models}
+        selected_model = next((model for model in preset_order if model in available), models[0].id)
+        await lock_provider_mutation(user.id, "codegraff", db)
+        setting = await db.scalar(
+            select(ProviderSetting).where(
+                ProviderSetting.user_id == user.id,
+                ProviderSetting.provider == "codegraff",
+            )
+        )
+        encrypted, key_id = encrypt_provider_key(api_key, settings)
+        if setting is None:
+            setting = ProviderSetting(
+                user_id=user.id,
+                provider="codegraff",
+                model=selected_model,
+                endpoint=f"{settings.codegraff_gateway_url}/v1",
+                auth_method="device_code",
+                encrypted_api_key=encrypted,
+                encryption_key_id=key_id,
+                status="configured",
+                active_for_generation=False,
+            )
+            db.add(setting)
+        else:
+            setting.model = selected_model
+            setting.endpoint = f"{settings.codegraff_gateway_url}/v1"
+            setting.auth_method = "device_code"
+            setting.encrypted_api_key = encrypted
+            setting.encryption_key_id = key_id
+            setting.status = "configured"
+            setting.active_for_generation = False
+            setting.last_error = None
+            setting.last_error_code = None
+            setting.last_tested_at = None
+        setting.provider_account_label = "Codegraff account"
+        auth_session.status = "completed"
+    else:
+        raise WikiBaseError(502, "invalid_device_response", "Codegraff returned an unknown state")
+    auth_session.consumed_at = now
+    auth_session.encrypted_device_code = None
+    await db.commit()
+    return _authorization_response(auth_session)
 
 
 async def cancel_authorization_session(user: User, session_id: uuid.UUID, db: AsyncSession) -> None:
@@ -199,6 +501,7 @@ async def cancel_authorization_session(user: User, session_id: uuid.UUID, db: As
         auth_session.status = "cancelled"
         auth_session.consumed_at = datetime.now(UTC)
         auth_session.encrypted_pkce_verifier = None
+        auth_session.encrypted_device_code = None
         await db.flush()
 
 
@@ -322,13 +625,20 @@ async def complete_authorization(
     auth_session = await db.scalar(
         select(ProviderAuthorizationSession).where(ProviderAuthorizationSession.id == session_id)
     )
-    if auth_session is None or not secrets.compare_digest(
-        auth_session.state_hash, _state_hash(state)
+    if (
+        auth_session is None
+        or auth_session.provider != "chatgpt"
+        or auth_session.state_hash is None
+        or not secrets.compare_digest(auth_session.state_hash, _state_hash(state))
     ):
         raise WikiBaseError(400, "invalid_oauth_state", "Invalid browser sign-in state")
-    if auth_session.user_id != user.id or not secrets.compare_digest(
-        auth_session.browser_binding_hash,
-        _state_hash(browser_binding),
+    if (
+        auth_session.user_id != user.id
+        or auth_session.browser_binding_hash is None
+        or not secrets.compare_digest(
+            auth_session.browser_binding_hash,
+            _state_hash(browser_binding),
+        )
     ):
         raise WikiBaseError(
             403,

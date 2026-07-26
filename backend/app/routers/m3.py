@@ -25,6 +25,7 @@ from app.schemas.m3 import (
     ProviderAuthorizationSessionResponse,
     ProviderConfigureRequest,
     ProviderDescriptor,
+    ProviderModelOption,
     ProviderOAuthCallbackRequest,
     ProviderOAuthCallbackResponse,
     ProviderStatusResponse,
@@ -56,6 +57,7 @@ from app.services.provider_auth import (
     complete_authorization,
     create_authorization_session,
     get_authorization_session,
+    poll_authorization_session,
 )
 from app.services.providers import (
     activate_provider,
@@ -63,6 +65,7 @@ from app.services.providers import (
     disconnect_provider,
     list_settings,
     provider_descriptors,
+    provider_models,
     test_provider,
 )
 from app.services.study_outputs import (
@@ -441,6 +444,18 @@ async def provider_authorization_status(
     return await get_authorization_session(user, session_id, db)
 
 
+@router.post(
+    "/providers/auth-sessions/{session_id}/poll",
+    response_model=ProviderAuthorizationSessionResponse,
+)
+async def poll_provider_authorization(
+    session_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await poll_authorization_session(user, session_id, db)
+
+
 @router.delete(
     "/providers/auth-sessions/{session_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -490,6 +505,15 @@ async def provider_settings(
     user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
     return await list_settings(user, db)
+
+
+@router.get("/providers/{provider}/models", response_model=list[ProviderModelOption])
+async def provider_model_catalog(
+    provider: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await provider_models(user, provider, db)
 
 
 @router.put("/providers/settings", response_model=ProviderStatusResponse)

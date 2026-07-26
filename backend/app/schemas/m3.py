@@ -292,7 +292,7 @@ class MarkedPaperPageResponse(BaseModel):
 
 
 class ProviderAuthMethodDescriptor(BaseModel):
-    kind: Literal["oauth_code", "api_key", "managed"]
+    kind: Literal["oauth_code", "device_code", "api_key", "managed", "local_cli"]
     label: str
     recommended: bool = False
     enabled: bool = True
@@ -312,12 +312,15 @@ class ProviderDescriptor(BaseModel):
     endpoint_mode: Literal["fixed", "custom"] = "fixed"
     supports_generation: bool = True
     supports_embeddings: bool = False
+    recommended: bool = False
+    catalog_mode: Literal["static", "live", "manual"] = "static"
+    legacy: bool = False
 
 
 class ProviderConfigureRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["openai", "openai_compatible", "azure_openai", "google_gemini"]
+    provider: Literal["codegraff", "openai", "openai_compatible", "azure_openai", "google_gemini"]
     api_key: str | None = Field(default=None, min_length=8, max_length=4096)
     model: str = Field(min_length=1, max_length=100)
     endpoint: HttpUrl | None = Field(default=None, max_length=500)
@@ -370,6 +373,15 @@ class ProviderAuthorizationSessionResponse(BaseModel):
     expires_at: datetime
     error_code: str | None = None
     error_message: str | None = None
+    verification_uri: str | None = None
+    verification_uri_complete: str | None = None
+    user_code: str | None = None
+    poll_interval_seconds: int | None = None
+
+
+class ProviderModelOption(BaseModel):
+    id: str = Field(min_length=1, max_length=100)
+    label: str = Field(min_length=1, max_length=100)
 
 
 class ProviderStatusResponse(BaseModel):

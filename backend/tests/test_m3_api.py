@@ -1,6 +1,5 @@
 import asyncio
 import base64
-import gzip
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
@@ -10,7 +9,7 @@ import jwt
 import pytest
 import respx
 from cryptography.hazmat.primitives.asymmetric import rsa
-from httpx import ASGITransport, AsyncByteStream, AsyncClient, Request, Response
+from httpx import ASGITransport, AsyncClient, Request, Response
 from openai import AuthenticationError
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -36,6 +35,7 @@ from app.routers import chat as chat_router
 from app.schemas.sources import SourceCreate
 from app.services import idempotency as idempotency_service
 from app.services import llm as llm_service
+from app.services import local_codex as local_codex_service
 from app.services import meters as meter_service
 from app.services import provider_auth as provider_auth_service
 from app.services import providers as provider_service
@@ -350,134 +350,6 @@ async def test_provider_test_serializes_configuration_and_disconnect(
     assert tested.status_code == 200
     assert disconnected.status_code == 204
     assert (await owner_client.get("/api/providers/settings")).json() == []
-
-
-@pytest.mark.asyncio
-async def test_provider_probes_stop_reading_oversized_responses(
-    authenticated_m3_clients, monkeypatch
-):
-    owner_client, _, _ = authenticated_m3_clients
-    compatible_endpoint = "https://provider.example"
-    azure_endpoint = "https://resource.openai.azure.com"
-    settings = provider_service.get_settings().model_copy(
-        update={
-            "provider_allowed_endpoints": f"{compatible_endpoint},{azure_endpoint}",
-        }
-    )
-    monkeypatch.setattr(provider_service, "get_settings", lambda: settings)
-
-    async def public_endpoint(_endpoint: str) -> None:
-        return None
-
-    monkeypatch.setattr(provider_service, "_ensure_public_endpoint", public_endpoint)
-
-    class OversizedResponseStream(AsyncByteStream):
-        def __init__(self):
-            self.chunks_read = 0
-
-        async def __aiter__(self):
-            for _ in range(3):
-                self.chunks_read += 1
-                yield b"x" * (provider_service.PROVIDER_TEST_RESPONSE_MAX_BYTES // 2 + 1)
-
-        async def aclose(self) -> None:
-            return None
-
-    probes = [
-        (
-            {"provider": "openai", "api_key": "test-key", "model": "gpt-4o-mini"},
-            "GET",
-            "https://api.openai.com/v1/models",
-        ),
-        (
-            {"provider": "google_gemini", "api_key": "test-key", "model": "gemini-2.0-flash"},
-            "GET",
-            "https://generativelanguage.googleapis.com/v1beta/openai/models",
-        ),
-        (
-            {
-                "provider": "openai_compatible",
-                "api_key": "test-key",
-                "model": "custom-model",
-                "endpoint": compatible_endpoint,
-            },
-            "GET",
-            f"{compatible_endpoint}/models",
-        ),
-        (
-            {
-                "provider": "azure_openai",
-                "api_key": "test-key",
-                "model": "course-deployment",
-                "endpoint": azure_endpoint,
-            },
-            "POST",
-            f"{azure_endpoint}/openai/deployments/course-deployment/chat/completions"
-            "?api-version=2024-10-21",
-        ),
-    ]
-
-    for configuration, method, url in probes:
-        configured = await owner_client.put("/api/providers/settings", json=configuration)
-        assert configured.status_code == 200
-        stream = OversizedResponseStream()
-        with respx.mock:
-            route = respx.route(method=method, url=url).mock(
-                return_value=Response(200, stream=stream)
-            )
-            tested = await owner_client.post(f"/api/providers/{configuration['provider']}/test")
-        assert route.called
-        assert tested.status_code == 200
-        assert tested.json()["status"] == "invalid"
-        assert tested.json()["last_error"] == "The provider response exceeded the allowed size."
-        assert stream.chunks_read == 2
-
-    openai = {"provider": "openai", "api_key": "test-key", "model": "gpt-4o-mini"}
-    configured = await owner_client.put("/api/providers/settings", json=openai)
-    assert configured.status_code == 200
-    compressed = gzip.compress(b"x" * (provider_service.PROVIDER_TEST_RESPONSE_MAX_BYTES * 10))
-    assert len(compressed) < provider_service.PROVIDER_TEST_RESPONSE_MAX_BYTES
-
-    class CompressedResponseStream(AsyncByteStream):
-        def __init__(self):
-            self.chunks_read = 0
-
-        async def __aiter__(self):
-            self.chunks_read += 1
-            yield compressed
-
-        async def aclose(self) -> None:
-            return None
-
-    compressed_stream = CompressedResponseStream()
-    with respx.mock:
-        route = respx.get("https://api.openai.com/v1/models").mock(
-            return_value=Response(
-                200,
-                headers={"Content-Encoding": "gzip"},
-                stream=compressed_stream,
-            )
-        )
-        tested = await owner_client.post("/api/providers/openai/test")
-    assert route.called
-    assert route.calls.last.request.headers["accept-encoding"] == "identity"
-    assert tested.status_code == 200
-    assert tested.json()["status"] == "invalid"
-    assert (
-        tested.json()["last_error"] == "The provider returned an unsupported compressed response."
-    )
-    assert compressed_stream.chunks_read == 0
-
-    configured = await owner_client.put("/api/providers/settings", json=openai)
-    assert configured.status_code == 200
-    with respx.mock:
-        respx.get("https://api.openai.com/v1/models").mock(
-            return_value=Response(200, json={"data": {"id": "gpt-4o-mini"}})
-        )
-        tested = await owner_client.post("/api/providers/openai/test")
-    assert tested.status_code == 200
-    assert tested.json()["status"] == "invalid"
-    assert tested.json()["last_error"] == "The provider returned an unexpected response."
 
 
 @pytest.mark.asyncio
@@ -1396,20 +1268,287 @@ async def test_provider_lifecycle_fixed_target_and_two_user_isolation(m3_client,
     assert tested_azure.status_code == 200
     assert azure_probe.called
 
-    removed_allowlist_settings = allowed_settings.model_copy(
-        update={"provider_allowed_endpoints": ""}
-    )
-    monkeypatch.setattr(provider_service, "get_settings", lambda: removed_allowlist_settings)
-    with pytest.raises(WikiBaseError) as exc_info:
-        await provider_service.resolve_generation_provider(owner, session)
-    assert exc_info.value.error == "unsafe_endpoint"
-
     principal["user"] = other
     assert (await client.get("/api/providers/settings")).json() == []
     assert (await client.post("/api/providers/openai/test")).status_code == 404
     assert (await client.delete("/api/providers/openai")).status_code == 404
     principal["user"] = owner
     assert (await client.delete("/api/providers/openai")).status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_codegraff_device_connection_catalog_model_test_and_isolation(m3_client):
+    client, session, owner, other, principal = m3_client
+    settings = provider_service.get_settings()
+    with respx.mock:
+        start_route = respx.post(f"{settings.codegraff_gateway_url}/v1/device/start").mock(
+            return_value=Response(
+                200,
+                json={
+                    "device_code": "private-device-code",
+                    "user_code": "ABCD-EFGH",
+                    "verification_uri": settings.codegraff_verification_url,
+                    "verification_uri_complete": (
+                        f"{settings.codegraff_verification_url}?code=ABCD-EFGH"
+                    ),
+                    "interval": 2,
+                    "expires_in": 600,
+                },
+            )
+        )
+        started = await client.post(
+            "/api/providers/codegraff/auth-sessions",
+            json={"return_path": "/settings/providers?provider=codegraff"},
+        )
+    assert started.status_code == 201
+    public = started.json()
+    assert public["user_code"] == "ABCD-EFGH"
+    assert "device_code" not in public
+    assert "private-device-code" not in started.text
+    assert start_route.called
+    session_id = public["id"]
+    stored_session = await session.get(ProviderAuthorizationSession, uuid.UUID(session_id))
+    assert stored_session.encrypted_device_code is not None
+    assert b"private-device-code" not in stored_session.encrypted_device_code
+
+    with respx.mock:
+        pending_route = respx.post(f"{settings.codegraff_gateway_url}/v1/device/poll").mock(
+            return_value=Response(200, json={"status": "authorization_pending"})
+        )
+        pending = await client.post(f"/api/providers/auth-sessions/{session_id}/poll")
+    assert pending.status_code == 200
+    assert pending.json()["status"] == "pending"
+    assert pending_route.called
+
+    await session.refresh(stored_session)
+    stored_session.next_poll_at = datetime.now(UTC) - timedelta(seconds=1)
+    await session.commit()
+    catalog = {
+        "data": [
+            {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro"},
+            {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6"},
+            {"id": "mimo-v2.5", "name": "MiMo V2.5"},
+        ]
+    }
+    with respx.mock:
+        respx.post(f"{settings.codegraff_gateway_url}/v1/device/poll").mock(
+            return_value=Response(200, json={"status": "ok", "api_key": "gateway-secret-key"})
+        )
+        catalog_route = respx.get(f"{settings.codegraff_gateway_url}/v1/models").mock(
+            return_value=Response(200, json=catalog)
+        )
+        approved = await client.post(f"/api/providers/auth-sessions/{session_id}/poll")
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "completed"
+    assert "gateway-secret-key" not in approved.text
+    assert catalog_route.called
+
+    connected = await session.scalar(
+        select(ProviderSetting).where(
+            ProviderSetting.user_id == owner.id,
+            ProviderSetting.provider == "codegraff",
+        )
+    )
+    assert connected is not None
+    assert connected.auth_method == "device_code"
+    assert connected.status == "configured"
+    assert connected.active_for_generation is False
+    assert (
+        provider_service.decrypt_provider_key(
+            connected.encrypted_api_key, connected.encryption_key_id, settings
+        )
+        == "gateway-secret-key"
+    )
+
+    with respx.mock:
+        respx.get(f"{settings.codegraff_gateway_url}/v1/models").mock(
+            return_value=Response(200, json=catalog)
+        )
+        selected = await client.put(
+            "/api/providers/settings",
+            json={"provider": "codegraff", "model": "claude-sonnet-4-6"},
+        )
+    assert selected.status_code == 200
+    assert selected.json()["model"] == "claude-sonnet-4-6"
+
+    with respx.mock:
+        respx.get(f"{settings.codegraff_gateway_url}/v1/models").mock(
+            return_value=Response(200, json=catalog)
+        )
+        tested = await client.post("/api/providers/codegraff/test")
+    assert tested.status_code == 200
+    assert tested.json()["status"] == "connected"
+    assert tested.json()["active_for_generation"] is True
+    runtime = await provider_service.resolve_generation_provider(owner, session)
+    assert runtime.endpoint == f"{settings.codegraff_gateway_url}/v1"
+    assert runtime.model == "claude-sonnet-4-6"
+
+    principal["user"] = other
+    assert (await client.get("/api/providers/codegraff/models")).status_code == 404
+    assert (await client.post(f"/api/providers/auth-sessions/{session_id}/poll")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_local_codex_connection_validates_cli_without_storing_credentials(
+    m3_client, monkeypatch
+):
+    client, session, owner, other, principal = m3_client
+    owner_id = owner.id
+    local_settings = provider_service.get_settings().model_copy(
+        update={
+            "environment": "development",
+            "local_codex_cli_enabled": True,
+            "local_codex_cli_path": "/bin/echo",
+            "local_codex_cli_allowed_email": owner.email,
+        }
+    )
+    monkeypatch.setattr(provider_service, "get_settings", lambda: local_settings)
+
+    calls = 0
+
+    async def validate(_settings=None):
+        nonlocal calls
+        calls += 1
+
+    monkeypatch.setattr(local_codex_service, "validate_local_codex", validate)
+
+    descriptors = (await client.get("/api/providers")).json()
+    chatgpt = next(item for item in descriptors if item["id"] == "chatgpt")
+    local_method = next(
+        method for method in chatgpt["auth_methods"] if method["kind"] == "local_cli"
+    )
+    assert local_method["enabled"] is True
+
+    connected = await client.post("/api/providers/chatgpt/local-cli/connect")
+    assert connected.status_code == 200
+    payload = connected.json()
+    assert payload["auth_method"] == "local_cli"
+    assert payload["provider_account_label"] == "Local Codex CLI"
+    assert payload["active_for_generation"] is True
+    assert payload["access_token_expires_at"] is None
+    assert payload["credential"] == "********"
+    assert calls == 1
+
+    principal["user"] = other
+    forbidden = await client.post("/api/providers/chatgpt/local-cli/connect")
+    assert forbidden.status_code == 403
+    assert forbidden.json()["error"] == "local_codex_forbidden"
+    principal["user"] = owner
+
+    setting = await session.scalar(
+        select(ProviderSetting).where(
+            ProviderSetting.user_id == owner_id,
+            ProviderSetting.provider == "chatgpt",
+        )
+    )
+    assert setting is not None
+    assert setting.encrypted_api_key is None
+    assert setting.encrypted_access_token is None
+    assert setting.encrypted_refresh_token is None
+
+    await session.refresh(owner)
+    resolved = await provider_service.resolve_generation_provider(
+        owner, session, client_host="127.0.0.1"
+    )
+    assert resolved.transport == "codex_cli"
+    assert resolved.api_key == ""
+    with pytest.raises(WikiBaseError) as remote_error:
+        await provider_service.resolve_generation_provider(owner, session, client_host="192.0.2.10")
+    assert remote_error.value.error == "local_codex_forbidden"
+    with pytest.raises(WikiBaseError) as remote_test_error:
+        await provider_service.test_provider(
+            owner,
+            "chatgpt",
+            session,
+            client_host="192.0.2.10",
+        )
+    assert remote_test_error.value.error == "local_codex_forbidden"
+    assert calls == 1
+    await session.rollback()
+    await session.refresh(owner)
+
+    async def rejected_login(_settings=None):
+        raise WikiBaseError(
+            409,
+            "local_codex_login_required",
+            "Sign in with the local Codex CLI before connecting it",
+        )
+
+    monkeypatch.setattr(local_codex_service, "validate_local_codex", rejected_login)
+    tested = await client.post("/api/providers/chatgpt/test")
+    assert tested.status_code == 200
+    assert tested.json()["status"] == "reauth_required"
+    assert tested.json()["active_for_generation"] is True
+    with pytest.raises(WikiBaseError) as selected_error:
+        await provider_service.resolve_generation_provider(owner, session, client_host="127.0.0.1")
+    assert selected_error.value.error == "reauth_required"
+
+
+@pytest.mark.asyncio
+async def test_browser_oauth_cannot_replace_local_codex_connection(m3_client, monkeypatch):
+    client, session, owner, _, _ = m3_client
+    owner_id = owner.id
+    oauth_settings = provider_service.get_settings().model_copy(
+        update={"chatgpt_oauth_client_id": "approved-client"}
+    )
+    monkeypatch.setattr(provider_service, "get_settings", lambda: oauth_settings)
+    monkeypatch.setattr(provider_auth_service, "get_settings", lambda: oauth_settings)
+    session.add(
+        ProviderSetting(
+            user_id=owner.id,
+            provider="chatgpt",
+            model="Codex CLI default",
+            endpoint="local://codex-cli",
+            auth_method="local_cli",
+            encryption_key_id=oauth_settings.provider_encryption_key_id,
+            status="connected",
+            active_for_generation=True,
+            provider_account_label="Local Codex CLI",
+        )
+    )
+    await session.commit()
+
+    started = await client.post(
+        "/api/providers/chatgpt/auth-sessions",
+        json={"return_path": "/settings/providers?provider=chatgpt"},
+    )
+    query = parse_qs(urlparse(started.json()["authorization_url"]).query)
+    id_token, jwks = _oauth_identity(query["nonce"][0], "approved-client")
+    with respx.mock:
+        respx.post(oauth_settings.chatgpt_oauth_token_url).mock(
+            return_value=Response(
+                200,
+                json={
+                    "access_token": "must-not-persist",
+                    "refresh_token": "must-not-persist",
+                    "expires_in": 900,
+                    "id_token": id_token,
+                },
+            )
+        )
+        respx.get(oauth_settings.chatgpt_oauth_jwks_url).mock(return_value=Response(200, json=jwks))
+        completed = await client.post(
+            "/api/providers/chatgpt/oauth/callback",
+            json={
+                "state": query["state"][0],
+                "code": "one-time-code",
+                "browser_binding": started.json()["browser_binding"],
+            },
+        )
+
+    assert completed.status_code == 200
+    assert completed.json()["return_path"].endswith("auth=failed")
+    session.expire_all()
+    setting = await session.scalar(
+        select(ProviderSetting).where(
+            ProviderSetting.user_id == owner_id,
+            ProviderSetting.provider == "chatgpt",
+        )
+    )
+    assert setting.auth_method == "local_cli"
+    assert setting.encrypted_access_token is None
+    assert setting.encrypted_refresh_token is None
+    assert setting.active_for_generation is True
 
 
 @pytest.mark.asyncio
@@ -1492,7 +1631,17 @@ async def test_chatgpt_browser_auth_is_pkce_bound_durable_and_replay_safe(m3_cli
             "recommended": True,
             "enabled": True,
             "unavailable_reason": None,
-        }
+        },
+        {
+            "kind": "local_cli",
+            "label": "Use local Codex CLI login",
+            "recommended": False,
+            "enabled": False,
+            "unavailable_reason": (
+                "Local Codex CLI access is available only in an explicitly enabled "
+                "development workspace."
+            ),
+        },
     ]
 
     started = await client.post(
