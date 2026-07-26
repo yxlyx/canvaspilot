@@ -1,6 +1,10 @@
 import base64
 import binascii
+import json
 import re
+import subprocess
+import sys
+import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
 from io import BytesIO
@@ -15,6 +19,11 @@ from app.schemas.source_imports import SourceImportItem, SourceImportSection, So
 MAX_PDF_BYTES = 10 * 1024 * 1024
 MAX_PDF_PAGES = 200
 MAX_PDF_TEXT_CHARS = 2_000_000
+MAX_PDF_EXPANDED_STREAM_BYTES = 8 * 1024 * 1024
+MAX_PDF_PARSE_SECONDS = 15
+MAX_PDF_PARSER_MEMORY_BYTES = 256 * 1024 * 1024
+MAX_PDF_WORKER_OUTPUT_BYTES = MAX_PDF_TEXT_CHARS * 4 + 64 * 1024
+_RESOURCE_INTENSIVE_PARSER_SLOT = threading.BoundedSemaphore()
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_PIXELS = 25_000_000
 MAX_OCR_TEXT_CHARS = 2_000_000
@@ -109,16 +118,7 @@ def parse_plain_text(content: str) -> list[SourceImportSection]:
     return [SourceImportSection(content=normalized)]
 
 
-def parse_pdf(content_base64: str | None) -> list[SourceImportSection]:
-    if not content_base64:
-        raise SourceParseError("PDF content is required")
-    try:
-        pdf_bytes = base64.b64decode(content_base64, validate=True)
-    except ValueError as exc:
-        raise SourceParseError("PDF content must be base64 encoded") from exc
-
-    if len(pdf_bytes) > MAX_PDF_BYTES:
-        raise SourceParseError("PDF exceeds the 10 MiB decoded size limit")
+def _parse_pdf_bytes(pdf_bytes: bytes) -> list[SourceImportSection]:
     sections: list[SourceImportSection] = []
     for page_index, page_text in enumerate(_extract_pdf_page_texts(pdf_bytes), 1):
         text = _normalize_text(page_text)
@@ -129,13 +129,68 @@ def parse_pdf(content_base64: str | None) -> list[SourceImportSection]:
                     location_label=f"Page {page_index}",
                 )
             )
-
     if not sections:
         raise SourceParseError("No importable PDF text found")
     return sections
 
 
+def _parse_pdf_isolated(pdf_bytes: bytes) -> list[SourceImportSection]:
+    try:
+        with _RESOURCE_INTENSIVE_PARSER_SLOT:
+            result = subprocess.run(
+                [sys.executable, "-m", "app.services.pdf_parser_worker"],
+                input=pdf_bytes,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=MAX_PDF_PARSE_SECONDS,
+                check=False,
+            )
+    except subprocess.TimeoutExpired as exc:
+        raise SourceParseError("PDF parsing exceeded the 15 second limit") from exc
+    except OSError as exc:
+        raise SourceParseError("PDF parser could not be started safely") from exc
+    if result.returncode != 0 or len(result.stdout) > MAX_PDF_WORKER_OUTPUT_BYTES:
+        raise SourceParseError("PDF could not be parsed within safe resource limits")
+    try:
+        payload = json.loads(result.stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SourceParseError("PDF parser returned an invalid result") from exc
+    if not isinstance(payload, dict):
+        raise SourceParseError("PDF parser returned an invalid result")
+    error = payload.get("error")
+    if isinstance(error, str):
+        raise SourceParseError(error)
+    raw_sections = payload.get("sections")
+    if not isinstance(raw_sections, list):
+        raise SourceParseError("PDF parser returned an invalid result")
+    try:
+        return [SourceImportSection.model_validate(item) for item in raw_sections]
+    except (TypeError, ValueError) as exc:
+        raise SourceParseError("PDF parser returned an invalid result") from exc
+
+
+def parse_pdf(content_base64: str | None) -> list[SourceImportSection]:
+    if not content_base64:
+        raise SourceParseError("PDF content is required")
+    try:
+        pdf_bytes = base64.b64decode(content_base64, validate=True)
+    except ValueError as exc:
+        raise SourceParseError("PDF content must be base64 encoded") from exc
+
+    if len(pdf_bytes) > MAX_PDF_BYTES:
+        raise SourceParseError("PDF exceeds the 10 MiB decoded size limit")
+    return _parse_pdf_isolated(pdf_bytes)
+
+
 def parse_image(
+    content_base64: str | None,
+    filename: str | None,
+) -> list[SourceImportSection]:
+    with _RESOURCE_INTENSIVE_PARSER_SLOT:
+        return _parse_image(content_base64, filename)
+
+
+def _parse_image(
     content_base64: str | None,
     filename: str | None,
 ) -> list[SourceImportSection]:

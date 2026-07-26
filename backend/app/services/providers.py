@@ -1,5 +1,6 @@
 import asyncio
 import ipaddress
+import json
 import socket
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -19,6 +20,17 @@ from app.schemas.m3 import (
     ProviderConfigureRequest,
     ProviderDescriptor,
 )
+
+PROVIDER_TEST_RESPONSE_MAX_BYTES = 1024 * 1024
+
+
+class _ProviderResponseTooLargeError(Exception):
+    pass
+
+
+class _ProviderResponseEncodingError(Exception):
+    pass
+
 
 PROVIDERS = {
     "openai": ProviderDescriptor(
@@ -163,10 +175,19 @@ async def resolve_generation_provider(
                     "credential_unavailable",
                     "The active provider credential is unavailable",
                 )
+            if selected.provider in {"openai", "google_gemini"}:
+                endpoint = PROVIDERS[selected.provider].endpoint
+            else:
+                endpoint = _safe_custom_endpoint(selected.endpoint, settings)
+                if selected.provider == "azure_openai" and not urlparse(endpoint).hostname.endswith(
+                    ".openai.azure.com"
+                ):
+                    raise WikiBaseError(422, "unsafe_endpoint", "Azure endpoint is not allowed")
+                await _ensure_public_endpoint(endpoint)
             return GenerationProvider(
                 provider=selected.provider,
                 model=selected.model,
-                endpoint=selected.endpoint,
+                endpoint=endpoint,
                 api_key=decrypt_provider_key(
                     selected.encrypted_api_key,
                     selected.encryption_key_id,
@@ -386,6 +407,18 @@ async def _owned_setting(user: User, provider: str, db: AsyncSession) -> Provide
     return setting
 
 
+async def _read_provider_response(response: httpx.Response) -> bytes:
+    content_encoding = response.headers.get("content-encoding", "identity").strip().lower()
+    if content_encoding not in {"", "identity"}:
+        raise _ProviderResponseEncodingError
+    content = bytearray()
+    async for chunk in response.aiter_raw():
+        if len(content) + len(chunk) > PROVIDER_TEST_RESPONSE_MAX_BYTES:
+            raise _ProviderResponseTooLargeError
+        content.extend(chunk)
+    return bytes(content)
+
+
 async def test_provider(user: User, provider: str, db: AsyncSession) -> ProviderSetting:
     await lock_provider_mutation(user.id, provider, db)
     setting = await _owned_setting(user, provider, db)
@@ -428,31 +461,37 @@ async def test_provider(user: User, provider: str, db: AsyncSession) -> Provider
     body = None
     if provider in {"openai", "openai_compatible", "google_gemini"}:
         url = f"{endpoint}/models"
-        headers = {"Authorization": f"Bearer {key}"}
+        headers = {"Authorization": f"Bearer {key}", "Accept-Encoding": "identity"}
     elif provider == "azure_openai":
         deployment = quote(setting.model, safe="")
         url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version=2024-10-21"
-        headers = {"api-key": key}
+        headers = {"api-key": key, "Accept-Encoding": "identity"}
         method = "POST"
         body = {"messages": [{"role": "user", "content": "Reply OK"}], "max_tokens": 1}
     failure: str | None = None
     try:
         async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
-            response = await client.request(method, url, headers=headers, json=body)
-        valid = 200 <= response.status_code < 300
-        if response.status_code in {401, 403}:
+            async with client.stream(method, url, headers=headers, json=body) as response:
+                status_code = response.status_code
+                content = (
+                    await _read_provider_response(response) if 200 <= status_code < 300 else b""
+                )
+        valid = 200 <= status_code < 300
+        if status_code in {401, 403}:
             failure = "The provider rejected the credential. Check the key and its permissions."
-        elif response.status_code == 404:
+        elif status_code == 404:
             failure = "The configured endpoint or model was not found."
-        elif response.status_code == 429:
+        elif status_code == 429:
             failure = "The provider rate limit was reached. Try again after checking its quota."
-        elif response.status_code >= 500:
+        elif status_code >= 500:
             failure = "The provider is temporarily unavailable. Try again later."
         elif not valid:
             failure = "The provider rejected the endpoint or model."
         if valid and provider != "azure_openai":
-            payload = response.json()
-            models = payload.get("data", [])
+            payload = json.loads(content)
+            if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+                raise ValueError("Provider model response has an invalid shape")
+            models = payload["data"]
             model_ids = {
                 str(item.get("id", "")).removeprefix("models/")
                 for item in models
@@ -461,13 +500,19 @@ async def test_provider(user: User, provider: str, db: AsyncSession) -> Provider
             valid = setting.model in model_ids
             if not valid:
                 failure = "The configured model is not available for this credential."
+    except _ProviderResponseTooLargeError:
+        valid = False
+        failure = "The provider response exceeded the allowed size."
+    except _ProviderResponseEncodingError:
+        valid = False
+        failure = "The provider returned an unsupported compressed response."
     except httpx.TimeoutException:
         valid = False
         failure = "The connection timed out. Check the endpoint and try again."
     except (httpx.ConnectError, httpx.NetworkError):
         valid = False
         failure = "A network or TLS connection could not be established."
-    except (AttributeError, httpx.HTTPError, ValueError):
+    except (AttributeError, httpx.HTTPError, RecursionError, ValueError):
         valid = False
         failure = "The provider returned an unexpected response."
     await lock_provider_selection(user.id, db)

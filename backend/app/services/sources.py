@@ -91,6 +91,8 @@ async def create_or_update_source(
     user: User,
     payload: SourceCreate,
     db: AsyncSession,
+    *,
+    commit: bool = True,
 ) -> Source:
     await _validate_enrollment_scope(payload.enrollment_id, user.id, db)
     existing: Source | None = None
@@ -147,8 +149,11 @@ async def create_or_update_source(
         existing.import_error = payload.import_error
         existing.last_imported_at = datetime.now(UTC)
         record_source_change(existing, before, db, "source_updated")
-        await db.commit()
-        await db.refresh(existing)
+        if commit:
+            await db.commit()
+            await db.refresh(existing)
+        else:
+            await db.flush()
         return existing
 
     source = Source(
@@ -179,8 +184,11 @@ async def create_or_update_source(
             after_snapshot=source_snapshot(source),
         )
     )
-    await db.commit()
-    await db.refresh(source)
+    if commit:
+        await db.commit()
+        await db.refresh(source)
+    else:
+        await db.flush()
     return source
 
 

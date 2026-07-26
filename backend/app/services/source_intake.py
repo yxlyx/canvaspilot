@@ -2,6 +2,7 @@ import hashlib
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.exceptions import WikiBaseError
 from app.models.source import SourceStatus
 from app.models.user import User
 from app.schemas.sources import SourceCreate, SourceIntakeRequest, SourceIntakeResponse
@@ -42,6 +43,7 @@ async def ingest_source(
             status=SourceStatus.PENDING,
         ),
         db,
+        commit=payload.mode == "link",
     )
     if payload.mode == "link":
         return SourceIntakeResponse(
@@ -50,16 +52,20 @@ async def ingest_source(
             import_status="saved",
             duplicate=False,
         )
-    run = await enqueue_source_version(
-        user,
-        source,
-        filename=payload.filename,
-        content=payload.content,
-        content_base64=payload.content_base64,
-        source_url=str(payload.source_url) if payload.source_url else None,
-        db=db,
-        idempotency_key=idempotency_key,
-    )
+    try:
+        run = await enqueue_source_version(
+            user,
+            source,
+            filename=payload.filename,
+            content=payload.content,
+            content_base64=payload.content_base64,
+            source_url=str(payload.source_url) if payload.source_url else None,
+            db=db,
+            idempotency_key=idempotency_key,
+        )
+    except WikiBaseError:
+        await db.rollback()
+        raise
     await db.refresh(source)
     import_status = {
         "running": "running",

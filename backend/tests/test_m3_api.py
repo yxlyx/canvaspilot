@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import gzip
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
@@ -9,7 +10,7 @@ import jwt
 import pytest
 import respx
 from cryptography.hazmat.primitives.asymmetric import rsa
-from httpx import ASGITransport, AsyncClient, Request, Response
+from httpx import ASGITransport, AsyncByteStream, AsyncClient, Request, Response
 from openai import AuthenticationError
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -349,6 +350,134 @@ async def test_provider_test_serializes_configuration_and_disconnect(
     assert tested.status_code == 200
     assert disconnected.status_code == 204
     assert (await owner_client.get("/api/providers/settings")).json() == []
+
+
+@pytest.mark.asyncio
+async def test_provider_probes_stop_reading_oversized_responses(
+    authenticated_m3_clients, monkeypatch
+):
+    owner_client, _, _ = authenticated_m3_clients
+    compatible_endpoint = "https://provider.example"
+    azure_endpoint = "https://resource.openai.azure.com"
+    settings = provider_service.get_settings().model_copy(
+        update={
+            "provider_allowed_endpoints": f"{compatible_endpoint},{azure_endpoint}",
+        }
+    )
+    monkeypatch.setattr(provider_service, "get_settings", lambda: settings)
+
+    async def public_endpoint(_endpoint: str) -> None:
+        return None
+
+    monkeypatch.setattr(provider_service, "_ensure_public_endpoint", public_endpoint)
+
+    class OversizedResponseStream(AsyncByteStream):
+        def __init__(self):
+            self.chunks_read = 0
+
+        async def __aiter__(self):
+            for _ in range(3):
+                self.chunks_read += 1
+                yield b"x" * (provider_service.PROVIDER_TEST_RESPONSE_MAX_BYTES // 2 + 1)
+
+        async def aclose(self) -> None:
+            return None
+
+    probes = [
+        (
+            {"provider": "openai", "api_key": "test-key", "model": "gpt-4o-mini"},
+            "GET",
+            "https://api.openai.com/v1/models",
+        ),
+        (
+            {"provider": "google_gemini", "api_key": "test-key", "model": "gemini-2.0-flash"},
+            "GET",
+            "https://generativelanguage.googleapis.com/v1beta/openai/models",
+        ),
+        (
+            {
+                "provider": "openai_compatible",
+                "api_key": "test-key",
+                "model": "custom-model",
+                "endpoint": compatible_endpoint,
+            },
+            "GET",
+            f"{compatible_endpoint}/models",
+        ),
+        (
+            {
+                "provider": "azure_openai",
+                "api_key": "test-key",
+                "model": "course-deployment",
+                "endpoint": azure_endpoint,
+            },
+            "POST",
+            f"{azure_endpoint}/openai/deployments/course-deployment/chat/completions"
+            "?api-version=2024-10-21",
+        ),
+    ]
+
+    for configuration, method, url in probes:
+        configured = await owner_client.put("/api/providers/settings", json=configuration)
+        assert configured.status_code == 200
+        stream = OversizedResponseStream()
+        with respx.mock:
+            route = respx.route(method=method, url=url).mock(
+                return_value=Response(200, stream=stream)
+            )
+            tested = await owner_client.post(f"/api/providers/{configuration['provider']}/test")
+        assert route.called
+        assert tested.status_code == 200
+        assert tested.json()["status"] == "invalid"
+        assert tested.json()["last_error"] == "The provider response exceeded the allowed size."
+        assert stream.chunks_read == 2
+
+    openai = {"provider": "openai", "api_key": "test-key", "model": "gpt-4o-mini"}
+    configured = await owner_client.put("/api/providers/settings", json=openai)
+    assert configured.status_code == 200
+    compressed = gzip.compress(b"x" * (provider_service.PROVIDER_TEST_RESPONSE_MAX_BYTES * 10))
+    assert len(compressed) < provider_service.PROVIDER_TEST_RESPONSE_MAX_BYTES
+
+    class CompressedResponseStream(AsyncByteStream):
+        def __init__(self):
+            self.chunks_read = 0
+
+        async def __aiter__(self):
+            self.chunks_read += 1
+            yield compressed
+
+        async def aclose(self) -> None:
+            return None
+
+    compressed_stream = CompressedResponseStream()
+    with respx.mock:
+        route = respx.get("https://api.openai.com/v1/models").mock(
+            return_value=Response(
+                200,
+                headers={"Content-Encoding": "gzip"},
+                stream=compressed_stream,
+            )
+        )
+        tested = await owner_client.post("/api/providers/openai/test")
+    assert route.called
+    assert route.calls.last.request.headers["accept-encoding"] == "identity"
+    assert tested.status_code == 200
+    assert tested.json()["status"] == "invalid"
+    assert (
+        tested.json()["last_error"] == "The provider returned an unsupported compressed response."
+    )
+    assert compressed_stream.chunks_read == 0
+
+    configured = await owner_client.put("/api/providers/settings", json=openai)
+    assert configured.status_code == 200
+    with respx.mock:
+        respx.get("https://api.openai.com/v1/models").mock(
+            return_value=Response(200, json={"data": {"id": "gpt-4o-mini"}})
+        )
+        tested = await owner_client.post("/api/providers/openai/test")
+    assert tested.status_code == 200
+    assert tested.json()["status"] == "invalid"
+    assert tested.json()["last_error"] == "The provider returned an unexpected response."
 
 
 @pytest.mark.asyncio
@@ -1266,6 +1395,14 @@ async def test_provider_lifecycle_fixed_target_and_two_user_isolation(m3_client,
         tested_azure = await client.post("/api/providers/azure_openai/test")
     assert tested_azure.status_code == 200
     assert azure_probe.called
+
+    removed_allowlist_settings = allowed_settings.model_copy(
+        update={"provider_allowed_endpoints": ""}
+    )
+    monkeypatch.setattr(provider_service, "get_settings", lambda: removed_allowlist_settings)
+    with pytest.raises(WikiBaseError) as exc_info:
+        await provider_service.resolve_generation_provider(owner, session)
+    assert exc_info.value.error == "unsafe_endpoint"
 
     principal["user"] = other
     assert (await client.get("/api/providers/settings")).json() == []

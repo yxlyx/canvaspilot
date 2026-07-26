@@ -113,7 +113,10 @@ class Settings(BaseSettings):
             ):
                 raise ValueError(f"{name} must use its fixed official HTTPS endpoint")
         redirect = urlparse(self.chatgpt_oauth_redirect_uri)
-        if (
+        oauth_configured = bool(
+            self.chatgpt_oauth_client_id.strip() or self.chatgpt_oauth_client_secret.strip()
+        )
+        if oauth_configured and (
             redirect.scheme
             not in (
                 {"https"} if environment in {"production", "prod", "staging"} else {"http", "https"}

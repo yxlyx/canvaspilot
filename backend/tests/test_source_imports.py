@@ -176,6 +176,63 @@ async def test_unified_source_intake_imports_pasted_text_and_deduplicates(
 
 
 @pytest.mark.asyncio
+async def test_unified_source_intake_idempotency_conflict_preserves_sources(
+    source_import_client,
+):
+    client, session, user, _ = source_import_client
+    user_id = user.id
+    idempotency_key = "source-intake-key-0001"
+    first_payload = {
+        "mode": "paste",
+        "title": "Original recursion notes",
+        "course_context": "CS2030S",
+        "source_type": "plain_text",
+        "content": "A recursive function needs a base case.",
+    }
+
+    first = await client.post(
+        "/api/sources/import",
+        json=first_payload,
+        headers={"Idempotency-Key": idempotency_key},
+    )
+    assert first.status_code == 201
+    sources_before = (
+        (await session.execute(select(Source).where(Source.user_id == user_id))).scalars().all()
+    )
+    assert len(sources_before) == 1
+    metadata_before = (
+        sources_before[0].title,
+        sources_before[0].citation_label,
+        sources_before[0].course_context,
+        sources_before[0].status,
+    )
+
+    conflict = await client.post(
+        "/api/sources/import",
+        json={
+            **first_payload,
+            "title": "Conflicting metadata",
+            "course_context": "Changed course",
+            "content": "Different upload content must conflict.",
+        },
+        headers={"Idempotency-Key": idempotency_key},
+    )
+
+    assert conflict.status_code == 409
+    assert conflict.json()["error"] == "idempotency_conflict"
+    sources_after = (
+        (await session.execute(select(Source).where(Source.user_id == user_id))).scalars().all()
+    )
+    assert len(sources_after) == 1
+    assert (
+        sources_after[0].title,
+        sources_after[0].citation_label,
+        sources_after[0].course_context,
+        sources_after[0].status,
+    ) == metadata_before
+
+
+@pytest.mark.asyncio
 async def test_completed_unified_source_intake_replay_preserves_ready_source(
     source_import_client,
     monkeypatch,

@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import uuid
@@ -321,7 +322,11 @@ async def parse_and_import_ingestion_job_sources(
     parsed_text_chars = 0
     for source in sources:
         try:
-            item = parse_source_payload(source, payload_by_source_id[source.id])
+            item = await asyncio.to_thread(
+                parse_source_payload,
+                source,
+                payload_by_source_id[source.id],
+            )
             parsed_text_chars += len(item.content) + sum(
                 len(section.content) for section in item.sections
             )

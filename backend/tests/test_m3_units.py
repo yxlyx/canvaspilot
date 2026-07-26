@@ -74,6 +74,34 @@ def test_production_accepts_independent_strong_secrets():
     assert settings.environment == "production"
 
 
+@pytest.mark.parametrize("environment", ["production", "staging"])
+def test_deployed_environment_allows_default_chatgpt_redirect_when_oauth_disabled(environment):
+    settings = Settings(
+        environment=environment,
+        secure_cookies=True,
+        session_secret="a-strong-independent-session-secret-1234",
+        canvas_token_secret=Fernet.generate_key().decode(),
+        provider_encryption_secret=Fernet.generate_key().decode(),
+    )
+
+    assert settings.chatgpt_oauth_client_id == ""
+    assert settings.chatgpt_oauth_client_secret == ""
+    assert settings.chatgpt_oauth_redirect_uri.startswith("http://localhost:")
+
+
+def test_deployed_environment_requires_https_chatgpt_redirect_when_oauth_configured():
+    with pytest.raises(ValidationError, match="CHATGPT_OAUTH_REDIRECT_URI"):
+        Settings(
+            environment="production",
+            secure_cookies=True,
+            session_secret="a-strong-independent-session-secret-1234",
+            canvas_token_secret=Fernet.generate_key().decode(),
+            provider_encryption_secret=Fernet.generate_key().decode(),
+            chatgpt_oauth_client_id="approved-client",
+            chatgpt_oauth_client_secret="approved-secret",
+        )
+
+
 @pytest.mark.parametrize("environment", ["production", "prod", "staging"])
 def test_deployed_environments_require_secure_cookies(environment):
     with pytest.raises(ValidationError, match="SECURE_COOKIES"):

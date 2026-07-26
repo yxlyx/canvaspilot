@@ -119,6 +119,41 @@ async def _finish_run(run_id: uuid.UUID) -> ProcessingRun:
 
 
 @pytest.mark.asyncio
+async def test_immediately_enqueued_stage_uses_database_time_for_claim(
+    processing_session, monkeypatch
+):
+    session, user, _ = processing_session
+    source = await _source(session, user, "Immediate claim notes")
+    run = await _enqueue(session, user, source, "An immediately queued stage is claimable.")
+    stage = await session.scalar(
+        select(ProcessingStage).where(
+            ProcessingStage.run_id == run.id,
+            ProcessingStage.status == "queued",
+        )
+    )
+    assert stage is not None
+    database_now = await session.scalar(select(func.clock_timestamp()))
+    assert stage.available_at <= database_now
+    monkeypatch.setattr(
+        "app.services.processing._now",
+        lambda: stage.available_at - timedelta(seconds=1),
+    )
+
+    async with async_session_factory() as blocker:
+        await blocker.execute(
+            select(ProcessingStage).where(ProcessingStage.id != stage.id).with_for_update()
+        )
+        claimed = await claim_stage(session, "immediate-worker")
+        await blocker.rollback()
+
+    assert claimed is not None
+    assert claimed.id == stage.id
+    assert claimed.lease_owner == "immediate-worker"
+    assert claimed.lease_token == 1
+    assert claimed.lease_expires_at > database_now
+
+
+@pytest.mark.asyncio
 async def test_pipeline_is_durable_idempotent_and_reaches_ready(processing_session):
     session, user, _ = processing_session
     source = await _source(session, user)
@@ -628,6 +663,10 @@ async def test_heartbeat_is_fenced_and_lease_theft_rolls_back_outputs(
     stage = await claim_stage(session, "original-worker")
     assert stage is not None
     old_expiry = stage.lease_expires_at
+    monkeypatch.setattr(
+        "app.services.processing._now",
+        lambda: old_expiry - timedelta(seconds=60),
+    )
     assert await heartbeat_stage(session, stage.id, "original-worker", stage.lease_token)
     await session.refresh(stage)
     assert old_expiry is not None and stage.lease_expires_at > old_expiry

@@ -555,9 +555,9 @@ async def _fail_expired_exhausted_stage(db: AsyncSession, now: datetime) -> bool
 
 
 async def claim_stage(db: AsyncSession, worker_id: str) -> ProcessingStage | None:
-    now = _now()
+    now = await db.scalar(select(func.clock_timestamp()))
     while await _fail_expired_exhausted_stage(db, now):
-        now = _now()
+        now = await db.scalar(select(func.clock_timestamp()))
     stage = await db.scalar(
         select(ProcessingStage)
         .join(ProcessingRun, ProcessingRun.id == ProcessingStage.run_id)
@@ -606,6 +606,7 @@ async def heartbeat_stage(
     worker_id: str,
     lease_token: int,
 ) -> bool:
+    now = await db.scalar(select(func.clock_timestamp()))
     result = await db.execute(
         update(ProcessingStage)
         .where(
@@ -613,9 +614,9 @@ async def heartbeat_stage(
             ProcessingStage.status == "running",
             ProcessingStage.lease_owner == worker_id,
             ProcessingStage.lease_token == lease_token,
-            ProcessingStage.lease_expires_at > _now(),
+            ProcessingStage.lease_expires_at > now,
         )
-        .values(lease_expires_at=_now() + timedelta(seconds=LEASE_SECONDS))
+        .values(lease_expires_at=now + timedelta(seconds=LEASE_SECONDS))
     )
     await db.commit()
     return result.rowcount == 1
@@ -652,7 +653,8 @@ async def _parse_index(
     run: ProcessingRun, version: SourceVersion, source: Source, db: AsyncSession
 ) -> dict:
     await db.execute(delete(SourceChunk).where(SourceChunk.source_version_id == version.id))
-    parsed = parse_source_payload(
+    parsed = await asyncio.to_thread(
+        parse_source_payload,
         source,
         SourceParseItem(source_id=source.id, **version.payload),
     )
@@ -858,7 +860,7 @@ async def execute_claimed_stage(
     lease_token: int | None = None,
 ) -> ProcessingRun | None:
     stage = await db.get(ProcessingStage, stage_id)
-    now = _now()
+    now = await db.scalar(select(func.clock_timestamp()))
     if (
         stage is None
         or stage.status != "running"
@@ -893,6 +895,7 @@ async def execute_claimed_stage(
         except asyncio.CancelledError:
             pass
 
+        failed_at = await db.scalar(select(func.clock_timestamp()))
         provider_pause = isinstance(exc, ProviderUnavailableError)
         error = _safe_error(exc)
         if provider_pause:
@@ -905,7 +908,7 @@ async def execute_claimed_stage(
             }
         elif attempt_count < max_attempts:
             delay = RETRY_DELAYS[min(attempt_count - 1, len(RETRY_DELAYS) - 1)]
-            available_at = _now() + timedelta(seconds=delay)
+            available_at = failed_at + timedelta(seconds=delay)
             stage_values = {
                 "status": "queued",
                 "available_at": available_at,
@@ -917,7 +920,7 @@ async def execute_claimed_stage(
         else:
             stage_values = {
                 "status": "failed",
-                "completed_at": _now(),
+                "completed_at": failed_at,
                 "error_code": "stage_failed",
                 "error": error,
                 "lease_owner": None,
@@ -930,7 +933,7 @@ async def execute_claimed_stage(
                 ProcessingStage.status == "running",
                 ProcessingStage.lease_owner == worker_id,
                 ProcessingStage.lease_token == token,
-                ProcessingStage.lease_expires_at > _now(),
+                ProcessingStage.lease_expires_at > failed_at,
             )
             .values(**stage_values)
         )
@@ -1017,7 +1020,7 @@ async def execute_claimed_stage(
     except asyncio.CancelledError:
         pass
 
-    completed_at = _now()
+    completed_at = await db.scalar(select(func.clock_timestamp()))
     completed_status = "skipped" if "skipped" in outcome else "succeeded"
     fenced = await db.execute(
         update(ProcessingStage)
