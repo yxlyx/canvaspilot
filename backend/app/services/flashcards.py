@@ -140,22 +140,7 @@ def _generated_wording_is_low_signal(wording: GeneratedFlashcardWording) -> bool
 def _question_exposes_citation_reference(question: str, citation_ref: str) -> bool:
     normalized_question = _plain_text(question).casefold()
     normalized_ref = _plain_text(citation_ref).casefold()
-    if not normalized_ref or normalized_ref not in normalized_question:
-        return False
-    if (
-        ":" in normalized_ref
-        or "§" in normalized_ref
-        or re.search(
-            r"\b(?:citation|section|page|chapter|slide|paragraph|appendix|lecture)\b",
-            normalized_ref,
-        )
-        is not None
-    ):
-        return True
-    return any(
-        f"{cue} {normalized_ref}" in normalized_question
-        for cue in ("according to", "according to the", "cited in", "from", "in the")
-    )
+    return bool(normalized_ref and normalized_ref in normalized_question)
 
 
 def _sentences(value: str) -> list[str]:

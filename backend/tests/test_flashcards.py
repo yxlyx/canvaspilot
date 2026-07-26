@@ -484,18 +484,20 @@ async def test_generation_allows_topic_named_source_title(flashcard_client, monk
 @pytest.mark.asyncio
 async def test_generation_rejects_citation_reference_in_question(flashcard_client, monkeypatch):
     client, session, user, _ = flashcard_client
-    source, _ = await _create_ready_source(
+    source, chunks = await _create_ready_source(
         session,
         user,
         title="Recursion",
         chunks=["Recursion is a process where a function calls itself to solve smaller cases."],
         topic_tags=["recursion"],
     )
+    chunks[0].citation_ref = "Smith 2020"
+    await session.commit()
 
     async def citation_leak(_system, _prompt, _user, _db, provider, _schema):
         return provider, (
             '{"cards":[{"evidence_key":"E1",'
-            '"question":"According to Recursion Citation: Section 1, how is recursion defined?",'
+            '"question":"What did Smith 2020 establish about recursion?",'
             '"answer":"Recursion is a process where a function calls itself",'
             '"support_quote":"Recursion is a process where a function calls itself",'
             '"card_type":"definition"}]}'
