@@ -161,6 +161,15 @@ pub fn listModules(allocator: std.mem.Allocator, token: []const u8) Result([]typ
     return requestJson([]types.Module, allocator, token, .GET, "/api/modules", null);
 }
 
+pub fn listEnrollments(allocator: std.mem.Allocator, token: []const u8) Result([]types.EnrollmentResponse) {
+    return requestJson([]types.EnrollmentResponse, allocator, token, .GET, "/api/enrollments", null);
+}
+
+pub fn listEnrollmentTopics(allocator: std.mem.Allocator, token: []const u8, id: []const u8) Result([]types.CurriculumTopicResponse) {
+    const path = std.fmt.allocPrint(allocator, "/api/enrollments/{s}/topics", .{id}) catch return .{ .status = 0, .err = "alloc" };
+    return requestJson([]types.CurriculumTopicResponse, allocator, token, .GET, path, null);
+}
+
 pub fn getModule(allocator: std.mem.Allocator, token: []const u8, id: []const u8) Result(types.Module) {
     const path = std.fmt.allocPrint(allocator, "/api/modules/{s}", .{id}) catch {
         return .{ .status = 0, .err = "alloc" };
@@ -187,6 +196,18 @@ pub fn listSources(allocator: std.mem.Allocator, token: []const u8) Result([]typ
     return requestJson([]types.SourceResponse, allocator, token, .GET, "/api/sources", null);
 }
 
+pub fn listProcessingRuns(allocator: std.mem.Allocator, token: []const u8, source_id: ?[]const u8, limit: usize) Result([]types.ProcessingRunResponse) {
+    const path = if (source_id) |id|
+        std.fmt.allocPrint(allocator, "/api/processing/runs?source_id={s}&limit={d}", .{ id, limit }) catch return .{ .status = 0, .err = "alloc" }
+    else
+        std.fmt.allocPrint(allocator, "/api/processing/runs?limit={d}", .{limit}) catch return .{ .status = 0, .err = "alloc" };
+    return requestJson([]types.ProcessingRunResponse, allocator, token, .GET, path, null);
+}
+
+pub fn processingPolicy(allocator: std.mem.Allocator, token: []const u8) Result(types.ProcessingPolicyResponse) {
+    return requestJson(types.ProcessingPolicyResponse, allocator, token, .GET, "/api/processing/policy", null);
+}
+
 pub fn createSource(
     allocator: std.mem.Allocator,
     token: []const u8,
@@ -202,6 +223,11 @@ pub fn listWikiPages(allocator: std.mem.Allocator, token: []const u8) Result([]t
     return requestJson([]types.WikiPageResponse, allocator, token, .GET, "/api/wiki/pages", null);
 }
 
+pub fn listEnrollmentWikiPages(allocator: std.mem.Allocator, token: []const u8, enrollment_id: []const u8) Result([]types.WikiPageResponse) {
+    const path = std.fmt.allocPrint(allocator, "/api/wiki/pages?enrollment_id={s}", .{enrollment_id}) catch return .{ .status = 0, .err = "alloc" };
+    return requestJson([]types.WikiPageResponse, allocator, token, .GET, path, null);
+}
+
 pub fn getWikiPage(
     allocator: std.mem.Allocator,
     token: []const u8,
@@ -213,11 +239,31 @@ pub fn getWikiPage(
     return requestJson(types.WikiPageResponse, allocator, token, .GET, path, null);
 }
 
+pub fn getEnrollmentWikiPage(
+    allocator: std.mem.Allocator,
+    token: []const u8,
+    slug: []const u8,
+    enrollment_id: []const u8,
+) Result(types.WikiPageResponse) {
+    const path = std.fmt.allocPrint(allocator, "/api/wiki/pages/{s}?enrollment_id={s}", .{ slug, enrollment_id }) catch return .{ .status = 0, .err = "alloc" };
+    return requestJson(types.WikiPageResponse, allocator, token, .GET, path, null);
+}
+
 pub fn listFlashcardDecks(
     allocator: std.mem.Allocator,
     token: []const u8,
 ) Result([]types.FlashcardDeckResponse) {
     return requestJson([]types.FlashcardDeckResponse, allocator, token, .GET, "/api/flashcards/decks", null);
+}
+
+pub fn getFlashcardDraft(allocator: std.mem.Allocator, token: []const u8, deck_id: []const u8) Result(types.FlashcardDeckResponse) {
+    const path = std.fmt.allocPrint(allocator, "/api/flashcards/drafts/{s}", .{deck_id}) catch return .{ .status = 0, .err = "alloc" };
+    return requestJson(types.FlashcardDeckResponse, allocator, token, .GET, path, null);
+}
+
+pub fn listFlashcardDraftRevisions(allocator: std.mem.Allocator, token: []const u8, deck_id: []const u8) Result([]types.FlashcardRevisionResponse) {
+    const path = std.fmt.allocPrint(allocator, "/api/flashcards/drafts/{s}/revisions", .{deck_id}) catch return .{ .status = 0, .err = "alloc" };
+    return requestJson([]types.FlashcardRevisionResponse, allocator, token, .GET, path, null);
 }
 
 pub fn submitFlashcardAttempt(

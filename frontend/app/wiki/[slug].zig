@@ -19,9 +19,11 @@ pub fn render(req: mer.Request) mer.Response {
     const session = lib.session.fromRequest(req);
     const use_mock = lib.m3.isExplicitDemo(req);
     const now_secs = lib.time.nowSecs();
+    const enrollment_scope = req.queryParam("enrollment") orelse "";
+    if (enrollment_scope.len > 0 and !safeUuid(enrollment_scope)) return mer.badRequest("invalid enrollment scope");
 
     if (!use_mock) {
-        const result = lib.backend.getWikiPage(req.allocator, session.token, slug);
+        const result = if (enrollment_scope.len > 0) lib.backend.getEnrollmentWikiPage(req.allocator, session.token, slug, enrollment_scope) else lib.backend.getWikiPage(req.allocator, session.token, slug);
         if (result.value) |page| return renderLiveReader(req, page.value, now_secs);
         if (result.status == 404) return renderMissing(req, slug, false);
         return lib.m3.liveError(req, "Wiki page", result.status);
@@ -43,7 +45,7 @@ fn renderEditorialFixture(req: mer.Request, slug: []const u8) mer.Response {
     w.writeAll(ICON_LINK) catch return mer.internalError("wiki render failed");
     w.writeAll("<span>Copy link</span></button><button type=\"button\" data-cp-theme-toggle aria-label=\"Switch to dark mode\">") catch return mer.internalError("wiki render failed");
     w.writeAll(ICON_MOON) catch return mer.internalError("wiki render failed");
-    w.writeAll("</button></div><a class=\"button button-dark button-small\" href=\"/chat?mock=1\">Ask about this topic</a></header><div class=\"reader-layout\"><aside class=\"reader-toc\"><p class=\"eyebrow\">On this page</p><nav aria-label=\"Article contents\"><a class=\"active\" href=\"#overview\">Overview</a><a href=\"#invariant\">The invariant</a><a href=\"#rotations\">Rotations</a><a href=\"#comparison\">AVL vs red-black</a><a href=\"#references\">References</a></nav><div><small>Knowledge coverage</small><strong>3 of 4 sources</strong><div class=\"slim-progress\"><i style=\"width:78%\"></i></div></div></aside><article class=\"wiki-article\"><header><div class=\"article-breadcrumb\"><a href=\"/wiki?mock=1\">Wiki</a><span>/</span><a href=\"/wiki?module=CS2040S&amp;mock=1\">CS2040S</a></div><h1>") catch return mer.internalError("wiki render failed");
+    w.writeAll("</button></div><a class=\"button button-dark button-small\" href=\"/chat?mock=1\">Ask about this topic</a></header><div class=\"reader-layout\"><aside class=\"reader-toc\"><p class=\"eyebrow\">On this page</p><nav aria-label=\"Article contents\"><a class=\"active\" href=\"#overview\">Overview</a><a href=\"#invariant\">The invariant</a><a href=\"#rotations\">Rotations</a><a href=\"#comparison\">AVL vs red-black</a><a href=\"#references\">References</a></nav><div><small>Source coverage</small><strong>3 connected sources</strong><span>Illustrative demo evidence</span></div></aside><article class=\"wiki-article\"><header><div class=\"article-breadcrumb\"><a href=\"/wiki?mock=1\">Wiki</a><span>/</span><a href=\"/wiki?module=CS2040S&amp;mock=1\">CS2040S</a></div><h1>") catch return mer.internalError("wiki render failed");
     w.writeAll(safe_title) catch return mer.internalError("wiki render failed");
     w.writeAll(
         \\</h1><p class="article-deck">A balanced search tree preserves the ordering of a binary search tree while controlling height so search, insertion, and deletion remain efficient.</p><div class="article-meta"><span>Updated 18 minutes ago</span><span>·</span><span>7 minute read</span><span>·</span><span>3 connected sources</span></div><div class="topic-row"><span>AVL trees</span><span>Rotations</span><span>Tree height</span></div></header>
@@ -58,28 +60,43 @@ fn renderEditorialFixture(req: mer.Request, slug: []const u8) mer.Response {
 }
 
 fn renderLiveReader(req: mer.Request, page: lib.types.WikiPageResponse, now_secs: i64) mer.Response {
+    const token = lib.session.fromRequest(req).token;
+    var runs: []const lib.types.ProcessingRunResponse = &.{};
+    var runs_loaded = true;
+    if (page.source_ids.len > 0) {
+        const result = lib.backend.listProcessingRuns(req.allocator, token, page.source_ids[0], 5);
+        if (result.value) |parsed| runs = parsed.value else runs_loaded = false;
+    }
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
     const safe_title = lib.ui.escapeSafe(req.allocator, page.title);
     const safe_summary = lib.ui.escapeSafe(req.allocator, page.summary);
     const safe_slug = if (isSafeSlug(page.slug)) page.slug else "";
     const when = lib.time.formatRelative(req.allocator, page.updated_at, now_secs) catch "—";
-    const wiki_href = lib.m3.demoHref(req.allocator, req, "/wiki") catch return mer.internalError("wiki render failed");
-    const chat_href = lib.m3.demoHref(req.allocator, req, "/chat") catch return mer.internalError("wiki render failed");
+    const enrollment_scope = req.queryParam("enrollment") orelse "";
+    const scoped_enrollment = if (safeUuid(enrollment_scope)) enrollment_scope else "";
+    const wiki_path = if (scoped_enrollment.len > 0) std.fmt.allocPrint(req.allocator, "/wiki?enrollment={s}", .{scoped_enrollment}) catch "/wiki" else "/wiki";
+    const chat_path = if (scoped_enrollment.len > 0) std.fmt.allocPrint(req.allocator, "/chat?enrollment={s}", .{scoped_enrollment}) catch "/chat" else "/chat";
+    const wiki_href = lib.m3.demoHref(req.allocator, req, wiki_path) catch return mer.internalError("wiki render failed");
+    const chat_href = lib.m3.demoHref(req.allocator, req, chat_path) catch return mer.internalError("wiki render failed");
 
     w.print("<main id=\"main\" tabindex=\"-1\" class=\"reader-page\" data-cp-document-title=\"{s}\"><header class=\"reader-header\"><a class=\"reader-brand\" href=\"{s}\">{s}<span class=\"cp-brand-mark\">W</span><span>Knowledge wiki</span></a><div class=\"reader-tools\"><form class=\"reader-export\" method=\"post\" action=\"/api/m3\" data-page-download data-slug=\"{s}\"><button type=\"submit\" aria-label=\"Download canonical Markdown\">{s}<span>Export</span></button><span class=\"cp-form-status\" role=\"status\" aria-live=\"polite\"></span></form><button id=\"cp-copy-article\" type=\"button\">{s}<span>Copy link</span></button><button type=\"button\" data-cp-theme-toggle aria-label=\"Switch to dark mode\">{s}</button></div><a class=\"button button-dark button-small\" href=\"{s}\">Ask about this topic</a></header><script src=\"/m3.js?v=20260721\" defer></script>", .{ safe_title, wiki_href, ICON_BACK, safe_slug, ICON_DOWNLOAD, ICON_LINK, ICON_MOON, chat_href }) catch return mer.internalError("wiki render failed");
-    w.print("<div class=\"reader-layout\"><aside class=\"reader-toc\"><p class=\"eyebrow\">On this page</p><nav aria-label=\"Article contents\"><a class=\"active\" href=\"#overview\">Overview</a><a href=\"#references\">References</a></nav><div><small>Knowledge coverage</small><strong>{d} connected sources</strong><div class=\"slim-progress\"><i style=\"width:78%\"></i></div></div></aside><article class=\"wiki-article\"><header><div class=\"article-breadcrumb\"><a href=\"{s}\">Wiki</a><span>/</span><span>{s}</span></div><h1>{s}</h1><p class=\"article-deck\">{s}</p><div class=\"article-meta\"><span>Updated {s}</span><span>·</span><span>{d} citations</span><span>·</span><span>{d} connected sources</span></div><div class=\"topic-row\"><span>{s}</span><span>Traceable evidence</span></div></header><section id=\"overview\">", .{ page.source_ids.len, wiki_href, lib.ui.escapeSafe(req.allocator, page.page_type), safe_title, safe_summary, when, page.citation_count, page.source_ids.len, lib.ui.escapeSafe(req.allocator, page.page_type) }) catch return mer.internalError("wiki render failed");
+    w.print("<div class=\"reader-layout\"><aside class=\"reader-toc\"><p class=\"eyebrow\">On this page</p><nav aria-label=\"Article contents\"><a class=\"active\" href=\"#overview\">Overview</a><a href=\"#references\">References</a></nav><div><small>Source coverage</small><strong>{d} connected sources</strong><span>No curriculum coverage score is available yet</span></div></aside><article class=\"wiki-article\"><header><div class=\"article-breadcrumb\"><a href=\"{s}\">Wiki</a><span>/</span><span>{s}</span></div><h1>{s}</h1><p class=\"article-deck\">{s}</p><div class=\"article-meta\"><span>Updated {s}</span><span>·</span><span>{d} citations</span><span>·</span><span>{d} connected sources</span></div><div class=\"topic-row\"><span>{s}</span><span>Traceable evidence</span></div></header><section id=\"overview\">", .{ page.source_ids.len, wiki_href, lib.ui.escapeSafe(req.allocator, page.page_type), safe_title, safe_summary, when, page.citation_count, page.source_ids.len, lib.ui.escapeSafe(req.allocator, page.page_type) }) catch return mer.internalError("wiki render failed");
     lib.markdown.renderMarkdown(req.allocator, w, page.markdown) catch return mer.internalError("wiki render failed");
     w.writeAll("</section><section id=\"references\" class=\"references\"><p class=\"eyebrow\">Evidence trail</p><h2>References</h2><ol>") catch return mer.internalError("wiki render failed");
     for (page.citations, 0..) |citation, index| {
-        w.print("<li id=\"ref-{d}\"><span>{d}</span><div><strong>{s}</strong><p>{s}</p><blockquote>{s}</blockquote><a href=\"/sources\">Open source →</a></div></li>", .{ index + 1, index + 1, lib.ui.escapeSafe(req.allocator, citation.source_title), lib.ui.escapeSafe(req.allocator, citation.citation_ref), lib.ui.escapeSafe(req.allocator, citation.snippet) }) catch return mer.internalError("wiki render failed");
+        const source_href = if (safeUuid(citation.source_id)) if (scoped_enrollment.len > 0) std.fmt.allocPrint(req.allocator, "/sources?source={s}&enrollment_id={s}", .{ citation.source_id, scoped_enrollment }) catch "/sources" else std.fmt.allocPrint(req.allocator, "/sources?source={s}", .{citation.source_id}) catch "/sources" else "/sources";
+        w.print("<li id=\"ref-{d}\"><span>{d}</span><div><strong>{s}</strong><p>{s}</p><blockquote>{s}</blockquote><a href=\"{s}\">Open source →</a></div></li>", .{ index + 1, index + 1, lib.ui.escapeSafe(req.allocator, citation.source_title), lib.ui.escapeSafe(req.allocator, citation.citation_ref), lib.ui.escapeSafe(req.allocator, citation.snippet), lib.ui.escapeSafe(req.allocator, source_href) }) catch return mer.internalError("wiki render failed");
     }
     w.writeAll("</ol></section></article><aside class=\"reader-related\"><p class=\"eyebrow\">Connected ideas</p>") catch return mer.internalError("wiki render failed");
     for (page.backlinks) |backlink| {
-        const backlink_href = if (isSafeSlug(backlink)) std.fmt.allocPrint(req.allocator, "/wiki/{s}", .{backlink}) catch wiki_href else wiki_href;
+        const backlink_href = if (isSafeSlug(backlink)) if (scoped_enrollment.len > 0) std.fmt.allocPrint(req.allocator, "/wiki/{s}?enrollment={s}", .{ backlink, scoped_enrollment }) catch wiki_href else std.fmt.allocPrint(req.allocator, "/wiki/{s}", .{backlink}) catch wiki_href else wiki_href;
         w.print("<a href=\"{s}\"><strong>{s}</strong><span>Backlink</span></a>", .{ lib.ui.escapeSafe(req.allocator, backlink_href), lib.ui.escapeSafe(req.allocator, backlink) }) catch return mer.internalError("wiki render failed");
     }
-    w.print("<div class=\"backlinks\"><small>Evidence</small><strong>{d} citations</strong><span>{d} source records · created {s}</span></div></aside></div></main>", .{ page.citation_count, page.source_ids.len, lib.ui.escapeSafe(req.allocator, page.created_at) }) catch return mer.internalError("wiki render failed");
+    w.print("<div class=\"backlinks\"><small>Evidence</small><strong>{d} citations</strong><span>{d} source records · created {s}</span></div></aside></div>", .{ page.citation_count, page.source_ids.len, lib.ui.escapeSafe(req.allocator, page.created_at) }) catch return mer.internalError("wiki render failed");
+    if (page.source_ids.len > 0) w.print("<div class=\"cp-wiki-rebuild\"><button class=\"cp-btn cp-btn-primary\" type=\"button\" data-manual-processing-trigger data-source-id=\"{s}\">Rebuild Wiki from current source</button><span class=\"cp-form-status\" role=\"status\" tabindex=\"-1\"></span><p>The request only queues durable work. This prior valid Wiki remains open if refresh fails.</p></div>", .{lib.ui.escapeSafe(req.allocator, page.source_ids[0])}) catch return mer.internalError("wiki render failed");
+    if (runs_loaded) lib.processing_ui.render(req.allocator, w, runs, "", false) catch return mer.internalError("wiki render failed") else w.writeAll("<section class=\"cp-processing-panel surface\"><h2>Wiki compilation</h2><p role=\"alert\">Refresh status is unavailable. The prior valid Wiki above is preserved.</p></section>") catch return mer.internalError("wiki render failed");
+    w.writeAll("</main>") catch return mer.internalError("wiki render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
@@ -109,6 +126,16 @@ fn renderMockReader(req: mer.Request, page: lib.types.WikiPage, now_secs: i64) m
 fn findPage(slug: []const u8) ?lib.types.WikiPage {
     for (lib.mock.wiki_pages) |page| if (std.mem.eql(u8, page.slug, slug)) return page;
     return null;
+}
+
+fn safeUuid(value: []const u8) bool {
+    if (value.len != 36) return false;
+    for (value, 0..) |char, index| {
+        if (index == 8 or index == 13 or index == 18 or index == 23) {
+            if (char != '-') return false;
+        } else if (!std.ascii.isHex(char)) return false;
+    }
+    return true;
 }
 
 fn isSafeSlug(raw: []const u8) bool {

@@ -19,8 +19,11 @@ pub fn render(req: mer.Request) mer.Response {
     const use_mock = lib.m3.isExplicitDemo(req);
     const raw_query = req.queryParam("q") orelse "";
     const raw_module = req.queryParam("module") orelse "";
+    const raw_enrollment = req.queryParam("enrollment") orelse "";
     const query = lib.form.decode(req.allocator, raw_query) catch raw_query;
     const requested_module = lib.form.decode(req.allocator, raw_module) catch raw_module;
+    const enrollment_scope = lib.form.decode(req.allocator, raw_enrollment) catch raw_enrollment;
+    if (enrollment_scope.len > 0 and !safeUuid(enrollment_scope)) return mer.badRequest("invalid enrollment scope");
     const unsupported_module = requested_module.len > 0 and !std.mem.eql(u8, requested_module, "Workspace");
     const filter_module: []const u8 = if (unsupported_module) "Workspace" else requested_module;
     var live_pages: ?[]const lib.types.WikiPageResponse = null;
@@ -28,7 +31,7 @@ pub fn render(req: mer.Request) mer.Response {
     var deck_count: ?usize = null;
 
     if (!use_mock) {
-        const pages_result = lib.backend.listWikiPages(req.allocator, session.token);
+        const pages_result = if (enrollment_scope.len > 0) lib.backend.listEnrollmentWikiPages(req.allocator, session.token, enrollment_scope) else lib.backend.listWikiPages(req.allocator, session.token);
         if (pages_result.value) |pages| live_pages = pages.value else return lib.m3.liveError(req, "Wiki", pages_result.status);
         const sources_result = lib.backend.listSources(req.allocator, session.token);
         if (sources_result.value) |sources_result_value| source_count = sources_result_value.value.len else if (sources_result.status == 401) return lib.m3.liveError(req, "Wiki", 401);
@@ -81,13 +84,14 @@ pub fn render(req: mer.Request) mer.Response {
     w.writeAll(ICON_SEARCH) catch return mer.internalError("wiki index render failed");
     w.print("<input class=\"search-field\" id=\"cp-wiki-search\" name=\"q\" value=\"{s}\" placeholder=\"Search concepts, citations, or source titles\" aria-label=\"Search wiki\"></label>", .{safe_query}) catch return mer.internalError("wiki index render failed");
     if (use_mock) w.writeAll("<input type=\"hidden\" name=\"mock\" value=\"1\">") catch return mer.internalError("wiki index render failed");
+    if (enrollment_scope.len > 0) w.print("<input type=\"hidden\" name=\"enrollment\" value=\"{s}\">", .{lib.ui.escapeSafe(req.allocator, enrollment_scope)}) catch return mer.internalError("wiki index render failed");
     w.print("<div class=\"filter-row\"><button class=\"filter-button{s}\" type=\"submit\" name=\"module\" value=\"\" data-wiki-module=\"All\" aria-pressed=\"{s}\">All modules</button><button class=\"filter-button{s}\" type=\"submit\" name=\"module\" value=\"Workspace\" data-wiki-module=\"Workspace\" aria-pressed=\"{s}\">Workspace</button><button class=\"wiki-search-submit\" type=\"submit\" name=\"module\" value=\"{s}\">Search wiki</button></div></form>", .{ if (filter_module.len == 0) " active" else "", if (filter_module.len == 0) "true" else "false", if (std.mem.eql(u8, filter_module, "Workspace")) " active" else "", if (std.mem.eql(u8, filter_module, "Workspace")) "true" else "false", safe_module }) catch return mer.internalError("wiki index render failed");
     if (unsupported_module) w.print("<p class=\"cp-inline-status\" role=\"status\">Wiki pages do not expose per-module ownership yet. Showing all workspace articles instead of an empty <strong>{s}</strong> view.</p>", .{lib.ui.escapeSafe(req.allocator, requested_module)}) catch return mer.internalError("wiki index render failed");
     w.writeAll("<section class=\"article-grid\" id=\"cp-wiki-grid\" aria-live=\"polite\">") catch return mer.internalError("wiki index render failed");
     if (live_pages) |pages| {
         for (pages) |page| {
             if (std.mem.eql(u8, page.page_type, "index") or !matchesLivePage(page, query, filter_module)) continue;
-            renderLiveArticle(req, w, page) catch return mer.internalError("wiki index render failed");
+            renderLiveArticle(req, w, page, enrollment_scope) catch return mer.internalError("wiki index render failed");
         }
     } else {
         for (lib.mock.wiki_pages) |page| {
@@ -96,15 +100,17 @@ pub fn render(req: mer.Request) mer.Response {
         }
     }
     if (shown_count == 0) {
-        const clear_href = lib.m3.demoHref(req.allocator, req, "/wiki") catch return mer.internalError("wiki index render failed");
+        const clear_path = if (enrollment_scope.len > 0) std.fmt.allocPrint(req.allocator, "/wiki?enrollment={s}", .{enrollment_scope}) catch "/wiki" else "/wiki";
+        const clear_href = lib.m3.demoHref(req.allocator, req, clear_path) catch return mer.internalError("wiki index render failed");
         if (topic_count == 0 and query.len == 0 and filter_module.len == 0) {
             w.writeAll("<div class=\"empty-state surface\"><h2>No wiki pages have been generated yet.</h2><p>Import sources, then generate a source-grounded page.</p></div>") catch return mer.internalError("wiki index render failed");
         } else {
-            w.print("<div class=\"empty-state surface\"><h2>No connected topics found</h2><p>Try another module or search term.</p><a class=\"button button-secondary\" href=\"{s}\">Clear search</a></div>", .{clear_href}) catch return mer.internalError("wiki index render failed");
+            w.print("<div class=\"empty-state wiki-empty-state surface\"><div><h2>No connected topics found</h2><p>Try another module or search term.</p></div><a class=\"button button-secondary\" href=\"{s}\">Clear search</a></div>", .{clear_href}) catch return mer.internalError("wiki index render failed");
         }
     }
-    w.writeAll("</section><div class=\"empty-state surface\" id=\"cp-wiki-empty\" hidden><h2>No connected topics found</h2><p>Try another module or search term.</p><button class=\"button button-secondary\" id=\"cp-clear-wiki-search\" type=\"button\">Clear search</button></div>") catch return mer.internalError("wiki index render failed");
-    const sources_href = lib.m3.demoHref(req.allocator, req, "/sources") catch return mer.internalError("wiki index render failed");
+    w.writeAll("</section><div class=\"empty-state wiki-empty-state surface\" id=\"cp-wiki-empty\" hidden><div><h2>No connected topics found</h2><p>Try another module or search term.</p></div><button class=\"button button-secondary\" id=\"cp-clear-wiki-search\" type=\"button\">Clear search</button></div>") catch return mer.internalError("wiki index render failed");
+    const sources_path = if (enrollment_scope.len > 0) std.fmt.allocPrint(req.allocator, "/sources?enrollment_id={s}", .{enrollment_scope}) catch "/sources" else "/sources";
+    const sources_href = lib.m3.demoHref(req.allocator, req, sources_path) catch return mer.internalError("wiki index render failed");
     w.print("<section class=\"wiki-gap surface\"><span class=\"gap-icon\">{s}</span><div><strong>Strengthen the evidence graph.</strong><p>Add sources for topics with sparse citation coverage.</p></div><a class=\"button button-secondary button-small\" href=\"{s}\">Add supporting sources</a></section></div>", .{ ICON_ALERT, sources_href }) catch return mer.internalError("wiki index render failed");
 
     if (live_pages) |pages| {
@@ -175,6 +181,16 @@ fn optionalMetricCard(w: *std.Io.Writer, label: []const u8, value: ?usize) !void
     try w.print("<div class=\"cp-metric-card cp-metric-static\"><span class=\"cp-metric-label\">{s}</span><span class=\"cp-metric-value\">Unavailable</span><span class=\"cp-metric-sub\">metric temporarily unavailable</span></div>", .{label});
 }
 
+fn safeUuid(value: []const u8) bool {
+    if (value.len != 36) return false;
+    for (value, 0..) |char, index| {
+        if (index == 8 or index == 13 or index == 18 or index == 23) {
+            if (char != '-') return false;
+        } else if (!std.ascii.isHex(char)) return false;
+    }
+    return true;
+}
+
 fn safeSlug(raw: []const u8) []const u8 {
     if (raw.len == 0 or raw.len > 160) return "";
     for (raw) |char| switch (char) {
@@ -184,9 +200,9 @@ fn safeSlug(raw: []const u8) []const u8 {
     return raw;
 }
 
-fn renderLiveArticle(req: mer.Request, w: *std.Io.Writer, page: lib.types.WikiPageResponse) !void {
+fn renderLiveArticle(req: mer.Request, w: *std.Io.Writer, page: lib.types.WikiPageResponse, enrollment_scope: []const u8) !void {
     const slug = safeSlug(page.slug);
-    const href = if (slug.len > 0) try std.fmt.allocPrint(req.allocator, "/wiki/{s}", .{slug}) else "/wiki";
+    const href = if (slug.len > 0) if (enrollment_scope.len > 0) try std.fmt.allocPrint(req.allocator, "/wiki/{s}?enrollment={s}", .{ slug, enrollment_scope }) else try std.fmt.allocPrint(req.allocator, "/wiki/{s}", .{slug}) else if (enrollment_scope.len > 0) try std.fmt.allocPrint(req.allocator, "/wiki?enrollment={s}", .{enrollment_scope}) else "/wiki";
     const safe_title = lib.ui.escapeSafe(req.allocator, page.title);
     const safe_summary = lib.ui.escapeSafe(req.allocator, page.summary);
     const safe_type = lib.ui.escapeSafe(req.allocator, page.page_type);

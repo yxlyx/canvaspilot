@@ -49,6 +49,11 @@ test("legacy workspace pages keep fixtures behind exact explicit demo mode", asy
   await expect(page.getByText(/temporarily unavailable/i).first()).toBeVisible();
   await expect(page.locator("body")).not.toContainText("CS2030S");
   await expect(page.locator("body")).not.toContainText("Immutable lists");
+  await expect(page.getByRole("heading", { name: "Import your first local module." })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Import a module/ })).toHaveAttribute("href", "/settings/learning");
+  await expect(page.getByText("No local module enrollments yet.")).toBeVisible();
+  await expect(page.locator("#cp-dashboard-sync")).toHaveCount(0);
+  await expect(page.getByText("Connected workspace", { exact: true })).toHaveCount(0);
 
   for (const path of ["/sources", "/flashcards", "/chat"]) {
     await page.goto(path);
@@ -71,6 +76,17 @@ test("legacy workspace pages keep fixtures behind exact explicit demo mode", asy
   await expect.poll(() => new URL(page.url()).searchParams.get("mock")).toBe("1");
 });
 
+test("workspace exposes the complete student learning loop without a sync action", async ({ page }) => {
+  await page.goto("/dashboard?mock=1");
+  const loop = page.getByRole("region", { name: /Move from curriculum to evidence/ });
+  await expect(loop.getByRole("link", { name: /Import module and review topics/ })).toHaveAttribute("href", /\/settings\/learning\?mock=1$/);
+  await expect(loop.getByRole("link", { name: /Add and process sources/ })).toHaveAttribute("href", /\/sources\?mock=1$/);
+  await expect(loop.getByRole("link", { name: /Read and ask with citations/ })).toHaveAttribute("href", /\/wiki\?mock=1$/);
+  await expect(loop.getByRole("link", { name: /Review drafts, publish, and study/ })).toHaveAttribute("href", /\/flashcards\?mock=1$/);
+  await expect(page.getByText("Approved cards", { exact: true })).toBeVisible();
+  await expect(page.locator("#cp-dashboard-sync")).toHaveCount(0);
+});
+
 test("demo flashcards require reveal and show balanced disabled ratings", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/flashcards?mock=1");
@@ -78,6 +94,11 @@ test("demo flashcards require reveal and show balanced disabled ratings", async 
   await expect(page.locator(".cp-deck-row[aria-current=true]")).toHaveCount(1);
   await expect(page.getByText("Due now", { exact: true })).toHaveCount(0);
   await expect(page.getByText("scheduled review", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Persisted ratings", { exact: true })).toBeVisible();
+  await expect(page.locator("#cp-evidence-recalled")).toHaveText("0");
+  await expect(page.locator("#cp-evidence-missed")).toHaveText("0");
+  await expect(page.locator("#cp-evidence-confidence")).toHaveText("—");
+  await expect(page.getByText("80%", { exact: true })).toHaveCount(0);
 
   const firstCard = page.locator(".flashcard").first();
   const details = firstCard.locator("details");
@@ -110,6 +131,15 @@ test("demo flashcards require reveal and show balanced disabled ratings", async 
 
   const questionTop = await firstCard.locator("h2").evaluate((heading) => heading.getBoundingClientRect().top);
   expect(questionTop).toBeLessThan(700);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test("demo wiki labels source evidence without inventing a knowledge score", async ({ page }) => {
+  await page.goto("/wiki/balanced-search-trees?mock=1");
+  await expect(page.getByText("Source coverage", { exact: true })).toBeVisible();
+  await expect(page.getByText("Illustrative demo evidence", { exact: true })).toBeVisible();
+  await expect(page.getByText("Knowledge coverage", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("78%", { exact: true })).toHaveCount(0);
 });
 
 test("landing workflow numbers are visibly illustrative", async ({ page }) => {
