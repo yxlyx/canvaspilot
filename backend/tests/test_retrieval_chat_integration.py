@@ -26,9 +26,11 @@ from app.models.source import Source, SourceStatus
 from app.models.source_chunk import SourceChunk
 from app.models.user import User
 from app.models.wiki import WikiPage
+from app.routers import chat as chat_router
 from app.schemas.sources import SourceCreate
 from app.services import llm
 from app.services.curriculum_coverage import coverage_dashboard, topic_fingerprint
+from app.services.providers import GenerationProvider
 from app.services.retrieval import retrieve
 from app.services.sources import create_or_update_source
 
@@ -249,7 +251,11 @@ def _install_fake_chat_completion(monkeypatch, parts: list[str], captured: dict)
             captured.update(kwargs)
             self.chat = FakeChat()
 
+    async def selected_provider(*_args, **_kwargs):
+        return GenerationProvider("openai", "gpt-4o", "https://api.openai.com/v1", "test-key")
+
     monkeypatch.setattr(llm, "AsyncOpenAI", FakeOpenAI)
+    monkeypatch.setattr(chat_router, "resolve_generation_provider", selected_provider)
 
 
 def _parse_sse_events(response_text: str) -> list[tuple[str, dict]]:

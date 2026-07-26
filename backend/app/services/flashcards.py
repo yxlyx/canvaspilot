@@ -5,6 +5,7 @@ import uuid
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -32,26 +33,28 @@ from app.schemas.flashcards import (
     DraftCardUpdate,
     FlashcardAttemptCreate,
     FlashcardGenerateRequest,
+    GeneratedFlashcardBatch,
+    GeneratedFlashcardWording,
 )
+from app.services.llm import generate_json_text
+from app.services.providers import GenerationProvider, resolve_generation_provider
 
 MIN_CONTEXT_WORDS = 6
 MIN_CONTEXT_CHARS = 35
-GENERATOR_IDENTITY = {
-    "kind": "local_deterministic",
-    "version": "2",
-    "provider": None,
-    "model": "evidence_first",
-    "config": {
-        "minimum_context_words": MIN_CONTEXT_WORDS,
-        "minimum_context_chars": MIN_CONTEXT_CHARS,
-        "quality_rules": [
-            "concept_named",
-            "answer_concise",
-            "source_title_excluded",
-            "card_type_evidence_supported",
-        ],
-    },
-}
+FLASHCARD_PROMPT_VERSION = "2"
+FLASHCARD_SCHEMA_VERSION = "2"
+FLASHCARD_SYSTEM_PROMPT = """Create university study flashcards from the supplied evidence.
+Use only the evidence in the request.
+Return one focused card for each useful evidence item.
+Test a specific idea, relationship, distinction, procedure, constraint, or complexity.
+Avoid generic prompts such as 'What is the key idea?'.
+Do not ask about facts absent from the evidence.
+Answers must be concise, self-contained verbatim spans copied from the matching evidence.
+Support quotes must be exact evidence spans that contain the answer.
+Do not mention evidence keys, source titles, citations, pages, or passages in questions or answers.
+Return only JSON matching this shape:
+{"cards":[{"evidence_key":"E1","question":"...","answer":"...","support_quote":"...","card_type":"definition|concept_check|comparison|procedure|complexity|misconception"}]}
+Each evidence key may appear at most once. Do not combine evidence items."""
 
 
 @dataclass
@@ -76,11 +79,62 @@ class FlashcardCandidate:
     evidence_excerpt: str = ""
 
 
+def _generator_identity(provider: GenerationProvider) -> dict[str, object]:
+    if provider.transport == "chat_completions":
+        parameters: dict[str, object] = {"max_tokens": 4096, "temperature": 0.2}
+    elif provider.transport == "responses":
+        parameters = {"max_output_tokens": 4096}
+    else:
+        parameters = {"output_limit": "local_connector_policy"}
+    return {
+        "kind": "provider_structured",
+        "version": FLASHCARD_PROMPT_VERSION,
+        "provider": provider.provider,
+        "model": provider.model,
+        "transport": provider.transport,
+        "auth_method": provider.auth_method,
+        "endpoint_fingerprint": hashlib.sha256(provider.endpoint.encode()).hexdigest()[:16],
+        "config": {
+            "schema_version": FLASHCARD_SCHEMA_VERSION,
+            "parameters": parameters,
+            "evidence_policy": "one_card_per_evidence_unit",
+        },
+    }
+
+
 def _plain_text(value: str) -> str:
     without_citations = re.sub(r"\[[A-Za-z]+\d+\]", "", value)
     without_links = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", without_citations)
     without_markdown = re.sub(r"[#*_`>]+", " ", without_links)
     return re.sub(r"\s+", " ", without_markdown).strip()
+
+
+_SOURCE_METADATA_TERMS = (
+    "academic year",
+    "course code",
+    "document title",
+    "module code",
+    "prepared by",
+    "source header",
+    "cover page",
+    "which institution",
+    "which university",
+)
+
+
+def _looks_like_source_metadata(value: str) -> bool:
+    lowered = _plain_text(value).casefold()
+    explicit = sum(term in lowered for term in _SOURCE_METADATA_TERMS)
+    header_fields = sum(
+        term in lowered
+        for term in ("institution", "department", "faculty", "semester", "copyright")
+    )
+    asks_for_header_fact = ("what" in lowered or "which" in lowered) and header_fields > 0
+    return explicit > 0 or header_fields >= 2 or asks_for_header_fact
+
+
+def _generated_wording_is_low_signal(wording: GeneratedFlashcardWording) -> bool:
+    return _looks_like_source_metadata(wording.question) or len(wording.answer.split()) > 80
 
 
 def _sentences(value: str) -> list[str]:
@@ -240,15 +294,28 @@ def _typed_question(concept: str, sentence: str) -> tuple[str, str]:
     return f"What is the key idea behind {concept}?", "concept_check"
 
 
-def _card_fields(candidate: FlashcardCandidate, order_index: int) -> dict[str, object]:
+def _card_fields(
+    candidate: FlashcardCandidate,
+    order_index: int,
+    wording: GeneratedFlashcardWording | None = None,
+) -> dict[str, object]:
     sentence = _first_usable_sentence(candidate.content)
     if sentence is None:
         raise ValueError("Candidate does not contain enough context")
 
     concept = _concept_label(candidate, sentence)
-    question, card_type = _typed_question(concept, sentence)
-    answer = sentence[:360].rstrip()
-    excerpt = candidate.evidence_excerpt or sentence
+    if wording is None:
+        question, card_type = _typed_question(concept, sentence)
+        answer = sentence[:360].rstrip()
+    else:
+        question = wording.question
+        answer = wording.answer
+        card_type = wording.card_type
+    excerpt = (
+        wording.support_quote
+        if wording is not None
+        else candidate.evidence_excerpt or candidate.content
+    )
 
     return {
         "source_id": candidate.source_id,
@@ -270,12 +337,122 @@ def _card_fields(candidate: FlashcardCandidate, order_index: int) -> dict[str, o
                 "wiki_page_id": str(candidate.wiki_page_id) if candidate.wiki_page_id else None,
                 "citation_ref": candidate.citation_ref,
                 "topic_id": str(candidate.topic_id) if candidate.topic_id else None,
-                "excerpt": excerpt[:500],
+                "excerpt": excerpt,
             }
         ],
         "source_title": candidate.source_title,
         "location_label": candidate.location_label,
     }
+
+
+def _generation_candidates(
+    candidates: list[FlashcardCandidate], limit: int
+) -> list[FlashcardCandidate]:
+    selected: list[FlashcardCandidate] = []
+    seen: set[tuple[uuid.UUID | None, uuid.UUID | None, str]] = set()
+    for candidate in candidates:
+        if len(selected) >= limit:
+            break
+        evidence = _plain_text(candidate.evidence_excerpt or candidate.content)
+        if _first_usable_sentence(evidence) is None:
+            continue
+        if _looks_like_source_metadata(evidence):
+            continue
+        key = (candidate.topic_id, candidate.source_chunk_id, evidence.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(replace(candidate, content=evidence[:1800]))
+    return selected
+
+
+async def _generate_card_fields(
+    user: User,
+    db: AsyncSession,
+    provider: GenerationProvider,
+    candidates: list[FlashcardCandidate],
+) -> tuple[GenerationProvider, list[dict[str, object]]]:
+    evidence_items = [
+        {
+            "evidence_key": f"E{index}",
+            "topic": _concept_label(
+                candidate,
+                _first_usable_sentence(candidate.content) or candidate.content,
+            ),
+            "evidence": candidate.content,
+        }
+        for index, candidate in enumerate(candidates, start=1)
+    ]
+    provider, raw = await generate_json_text(
+        FLASHCARD_SYSTEM_PROMPT,
+        json.dumps({"evidence_items": evidence_items}, ensure_ascii=False),
+        user,
+        db,
+        provider,
+        GeneratedFlashcardBatch.model_json_schema(),
+    )
+    cleaned = raw.strip()
+    if cleaned.startswith("```") and cleaned.endswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE)
+    try:
+        batch = GeneratedFlashcardBatch.model_validate_json(cleaned)
+    except ValidationError as exc:
+        raise WikiBaseError(
+            502,
+            "provider_invalid_response",
+            "The answer provider returned flashcards in an invalid format",
+        ) from exc
+
+    expected = {f"E{index}" for index in range(1, len(candidates) + 1)}
+    returned = {card.evidence_key for card in batch.cards}
+    if not returned.issubset(expected):
+        raise WikiBaseError(
+            502,
+            "provider_invalid_response",
+            "The answer provider referenced evidence outside this draft",
+        )
+    by_key = {card.evidence_key: card for card in batch.cards}
+    for index, candidate in enumerate(candidates, start=1):
+        wording = by_key.get(f"E{index}")
+        if wording is None:
+            continue
+        evidence = re.sub(r"\s+", " ", candidate.content).strip().casefold()
+        support = re.sub(r"\s+", " ", wording.support_quote).strip().casefold()
+        answer = re.sub(r"\s+", " ", wording.answer).strip().casefold()
+        question = wording.question.casefold()
+        if _generated_wording_is_low_signal(wording):
+            raise WikiBaseError(
+                502,
+                "provider_invalid_response",
+                "The answer provider returned a low-signal metadata flashcard",
+            )
+        if support not in evidence or answer not in support:
+            raise WikiBaseError(
+                502,
+                "provider_invalid_response",
+                "The answer provider returned a flashcard without exact evidence support",
+            )
+        if (
+            candidate.source_title.casefold() in question
+            or candidate.citation_ref.casefold() in question
+        ):
+            raise WikiBaseError(
+                502,
+                "provider_invalid_response",
+                "The answer provider exposed citation metadata in a flashcard question",
+            )
+    fields = [
+        _card_fields(candidate, order_index, by_key[f"E{candidate_index}"])
+        for order_index, (candidate_index, candidate) in enumerate(
+            (
+                (index, candidate)
+                for index, candidate in enumerate(candidates, start=1)
+                if f"E{index}" in by_key
+            ),
+            start=1,
+        )
+    ]
+    return provider, fields
 
 
 def _deck_title(payload: FlashcardGenerateRequest, candidates: list[FlashcardCandidate]) -> str:
@@ -656,9 +833,9 @@ async def _scope_snapshot(
                 "location_label": candidate.location_label,
                 "topic_id": str(candidate.topic_id) if candidate.topic_id else None,
                 "topic_title": candidate.topic_tag if candidate.topic_id else None,
-                "evidence_excerpt": candidate.evidence_excerpt,
+                "evidence_excerpt": candidate.evidence_excerpt or candidate.content,
                 "evidence_fingerprint": hashlib.sha256(
-                    candidate.evidence_excerpt.encode()
+                    (candidate.evidence_excerpt or candidate.content).encode()
                 ).hexdigest(),
             }
         )
@@ -689,6 +866,7 @@ async def generate_flashcard_deck(
     *,
     generation_policy: dict | None = None,
     commit: bool = True,
+    client_host: str = "127.0.0.1",
 ) -> FlashcardGenerationOutcome:
     topic_ids, enrollment_id = await _canonical_scope(user, payload, db)
     if payload.source_chunk_ids is not None:
@@ -717,6 +895,16 @@ async def generate_flashcard_deck(
             user, db, payload.source_ids, payload.topic
         )
 
+    candidates = _generation_candidates(candidates, payload.limit)
+    if not candidates:
+        return FlashcardGenerationOutcome(
+            deck=None,
+            generated_count=0,
+            message="Not enough cited source context to generate flashcards.",
+        )
+
+    provider = await resolve_generation_provider(user, db, client_host=client_host)
+    generator_identity = _generator_identity(provider)
     scope_snapshot = await _scope_snapshot(
         user,
         payload,
@@ -727,7 +915,7 @@ async def generate_flashcard_deck(
         db,
         generation_policy,
     )
-    base_fingerprint = _hash_snapshot({"scope": scope_snapshot, "generator": GENERATOR_IDENTITY})
+    base_fingerprint = _hash_snapshot({"scope": scope_snapshot, "generator": generator_identity})
     await db.execute(
         select(
             func.pg_advisory_xact_lock(
@@ -771,31 +959,17 @@ async def generate_flashcard_deck(
         if predecessor
         else base_fingerprint
     )
+    provider, card_fields = await _generate_card_fields(user, db, provider, candidates)
+    if not card_fields:
+        raise WikiBaseError(
+            502,
+            "provider_invalid_response",
+            "The answer provider did not return any usable flashcards",
+        )
     generator_snapshot = {
-        **GENERATOR_IDENTITY,
+        **_generator_identity(provider),
         "generated_at": datetime.now(UTC).isoformat(),
     }
-
-    card_fields: list[dict[str, object]] = []
-    seen_answers: set[tuple[uuid.UUID | None, str]] = set()
-    for candidate in candidates:
-        if len(card_fields) >= payload.limit:
-            break
-        sentence = _first_usable_sentence(candidate.content)
-        if sentence is None:
-            continue
-        answer_key = (candidate.topic_id, sentence.lower())
-        if answer_key in seen_answers:
-            continue
-        seen_answers.add(answer_key)
-        card_fields.append(_card_fields(candidate, len(card_fields) + 1))
-
-    if not card_fields:
-        return FlashcardGenerationOutcome(
-            deck=None,
-            generated_count=0,
-            message="Not enough cited source context to generate flashcards.",
-        )
 
     topic_tags = sorted({str(fields["topic_tag"]) for fields in card_fields})
     deck = FlashcardDeck(
@@ -832,6 +1006,7 @@ async def generate_flashcard_deck(
         await db.refresh(deck, attribute_names=["cards"])
     else:
         await db.flush()
+        await db.refresh(deck, attribute_names=["cards"])
     return FlashcardGenerationOutcome(
         deck=deck,
         generated_count=len(cards),

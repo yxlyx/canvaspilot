@@ -854,17 +854,30 @@ async def _execute_stage(run: ProcessingRun, stage: ProcessingStage, db: AsyncSe
         )
         if not chunk_ids:
             return {"skipped": "insufficient_cited_context"}
-        outcome = await generate_flashcard_deck(
-            user,
-            FlashcardGenerateRequest(source_chunk_ids=chunk_ids, limit=10),
-            db,
-            generation_policy={
-                "origin": "processing_pipeline",
-                "review": True,
-                "processing_policy": run.policy_snapshot,
-            },
-            commit=False,
-        )
+        try:
+            outcome = await generate_flashcard_deck(
+                user,
+                FlashcardGenerateRequest(source_chunk_ids=chunk_ids, limit=10),
+                db,
+                generation_policy={
+                    "origin": "processing_pipeline",
+                    "review": True,
+                    "processing_policy": run.policy_snapshot,
+                },
+                commit=False,
+            )
+        except WikiBaseError as exc:
+            if exc.error in {
+                "provider_not_configured",
+                "credential_unavailable",
+                "reauth_required",
+                "provider_authentication_failed",
+                "provider_unavailable",
+                "local_codex_unavailable",
+                "local_codex_login_required",
+            }:
+                raise ProviderUnavailableError(exc.detail) from exc
+            raise
         if outcome.deck is None:
             return {"skipped": "insufficient_cited_context", "message": outcome.message}
         return {

@@ -13,6 +13,7 @@ from app.db.database import async_session_factory, engine, get_db
 from app.dependencies import get_current_user
 from app.exceptions import WikiBaseError
 from app.main import app
+from app.models.flashcard import FlashcardDeck
 from app.models.processing import (
     ProcessingEnqueueRequest,
     ProcessingEvent,
@@ -373,7 +374,7 @@ async def test_failed_replacement_preserves_last_valid_chunks(processing_session
 
 
 @pytest.mark.asyncio
-async def test_local_flashcard_generation_does_not_require_provider(processing_session):
+async def test_flashcard_generation_pauses_when_provider_is_unavailable(processing_session):
     session, user, _ = processing_session
     policy = ProcessingPolicy(
         user_id=user.id,
@@ -388,7 +389,7 @@ async def test_local_flashcard_generation_does_not_require_provider(processing_s
         session,
         user,
         source,
-        "Deterministic indexing completes before optional provider-backed draft generation.",
+        "Indexing completes before provider-backed draft generation.",
     )
 
     run_id, source_id = run.id, source.id
@@ -402,9 +403,51 @@ async def test_local_flashcard_generation_does_not_require_provider(processing_s
     await session.rollback()
     stored = await session.scalar(select(ProcessingRun).where(ProcessingRun.id == run_id))
     stored_source = await session.get(Source, source_id)
-    assert stored is not None and stored.status == "ready"
-    assert stored.pause_reason is None
+    assert stored is not None and stored.status == "paused"
+    assert stored.pause_reason == "provider_unavailable"
     assert stored_source is not None and stored_source.status == SourceStatus.READY
+
+
+@pytest.mark.asyncio
+async def test_provider_backed_flashcard_stage_completes_with_one_cited_draft(
+    processing_session, mock_flashcard_provider
+):
+    session, user, _ = processing_session
+    session.add(
+        ProcessingPolicy(
+            user_id=user.id,
+            process_sources=True,
+            compile_wiki=True,
+            flashcard_mode="draft",
+            require_deck_review=True,
+        )
+    )
+    source = await _source(session, user, "Generated draft notes")
+    run = await _enqueue(
+        session,
+        user,
+        source,
+        "Provider-backed generation creates a review draft from indexed source evidence.",
+    )
+
+    for position in range(5):
+        worker = f"generation-worker-{position}"
+        stage = await claim_stage(session, worker)
+        assert stage is not None
+        result = await execute_claimed_stage(session, stage.id, worker)
+        assert result is not None
+
+    await session.rollback()
+    stored = await session.get(ProcessingRun, run.id)
+    decks = list(
+        (
+            await session.execute(select(FlashcardDeck).where(FlashcardDeck.user_id == user.id))
+        ).scalars()
+    )
+    assert stored is not None and stored.status == "ready"
+    assert len(decks) == 1
+    assert decks[0].lifecycle == "draft"
+    assert decks[0].card_count == 1
 
 
 @pytest.mark.asyncio

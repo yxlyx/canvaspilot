@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -63,6 +64,41 @@ class FlashcardGenerateRequest(BaseModel):
         ]
         if sum(scopes) != 1:
             raise ValueError("Choose exactly one flashcard generation scope")
+        return self
+
+
+class GeneratedFlashcardWording(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_key: str = Field(pattern=r"^E[1-9][0-9]*$")
+    question: str = Field(min_length=8, max_length=500)
+    answer: str = Field(min_length=1, max_length=1000)
+    support_quote: str = Field(min_length=1, max_length=1000)
+    card_type: Literal[
+        "definition",
+        "concept_check",
+        "comparison",
+        "procedure",
+        "complexity",
+        "misconception",
+    ]
+
+    @field_validator("question", "answer", "support_quote", mode="before")
+    @classmethod
+    def strip_generated_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class GeneratedFlashcardBatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cards: list[GeneratedFlashcardWording] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def unique_evidence_keys(self):
+        keys = [card.evidence_key for card in self.cards]
+        if len(keys) != len(set(keys)):
+            raise ValueError("Each evidence key may be used only once")
         return self
 
 
