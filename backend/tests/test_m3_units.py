@@ -60,6 +60,22 @@ def test_every_non_test_mode_rejects_default_secrets(environment):
         )
 
 
+def test_production_rejects_local_codex_cli_access():
+    with pytest.raises(ValidationError, match="LOCAL_CODEX_CLI_ENABLED"):
+        Settings(
+            environment="production",
+            secure_cookies=True,
+            session_secret="a-strong-independent-session-secret-1234",
+            canvas_token_secret=Fernet.generate_key().decode(),
+            provider_encryption_secret=Fernet.generate_key().decode(),
+            chatgpt_oauth_redirect_uri=(
+                "https://study.example.com/api/providers/chatgpt/oauth/callback"
+            ),
+            local_codex_cli_enabled=True,
+            local_codex_cli_path="/usr/local/bin/codex",
+        )
+
+
 def test_production_accepts_independent_strong_secrets():
     settings = Settings(
         environment="production",
@@ -72,6 +88,17 @@ def test_production_accepts_independent_strong_secrets():
         ),
     )
     assert settings.environment == "production"
+
+
+def test_codegraff_gateway_rejects_trailing_slash():
+    with pytest.raises(ValidationError, match="CODEGRAFF_GATEWAY_URL"):
+        Settings(
+            environment="test",
+            session_secret="a-strong-independent-session-secret-1234",
+            canvas_token_secret=Fernet.generate_key().decode(),
+            provider_encryption_secret=Fernet.generate_key().decode(),
+            codegraff_gateway_url="https://gateway.codegraff.com/",
+        )
 
 
 @pytest.mark.parametrize("environment", ["production", "staging"])

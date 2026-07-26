@@ -35,7 +35,6 @@ async def chat(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    provider = await resolve_generation_provider(user, db)
     chunks = await retrieve(
         query=chat_request.message,
         user_id=user.id,
@@ -60,6 +59,11 @@ async def chat(
 
         return _event_stream(no_results())
 
+    provider = await resolve_generation_provider(
+        user,
+        db,
+        client_host=request.client.host if request.client is not None else "",
+    )
     context = build_context(chunks)
     prepared = await prepare_rag_stream(
         chat_request.message,

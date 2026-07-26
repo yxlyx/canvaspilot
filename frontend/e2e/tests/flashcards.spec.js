@@ -1,3 +1,5 @@
+const fs = require("node:fs");
+const path = require("node:path");
 const { expect, test } = require("@playwright/test");
 
 async function loadScript(page, body) {
@@ -5,6 +7,32 @@ async function loadScript(page, body) {
   await page.setContent(body);
   await page.addScriptTag({ url: "/app.js" });
 }
+
+test("draft review summarizes generation details instead of printing snapshot JSON", async () => {
+  const root = path.resolve(__dirname, "../..");
+  const pageSource = fs.readFileSync(path.join(root, "app/flashcards/drafts/[deck_id].zig"), "utf8");
+  const styles = fs.readFileSync(path.join(root, "app/_styles.css"), "utf8");
+
+  expect(pageSource).not.toContain("valueJson");
+  expect(pageSource).toContain("evidence passage");
+  expect(pageSource).toContain("generator_snapshot, \"provider\"");
+  expect(styles).toContain(".cp-provenance { display: grid");
+  expect(styles).toContain(".cp-draft-card > form");
+});
+
+test("draft review remains readable without horizontal overflow on mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await loadScript(page, `<main class="cp-draft-review"><section class="cp-draft-meta surface"><form><label class="cp-field"><span>Deck title</span><input value="Data structures review"></label><button class="cp-btn">Save title</button></form><dl class="cp-provenance"><div><dt>Source scope</dt><dd><strong>source_chunks</strong><span>1 source · 4 evidence passages</span></dd></div><div><dt>Generation</dt><dd><strong>chatgpt</strong><span>study-model</span></dd></div><div><dt>Draft record</dt><dd><code>123456789abc…</code></dd></div></dl></section><ol class="cp-draft-cards"><li class="cp-draft-card surface"><form><label class="cp-field"><span>Prompt</span><textarea>How do stable secondary keys affect ordering?</textarea></label><label class="cp-field"><span>Answer</span><textarea>Stable secondary keys make result ordering deterministic.</textarea></label><fieldset class="cp-evidence-choice"><legend>Strict evidence selection</legend><label><input type="radio"> Evidence-backed citation</label><article class="cp-citation-detail"><blockquote>Stable secondary keys make result ordering deterministic when primary values are equal.</blockquote></article></fieldset></form></li></ol></main>`);
+  await page.addStyleTag({ content: fs.readFileSync(path.resolve(__dirname, "../../app/_styles.css"), "utf8") });
+
+  const inputSize = await page.locator(".cp-field input").evaluate((node) => parseFloat(getComputedStyle(node).fontSize));
+  const columns = await page.locator(".cp-provenance").evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(" ").length);
+  const overflow = await page.locator(".cp-draft-review").evaluate((node) => node.scrollWidth - node.clientWidth);
+
+  expect(inputSize).toBeGreaterThanOrEqual(14);
+  expect(columns).toBe(1);
+  expect(overflow).toBeLessThanOrEqual(1);
+});
 
 test("rating retry keeps the revealed card and stable interaction key until save", async ({ page }) => {
   const requests = [];
@@ -83,6 +111,36 @@ test("approve, publish, and retire remain explicit draft lifecycle actions", asy
   await loadScript(page, `<main data-draft-review data-deck-id="123e4567-e89b-12d3-a456-426614174000" data-revision="7" data-lifecycle="approved"><div data-draft-status></div><ol data-card-list></ol><button data-retire>Retire approved deck</button></main>`);
   await page.getByRole("button", { name: "Retire approved deck" }).click();
   await expect.poll(() => requests.some((item) => item.action === "retire")).toBe(true);
+});
+
+test("discard requires and submits a card quality reason", async ({ page }) => {
+  let requestBody;
+  await page.route("**/api/flashcards", async (route) => {
+    requestBody = route.request().postDataJSON();
+    return route.fulfill({ status: 200, json: { revision: 5 } });
+  });
+  await loadScript(page, `<main data-draft-review data-deck-id="123e4567-e89b-12d3-a456-426614174000" data-revision="4" data-lifecycle="draft"><div data-draft-status></div><ol data-card-list><li data-card-id="223e4567-e89b-12d3-a456-426614174000" data-discarded="false"><select data-rejection-reason><option value="">Choose a reason</option><option value="too_generic">Too generic</option></select><button type="button" data-discard>Discard</button></li></ol></main>`);
+  await page.getByRole("button", { name: "Discard" }).click();
+  await expect(page.locator("[data-draft-status]")).toContainText("Choose why this card is not useful");
+  expect(requestBody).toBeUndefined();
+  await page.locator("[data-rejection-reason]").selectOption("too_generic");
+  await page.getByRole("button", { name: "Discard" }).click();
+  await expect.poll(() => requestBody && requestBody.payload.rejection_reason).toBe("too_generic");
+  expect(requestBody.payload.card_ids).toEqual(["223e4567-e89b-12d3-a456-426614174000"]);
+});
+
+test("generation links to provider settings when no answer provider is available", async ({ page }) => {
+  await page.route("**/api/flashcards", async (route) => {
+    const body = route.request().postDataJSON();
+    if (body.action === "generate") return route.fulfill({ status: 409, json: { error: "provider_not_configured", detail: "Connect a provider" } });
+    return route.fulfill({ status: 200, json: [] });
+  });
+  await loadScript(page, `<section data-flash-create><form><fieldset><input type="radio" name="scope_type" value="enrollment_id" checked><label data-scope="enrollment_id"><select name="enrollment_id"><option value="123e4567-e89b-12d3-a456-426614174000">Module</option></select></label><label data-scope="topic_ids"><select name="topic_ids" multiple></select></label><label data-scope="source_ids"><select name="source_ids" multiple></select></label><div data-scope="source_chunk_ids"><select name="chunk_topic_id"></select><select name="chunk_source_id"></select><select name="source_chunk_ids" multiple></select></div><label data-scope="wiki_page_id"><select name="wiki_page_id"></select></label><input name="deck_title"><input name="limit" value="10"><input type="checkbox" name="regenerate"><span data-scope-effective></span><button type="submit">Generate review draft</button></fieldset></form><p data-flash-create-status></p></section>`);
+
+  await page.getByRole("button", { name: "Generate review draft" }).click();
+
+  await expect(page.getByRole("link", { name: "Open provider settings" })).toHaveAttribute("href", "/settings/providers");
+  await expect(page.locator("[data-flash-create-status]")).toContainText("scope selection is preserved");
 });
 
 test("generation sends exactly one stable scope and opens review rather than study", async ({ page }) => {

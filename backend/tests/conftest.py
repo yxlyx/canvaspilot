@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import uuid
@@ -90,6 +91,40 @@ def settings():
         openai_api_key="test-key",
         frontend_url="http://localhost:3000",
     )
+
+
+@pytest.fixture
+def mock_flashcard_provider(monkeypatch):
+    from app.services import flashcards
+    from app.services.providers import GenerationProvider
+
+    async def resolve(*_args, **_kwargs):
+        return GenerationProvider(
+            provider="test_provider",
+            model="test-study-model",
+            endpoint="https://provider.test/v1",
+            api_key="test-key",
+        )
+
+    async def generate(_system_prompt, user_prompt, _user, _db, provider, _schema):
+        payload = json.loads(user_prompt)
+        cards = []
+        for item in payload["evidence_items"]:
+            evidence = item["evidence"].strip().rstrip(".")
+            topic = item["topic"]
+            cards.append(
+                {
+                    "evidence_key": item["evidence_key"],
+                    "question": f"What does the source establish about {topic}?",
+                    "answer": evidence,
+                    "support_quote": item["evidence"].strip(),
+                    "card_type": "concept_check",
+                }
+            )
+        return provider, json.dumps({"cards": cards})
+
+    monkeypatch.setattr(flashcards, "resolve_generation_provider", resolve)
+    monkeypatch.setattr(flashcards, "generate_json_text", generate)
 
 
 @pytest.fixture

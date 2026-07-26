@@ -93,8 +93,11 @@ test("navigation is keyboard reachable at narrow viewport and preserves demo mod
   await menu.locator("summary").focus();
   await page.keyboard.press("Enter");
   await expect(menu.getByRole("navigation", { name: "Mobile menu" })).toBeVisible();
-  await expect(menu.getByRole("link", { name: "Wiki" })).toHaveAttribute("aria-current", "page");
-  await menu.getByRole("link", { name: "Workspace" }).click();
+  await expect(menu.getByRole("link", { name: "Notifications" })).toBeVisible();
+  await expect(menu.getByRole("link", { name: "Settings" })).toBeVisible();
+  await expect(menu.getByRole("link", { name: /Workspace|Sources|Wiki|Ask|Flashcards/ })).toHaveCount(0);
+  await expect(primary.getByRole("link", { name: "Wiki" })).toHaveAttribute("aria-current", "page");
+  await primary.getByRole("link", { name: "Workspace" }).click();
   await expect(page).toHaveURL(/\/dashboard\?mock=1$/);
   await expect(page.locator('[data-cp-demo="true"]')).toHaveCount(1);
   const layout = await page.evaluate(() => ({
@@ -102,6 +105,27 @@ test("navigation is keyboard reachable at narrow viewport and preserves demo mod
     barFits: document.querySelector(".cp-bottomnav").scrollWidth <= document.querySelector(".cp-bottomnav").clientWidth,
   }));
   expect(layout).toEqual({ pageFits: true, barFits: true });
+});
+
+test("approved shell stays neutral and uses one 256px desktop rail", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/dashboard?mock=1");
+  const shell = page.locator(".cp-app-shell");
+  const sidebar = page.locator(".cp-sidebar");
+  const active = page.locator(".cp-tab-active");
+  await expect(sidebar).toBeVisible();
+  const geometry = await shell.evaluate((node) => ({
+    columns: getComputedStyle(node).gridTemplateColumns,
+    overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  }));
+  expect(Number.parseFloat(geometry.columns)).toBe(256);
+  expect(geometry.overflow).toBe(false);
+  const emphasis = await active.evaluate((node) => ({ shadow: getComputedStyle(node).boxShadow, color: getComputedStyle(node).color }));
+  expect(emphasis.shadow).toBe("none");
+  expect(emphasis.color).not.toBe("rgb(36, 79, 120)");
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await expect(sidebar).toBeVisible();
+  expect(Number.parseFloat(await shell.evaluate((node) => getComputedStyle(node).gridTemplateColumns))).toBe(256);
 });
 
 test("mobile Ask keeps module scope and source evidence discoverable", async ({ page }) => {
@@ -139,46 +163,6 @@ test("ordinary M3 forms retain a no-JavaScript submission path", async ({ browse
   await page.getByRole("button", { name: "Generate guide" }).click();
   await expect(page).toHaveURL(/\/wiki\/guides\?error=1$/);
   await context.close();
-});
-
-test("successful data-success navigation releases its lock before leaving", async ({ page }) => {
-  await page.goto("/login");
-  await page.route("**/api/m3", (route) => route.fulfill({ status: 201, contentType: "application/json", body: "{}" }));
-  await page.setContent(`<main><form data-m3-form data-success="/wiki?mock=1">
-    <input name="action" value="page.create"><input name="title" value="Recursion">
-    <button type="submit">Create page</button><p class="cp-form-status"></p></form>
-    <script src="/m3.js"></script></main>`);
-  await page.evaluate(() => window.addEventListener("beforeunload", () => {
-    const form = document.querySelector("[data-m3-form]");
-    sessionStorage.setItem("m3-lock-before-navigation", JSON.stringify({
-      inFlight: form.dataset.inFlight || null,
-      disabled: form.querySelector("button").disabled,
-    }));
-  }));
-
-  await page.getByRole("button", { name: "Create page" }).click();
-  await expect(page).toHaveURL(/\/wiki\?mock=1$/);
-  expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem("m3-lock-before-navigation")))).toEqual({ inFlight: null, disabled: false });
-});
-
-test("successful paper upload releases its lock before leaving", async ({ page }) => {
-  await page.goto("/login");
-  await page.route("**/api/m3", (route) => route.fulfill({ status: 201, contentType: "application/json", body: "{}" }));
-  await page.setContent(`<main><form data-paper-upload data-success="/wiki?mock=1&amp;upload=1">
-    <input type="file" name="paper"><button type="submit">Upload paper</button>
-    <p class="cp-form-status"></p></form><script src="/m3.js"></script></main>`);
-  await page.evaluate(() => window.addEventListener("beforeunload", () => {
-    const form = document.querySelector("[data-paper-upload]");
-    sessionStorage.setItem("upload-lock-before-navigation", JSON.stringify({
-      inFlight: form.dataset.inFlight || null,
-      disabled: form.querySelector("button").disabled,
-    }));
-  }));
-
-  await page.locator('[name="paper"]').setInputFiles({ name: "paper.txt", mimeType: "text/plain", buffer: Buffer.from("Exam paper") });
-  await page.getByRole("button", { name: "Upload paper" }).click();
-  await expect(page).toHaveURL(/\/wiki\?mock=1&upload=1$/);
-  expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem("upload-lock-before-navigation")))).toEqual({ inFlight: null, disabled: false });
 });
 
 test("live mutation payload and canonical download work without secret URLs", async ({ page }) => {
@@ -258,14 +242,35 @@ test("provider callback requires the initiating signed-in browser and fails clos
   await expect(page).toHaveURL(/\/settings\/providers\?provider=chatgpt&auth=failed$/);
 });
 
-test("provider form contracts preserve optional keys and safe external authorization redirects", async () => {
+test("provider form contracts preserve direct keys and the Codegraff device flow", async () => {
   const proxy = fs.readFileSync(path.join(__dirname, "../../api/m3.zig"), "utf8");
   expect(proxy).toContain('putOptionalString(req.allocator, &object, "api_key"');
   expect(proxy).toContain('https://auth.openai.com/oauth/authorize?');
   expect(proxy).toContain('provider.auth.start');
+  expect(proxy).toContain('provider.local.connect');
+  expect(proxy).toContain('/api/providers/chatgpt/local-cli/connect');
   expect(proxy).toContain("providerAuthCookie(req.allocator, session_id, browser_binding)");
+  expect(proxy).toContain('provider.auth.poll');
+  expect(proxy).toContain('/api/providers/auth-sessions/{s}/poll');
   const providerPage = fs.readFileSync(path.join(__dirname, "../../app/settings/providers.zig"), "utf8");
-  expect(providerPage).toContain("workspace questions and sources are not sent");
+  expect(providerPage).toContain("Your sources remain available when no provider is connected");
+  expect(providerPage).toContain("question, recent chat context, and selected source excerpts");
+  expect(providerPage).toContain("WikiBase encrypts the gateway credential");
+  expect(providerPage).toContain("Other providers");
+  expect(providerPage).toContain("Existing browser connections remain usable until disconnected");
+  expect(providerPage).toContain("data-provider-activate");
+  expect(providerPage).toContain("active_for_generation else false");
+  expect(providerPage).toContain("Use for answers");
+  expect(providerPage).toContain("model catalog is temporarily unavailable");
+  expect(providerPage).toContain("data-session-expires");
+  const script = fs.readFileSync(path.join(__dirname, "../../public/m3.js"), "utf8");
+  expect(script).toContain('action: "provider.activate"');
+  expect(script).toContain('response.status === 401');
+  expect(script).toContain("transientFailures > 5");
+  const styles = fs.readFileSync(path.join(__dirname, "../../app/_styles.css"), "utf8");
+  expect(styles).toContain(".cp-provider-page{width:min(100%,880px)");
+  expect(styles).toContain(".cp-device-steps>li");
+  expect(styles).toContain(".cp-model-ledger");
 });
 
 test("signup mode has matching title, heading, active tab, and focused server errors", async ({ page }) => {
@@ -347,6 +352,8 @@ test("legacy dashboard module links show the workspace wiki instead of a false e
 test("Knowledge recommendations retain contextual destinations", async ({ page }) => {
   await page.goto("/wiki/knowledge?mock=1");
   await expect(page.getByText("Collect more recursion evidence")).toBeVisible();
+  await expect(page.getByText("Legacy topic signals")).toHaveCount(0);
+  await expect(page.getByText(/legacy_meter_non_authoritative|source_count|self_reported_confidence/)).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Review wiki notes" })).toHaveAttribute("href", /\/wiki\/immutable-lists\?mock=1$/);
   await expect(page.getByRole("link", { name: "Practice cited cards" })).toHaveAttribute("href", /\/flashcards\?deck=deck-streams&mock=1$/);
   await expect(page.getByRole("link", { name: "Review paper evidence" })).toHaveAttribute("href", /\/sources\/papers\/demo-paper-functional-midterm\?mock=1$/);

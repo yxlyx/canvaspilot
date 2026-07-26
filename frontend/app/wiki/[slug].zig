@@ -73,6 +73,7 @@ fn renderLiveReader(req: mer.Request, page: lib.types.WikiPageResponse, now_secs
     const safe_summary = lib.ui.escapeSafe(req.allocator, page.summary);
     const safe_slug = if (isSafeSlug(page.slug)) page.slug else "";
     const when = lib.time.formatRelative(req.allocator, page.updated_at, now_secs) catch "—";
+    const created = lib.time.formatRelative(req.allocator, page.created_at, now_secs) catch "—";
     const enrollment_scope = req.queryParam("enrollment") orelse "";
     const scoped_enrollment = if (safeUuid(enrollment_scope)) enrollment_scope else "";
     const wiki_path = if (scoped_enrollment.len > 0) std.fmt.allocPrint(req.allocator, "/wiki?enrollment={s}", .{scoped_enrollment}) catch "/wiki" else "/wiki";
@@ -93,7 +94,7 @@ fn renderLiveReader(req: mer.Request, page: lib.types.WikiPageResponse, now_secs
         const backlink_href = if (isSafeSlug(backlink)) if (scoped_enrollment.len > 0) std.fmt.allocPrint(req.allocator, "/wiki/{s}?enrollment={s}", .{ backlink, scoped_enrollment }) catch wiki_href else std.fmt.allocPrint(req.allocator, "/wiki/{s}", .{backlink}) catch wiki_href else wiki_href;
         w.print("<a href=\"{s}\"><strong>{s}</strong><span>Backlink</span></a>", .{ lib.ui.escapeSafe(req.allocator, backlink_href), lib.ui.escapeSafe(req.allocator, backlink) }) catch return mer.internalError("wiki render failed");
     }
-    w.print("<div class=\"backlinks\"><small>Evidence</small><strong>{d} citations</strong><span>{d} source records · created {s}</span></div></aside></div>", .{ page.citation_count, page.source_ids.len, lib.ui.escapeSafe(req.allocator, page.created_at) }) catch return mer.internalError("wiki render failed");
+    w.print("<div class=\"backlinks\"><small>Evidence</small><strong>{d} citations</strong><span>{d} source records · created {s}</span></div></aside></div>", .{ page.citation_count, page.source_ids.len, created }) catch return mer.internalError("wiki render failed");
     if (page.source_ids.len > 0) w.print("<div class=\"cp-wiki-rebuild\"><button class=\"cp-btn cp-btn-primary\" type=\"button\" data-manual-processing-trigger data-source-id=\"{s}\">Rebuild Wiki from current source</button><span class=\"cp-form-status\" role=\"status\" tabindex=\"-1\"></span><p>The request only queues durable work. This prior valid Wiki remains open if refresh fails.</p></div>", .{lib.ui.escapeSafe(req.allocator, page.source_ids[0])}) catch return mer.internalError("wiki render failed");
     if (runs_loaded) lib.processing_ui.render(req.allocator, w, runs, "", false) catch return mer.internalError("wiki render failed") else w.writeAll("<section class=\"cp-processing-panel surface\"><h2>Wiki compilation</h2><p role=\"alert\">Refresh status is unavailable. The prior valid Wiki above is preserved.</p></section>") catch return mer.internalError("wiki render failed");
     w.writeAll("</main>") catch return mer.internalError("wiki render failed");

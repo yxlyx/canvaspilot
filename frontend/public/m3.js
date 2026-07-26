@@ -57,7 +57,7 @@
       if (scope === "source_ids" && payload.source_ids) payload.source_ids = [payload.source_ids];
     }
     if (action === "provider.save") {
-      if (["openai", "google_gemini"].includes(payload.provider)) delete payload.endpoint;
+      if (["codegraff", "openai", "google_gemini"].includes(payload.provider)) delete payload.endpoint;
       else if (!payload.endpoint) payload.endpoint = null;
     }
     if (action === "paper.updateQuestion") ["awarded_marks", "available_marks"].forEach((key) => { if (!data.get(key)) payload[key] = null; });
@@ -107,6 +107,11 @@
       if (!response.ok) { let message = "Request failed (" + response.status + ")."; try { message = errorMessage(await response.json(), message); } catch (_) {} throw new Error(message); }
       if (body.action === "provider.auth.start") {
         const result = await response.json();
+        if (result.provider === "codegraff" && result.id) {
+          status(form, "One-time code created. Opening approval steps…", false);
+          window.location.assign("/settings/providers?provider=codegraff&session=" + encodeURIComponent(result.id));
+          return;
+        }
         if (!result.authorization_url) throw new Error("The provider did not return a sign-in URL.");
         status(form, "Opening secure browser sign-in…", false);
         window.location.assign(result.authorization_url);
@@ -118,6 +123,11 @@
         if (!tested.ok) { let message = "The connection test failed (" + tested.status + ")."; try { message = errorMessage(await tested.json(), message); } catch (_) {} throw new Error(message); }
         const result = await tested.json();
         if (result.status !== "connected") throw new Error(result.last_error || "The provider rejected the key, endpoint, or model.");
+        if (form.hasAttribute("data-provider-activate")) {
+          status(form, "Connection tested. Making it the answer provider…", false);
+          const activated = await request(form, { action: "provider.activate", id: body.payload.provider, idempotency_key: idempotencyKey() }, release);
+          if (!activated.ok) { let message = "The provider could not be selected (" + activated.status + ")."; try { message = errorMessage(await activated.json(), message); } catch (_) {} throw new Error(message); }
+        }
       }
       status(form, "Saved.", false);
       const target = form.dataset.success;
@@ -129,6 +139,61 @@
     if (scope) { scope.addEventListener("change", () => updateScope(form)); updateScope(form); }
     form.addEventListener("submit", (event) => { event.preventDefault(); if (form.dataset.inFlight !== "true") submit(form, envelope(form)); });
   });
+
+  document.querySelectorAll("[data-copy-code]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const code = button.closest("[data-device-session]")?.querySelector("[data-user-code]")?.textContent?.trim();
+      if (!code) return;
+      try { await navigator.clipboard.writeText(code); button.textContent = "Copied"; }
+      catch (_) { button.closest("[data-device-session]")?.querySelector("[data-user-code]")?.focus(); }
+    });
+  });
+
+  const deviceSession = document.querySelector("[data-device-session][data-session-status='pending']");
+  if (deviceSession) {
+    const id = deviceSession.dataset.deviceSession;
+    const interval = Math.max(2, Number(deviceSession.dataset.pollInterval || 5)) * 1000;
+    const expiresAt = Date.parse(deviceSession.dataset.sessionExpires || "");
+    const pollStatus = deviceSession.querySelector("[data-device-poll-status]");
+    let transientFailures = 0;
+    const stop = (message) => {
+      if (!pollStatus) return;
+      pollStatus.textContent = message;
+      pollStatus.classList.add("cp-error");
+      pollStatus.setAttribute("role", "alert");
+    };
+    const retry = (delay) => {
+      if (Number.isFinite(expiresAt) && Date.now() >= expiresAt) return stop("This one-time code expired. Start the connection again.");
+      window.setTimeout(poll, delay);
+    };
+    const retryTransient = () => {
+      transientFailures += 1;
+      if (transientFailures > 5) return stop("Automatic checking stopped after repeated connection errors. Use Check connection to try again.");
+      retry(Math.min(interval * (2 ** transientFailures), 30000));
+    };
+    const poll = async () => {
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ action: "provider.auth.poll", id, idempotency_key: idempotencyKey() }),
+        });
+        if (response.status === 401) return window.location.assign("/login");
+        if (!response.ok) {
+          if (response.status === 429 || response.status >= 500) return retryTransient();
+          let message = "Authorization can no longer be checked. Start the connection again.";
+          try { message = errorMessage(await response.json(), message); } catch (_) {}
+          return stop(message);
+        }
+        const result = await response.json();
+        transientFailures = 0;
+        if (result.status === "pending") return retry(Math.max(2, Number(result.poll_interval_seconds || interval / 1000)) * 1000);
+        window.location.reload();
+      } catch (_) { retryTransient(); }
+    };
+    retry(interval);
+  }
 
   const upload = document.querySelector("[data-paper-upload]");
   if (upload) upload.addEventListener("submit", async (event) => {

@@ -33,6 +33,17 @@ class Settings(BaseSettings):
     chatgpt_oauth_redirect_uri: str = "http://localhost:3000/api/providers/chatgpt/oauth/callback"
     chatgpt_responses_endpoint: str = "https://chatgpt.com/backend-api/codex"
     chatgpt_default_model: str = "gpt-5-codex"
+    codegraff_gateway_url: str = "https://gateway.codegraff.com"
+    codegraff_verification_url: str = "https://codegraff.com/cli/auth"
+    codegraff_balanced_model: str = "deepseek-v4-pro"
+    codegraff_thorough_model: str = "claude-sonnet-4-6"
+    codegraff_economy_model: str = "mimo-v2.5"
+    local_codex_cli_enabled: bool = False
+    local_codex_cli_path: str = ""
+    local_codex_cli_model: str = ""
+    local_codex_cli_allowed_email: str = ""
+    local_codex_cli_timeout_seconds: int = 120
+    local_codex_cli_max_prompt_chars: int = 250_000
     frontend_url: str = "http://localhost:3000"
     backend_url: str = "http://localhost:8000"
     cors_origins: str = "http://localhost:3000"
@@ -112,15 +123,40 @@ class Settings(BaseSettings):
                 or parsed.fragment
             ):
                 raise ValueError(f"{name} must use its fixed official HTTPS endpoint")
+        codegraff_urls = {
+            "CODEGRAFF_GATEWAY_URL": (
+                self.codegraff_gateway_url,
+                "gateway.codegraff.com",
+                "",
+            ),
+            "CODEGRAFF_VERIFICATION_URL": (
+                self.codegraff_verification_url,
+                "codegraff.com",
+                "/cli/auth",
+            ),
+        }
+        for name, (value, hostname, path) in codegraff_urls.items():
+            parsed = urlparse(value)
+            if (
+                parsed.scheme != "https"
+                or parsed.hostname != hostname
+                or parsed.port not in (None, 443)
+                or parsed.username
+                or parsed.password
+                or parsed.path != path
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(f"{name} must use its fixed official HTTPS endpoint")
         redirect = urlparse(self.chatgpt_oauth_redirect_uri)
-        oauth_configured = bool(
-            self.chatgpt_oauth_client_id.strip() or self.chatgpt_oauth_client_secret.strip()
+        oauth_configured = bool(self.chatgpt_oauth_client_id or self.chatgpt_oauth_client_secret)
+        redirect_schemes = (
+            {"https"}
+            if oauth_configured and environment in {"production", "prod", "staging"}
+            else {"http", "https"}
         )
-        if oauth_configured and (
-            redirect.scheme
-            not in (
-                {"https"} if environment in {"production", "prod", "staging"} else {"http", "https"}
-            )
+        if (
+            redirect.scheme not in redirect_schemes
             or not redirect.hostname
             or redirect.username
             or redirect.password
@@ -129,6 +165,28 @@ class Settings(BaseSettings):
             or redirect.path != "/api/providers/chatgpt/oauth/callback"
         ):
             raise ValueError("CHATGPT_OAUTH_REDIRECT_URI must be the configured callback URL")
+        if self.local_codex_cli_enabled:
+            if environment not in {"development", "dev"}:
+                raise ValueError("LOCAL_CODEX_CLI_ENABLED is restricted to local development")
+            if not self.local_codex_cli_path.startswith("/"):
+                raise ValueError("LOCAL_CODEX_CLI_PATH must be an absolute executable path")
+            allowed_email = self.local_codex_cli_allowed_email.strip().lower()
+            if not allowed_email or "@" not in allowed_email or len(allowed_email) > 320:
+                raise ValueError(
+                    "LOCAL_CODEX_CLI_ALLOWED_EMAIL must identify the local workspace owner"
+                )
+            local_hosts = {"localhost", "127.0.0.1", "::1"}
+            if (
+                urlparse(self.frontend_url).hostname not in local_hosts
+                or urlparse(self.backend_url).hostname not in local_hosts
+            ):
+                raise ValueError(
+                    "Local Codex CLI access requires loopback frontend and backend URLs"
+                )
+        if not 10 <= self.local_codex_cli_timeout_seconds <= 600:
+            raise ValueError("LOCAL_CODEX_CLI_TIMEOUT_SECONDS must be between 10 and 600")
+        if not 10_000 <= self.local_codex_cli_max_prompt_chars <= 1_000_000:
+            raise ValueError("LOCAL_CODEX_CLI_MAX_PROMPT_CHARS is outside the supported range")
         return self
 
     @property

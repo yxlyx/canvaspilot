@@ -79,7 +79,11 @@ async def execute_idempotent(
     response_type: Any,
     execute: Callable[[], Awaitable[Any]],
     response_value: Callable[[Any], Any] | None = None,
+    stored_response_value: Callable[[Any], Any] | None = None,
+    replay_response_value: Callable[[Any], Awaitable[Any]] | None = None,
 ) -> Response:
+    if (stored_response_value is None) != (replay_response_value is None):
+        raise ValueError("Stored and replay response transforms must be configured together")
     if not 16 <= len(key) <= 128 or not all(char.isalnum() or char in "-_" for char in key):
         raise WikiBaseError(400, "invalid_idempotency_key", "Invalid Idempotency-Key header")
 
@@ -129,7 +133,13 @@ async def execute_idempotent(
             raise WikiBaseError(409, "idempotency_in_progress", "Idempotent request is in progress")
         if existing.response_status == 204:
             return Response(status_code=204)
-        return JSONResponse(status_code=existing.response_status, content=existing.response_body)
+        response_body = existing.response_body
+        if replay_response_value is not None:
+            replayed = await replay_response_value(response_body)
+            response_body = jsonable_encoder(
+                TypeAdapter(response_type).validate_python(replayed, from_attributes=True)
+            )
+        return JSONResponse(status_code=existing.response_status, content=response_body)
 
     try:
         result = await execute()
@@ -137,13 +147,18 @@ async def execute_idempotent(
         response_body = jsonable_encoder(
             TypeAdapter(response_type).validate_python(response_result, from_attributes=True)
         )
-        encoded_response = json.dumps(response_body, separators=(",", ":")).encode()
+        stored_response_body = (
+            stored_response_value(response_body)
+            if stored_response_value is not None
+            else response_body
+        )
+        encoded_response = json.dumps(stored_response_body, separators=(",", ":")).encode()
         if len(encoded_response) > MAX_STORED_RESPONSE_BYTES:
             raise WikiBaseError(
                 500, "idempotency_response_too_large", "Mutation response cannot be stored safely"
             )
         record.response_status = status_code
-        record.response_body = response_body
+        record.response_body = stored_response_body
         await db.commit()
     except Exception:
         await db.rollback()

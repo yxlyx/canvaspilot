@@ -1,10 +1,15 @@
+import base64
+import binascii
+import json
 import uuid
+import zlib
 
-from fastapi import APIRouter, Depends, Header, Query, Response
+from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
 from app.dependencies import get_current_user
+from app.exceptions import WikiBaseError
 from app.models.user import User
 from app.schemas.flashcards import (
     DraftAction,
@@ -34,6 +39,7 @@ from app.services.flashcards import (
     update_draft_card,
     update_draft_title,
 )
+from app.services.idempotency import execute_idempotent
 
 router = APIRouter(prefix="/flashcards", tags=["flashcards"])
 
@@ -41,15 +47,71 @@ router = APIRouter(prefix="/flashcards", tags=["flashcards"])
 @router.post("/decks/generate", response_model=FlashcardGenerateResponse)
 async def generate_deck(
     payload: FlashcardGenerateRequest,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    outcome = await generate_flashcard_deck(user, payload, db)
-    return FlashcardGenerateResponse(
-        deck=outcome.deck,
-        generated_count=outcome.generated_count,
-        message=outcome.message,
-    )
+    if payload.regenerate and idempotency_key is None:
+        raise WikiBaseError(
+            400,
+            "idempotency_key_required",
+            "Regeneration requires an Idempotency-Key header",
+        )
+
+    async def generate(commit: bool):
+        return await generate_flashcard_deck(
+            user,
+            payload,
+            db,
+            client_host=request.client.host if request.client else "",
+            commit=commit,
+        )
+
+    def response_value(outcome):
+        return FlashcardGenerateResponse(
+            deck=outcome.deck,
+            generated_count=outcome.generated_count,
+            message=outcome.message,
+        )
+
+    def stored_response_value(response_body):
+        serialized = json.dumps(response_body, ensure_ascii=False, separators=(",", ":")).encode()
+        return {
+            "encoding": "zlib+base64",
+            "body": base64.b64encode(zlib.compress(serialized, level=9)).decode(),
+        }
+
+    async def replay_response_value(stored_response):
+        if "deck" in stored_response:
+            return stored_response
+        try:
+            if stored_response.get("encoding") != "zlib+base64":
+                raise ValueError
+            compressed = base64.b64decode(stored_response["body"], validate=True)
+            return json.loads(zlib.decompress(compressed))
+        except (binascii.Error, KeyError, TypeError, ValueError, zlib.error) as exc:
+            raise WikiBaseError(
+                500,
+                "idempotency_record_invalid",
+                "The stored mutation response could not be restored",
+            ) from exc
+
+    if idempotency_key is not None:
+        return await execute_idempotent(
+            db=db,
+            user=user,
+            key=idempotency_key,
+            operation="flashcard_generate",
+            payload=payload,
+            status_code=200,
+            response_type=FlashcardGenerateResponse,
+            execute=lambda: generate(False),
+            response_value=response_value,
+            stored_response_value=stored_response_value,
+            replay_response_value=replay_response_value,
+        )
+    return response_value(await generate(True))
 
 
 @router.get("/decks", response_model=list[FlashcardDeckResponse])
@@ -140,8 +202,26 @@ async def _card_action(
     user: User,
     db: AsyncSession,
 ):
+    if action == "discard" and payload.rejection_reason is None:
+        raise WikiBaseError(
+            422,
+            "rejection_reason_required",
+            "Choose a rejection reason before discarding cards",
+        )
+    if action != "discard" and payload.rejection_reason is not None:
+        raise WikiBaseError(
+            422,
+            "invalid_rejection_reason",
+            "A rejection reason can only be recorded when discarding cards",
+        )
     return await mutate_draft_cards(
-        user, deck_id, action, payload.card_ids, payload.expected_revision, db
+        user,
+        deck_id,
+        action,
+        payload.card_ids,
+        payload.expected_revision,
+        db,
+        rejection_reason=payload.rejection_reason,
     )
 
 

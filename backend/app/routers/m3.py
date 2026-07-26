@@ -1,7 +1,7 @@
 import uuid
 from urllib.parse import quote
 
-from fastapi import APIRouter, Body, Depends, Header, Query, Response, status
+from fastapi import APIRouter, Body, Depends, Header, Query, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +25,7 @@ from app.schemas.m3 import (
     ProviderAuthorizationSessionResponse,
     ProviderConfigureRequest,
     ProviderDescriptor,
+    ProviderModelOption,
     ProviderOAuthCallbackRequest,
     ProviderOAuthCallbackResponse,
     ProviderStatusResponse,
@@ -56,13 +57,16 @@ from app.services.provider_auth import (
     complete_authorization,
     create_authorization_session,
     get_authorization_session,
+    poll_authorization_session,
 )
 from app.services.providers import (
     activate_provider,
     configure_provider,
+    connect_local_codex,
     disconnect_provider,
     list_settings,
     provider_descriptors,
+    provider_models,
     test_provider,
 )
 from app.services.study_outputs import (
@@ -441,6 +445,18 @@ async def provider_authorization_status(
     return await get_authorization_session(user, session_id, db)
 
 
+@router.post(
+    "/providers/auth-sessions/{session_id}/poll",
+    response_model=ProviderAuthorizationSessionResponse,
+)
+async def poll_provider_authorization(
+    session_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await poll_authorization_session(user, session_id, db)
+
+
 @router.delete(
     "/providers/auth-sessions/{session_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -492,6 +508,15 @@ async def provider_settings(
     return await list_settings(user, db)
 
 
+@router.get("/providers/{provider}/models", response_model=list[ProviderModelOption])
+async def provider_model_catalog(
+    provider: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await provider_models(user, provider, db)
+
+
 @router.put("/providers/settings", response_model=ProviderStatusResponse)
 async def save_provider(
     payload: ProviderConfigureRequest,
@@ -511,9 +536,36 @@ async def save_provider(
     )
 
 
+@router.post(
+    "/providers/chatgpt/local-cli/connect",
+    response_model=ProviderStatusResponse,
+)
+async def connect_local_codex_provider(
+    request: Request,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await execute_idempotent(
+        db=db,
+        user=user,
+        key=idempotency_key,
+        operation="provider.local_cli.connect:chatgpt",
+        payload=None,
+        status_code=status.HTTP_200_OK,
+        response_type=ProviderStatusResponse,
+        execute=lambda: connect_local_codex(
+            user,
+            db,
+            client_host=request.client.host if request.client is not None else "",
+        ),
+    )
+
+
 @router.post("/providers/{provider}/test", response_model=ProviderStatusResponse)
 async def validate_provider(
     provider: str,
+    request: Request,
     idempotency_key: str = Header(alias="Idempotency-Key"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -526,7 +578,12 @@ async def validate_provider(
         payload=None,
         status_code=status.HTTP_200_OK,
         response_type=ProviderStatusResponse,
-        execute=lambda: test_provider(user, provider, db),
+        execute=lambda: test_provider(
+            user,
+            provider,
+            db,
+            client_host=request.client.host if request.client is not None else "",
+        ),
     )
 
 
