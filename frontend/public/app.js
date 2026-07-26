@@ -447,6 +447,11 @@
     });
 
     let selectedFiles = [];
+    const maxFileBytes = 10 * 1024 * 1024;
+    const maxTextCharacters = 2000000;
+    const textContents = new WeakMap();
+    const textReads = new WeakMap();
+    const textProblems = new WeakMap();
     function sourceType(file) {
       const name = file.name.toLowerCase();
       if (file.type === "application/pdf" || name.endsWith(".pdf")) return "pdf";
@@ -454,6 +459,18 @@
       if (file.type === "text/markdown" || name.endsWith(".md")) return "markdown";
       if (file.type === "text/plain" || name.endsWith(".txt")) return "plain_text";
       return "";
+    }
+    function isTextFile(file) {
+      const type = sourceType(file);
+      return type === "markdown" || type === "plain_text";
+    }
+    function textExceedsLimit(text) {
+      let characters = 0;
+      for (const _character of text) {
+        characters += 1;
+        if (characters > maxTextCharacters) return true;
+      }
+      return false;
     }
 
     const addForm = document.getElementById("cp-add-source-form");
@@ -471,8 +488,34 @@
       function fileProblem(file) {
         if (!sourceType(file)) return "Unsupported format";
         if (!file.size) return "Empty file";
-        if (file.size > 10 * 1024 * 1024) return "Over 10 MiB";
+        if (file.size > maxFileBytes) return "Over 10 MiB";
+        if (isTextFile(file)) return textProblems.get(file) || "Checking text length…";
         return "Ready to import";
+      }
+      function readText(file) {
+        let pending = textReads.get(file);
+        if (!pending) {
+          pending = file.text().then(function (content) {
+            textContents.set(file, content);
+            return content;
+          });
+          textReads.set(file, pending);
+        }
+        return pending;
+      }
+      async function inspectTextFiles(files) {
+        for (const file of files) {
+          if (!isTextFile(file) || !file.size || file.size > maxFileBytes) continue;
+          try {
+            const content = await readText(file);
+            textProblems.set(file, textExceedsLimit(content) ? "Over 2,000,000 characters" : "Ready to import");
+          } catch (_) {
+            textProblems.set(file, "Could not read file");
+          }
+        }
+        if (files.length === selectedFiles.length && files.every(function (file, index) { return file === selectedFiles[index]; })) {
+          showFiles(files);
+        }
       }
 
       function setMode(mode) {
@@ -492,12 +535,14 @@
 
       function showFiles(files) {
         if (!fileList) return;
+        const statusNode = addForm.querySelector(".cp-form-status");
+        if (statusNode) statusNode.textContent = "";
         fileList.replaceChildren();
         Array.from(files || []).forEach(function (file) {
           const item = document.createElement("li");
           const size = file.size < 1024 * 1024 ? Math.max(1, Math.round(file.size / 1024)) + " KB" : (file.size / (1024 * 1024)).toFixed(1) + " MB";
           const problem = fileProblem(file);
-          item.classList.toggle("invalid", problem !== "Ready to import");
+          item.classList.toggle("invalid", !["Ready to import", "Checking text length…"].includes(problem));
           item.innerHTML = "<span><strong></strong><small></small></span><button type=\"button\">Remove</button>";
           item.querySelector("strong").textContent = file.name;
           item.querySelector("small").textContent = [sourceType(file) ? sourceType(file).replace("_", " ") : "unknown type", size, problem].join(" · ");
@@ -529,6 +574,7 @@
       if (fileInput) fileInput.addEventListener("change", function () {
         selectedFiles = Array.from(fileInput.files || []);
         showFiles(selectedFiles);
+        void inspectTextFiles(selectedFiles);
       });
       if (dropZone) {
         ["dragenter", "dragover"].forEach(function (name) { dropZone.addEventListener(name, function (event) { event.preventDefault(); dropZone.classList.add("dragging"); }); });
@@ -542,6 +588,7 @@
             fileInput.files = transfer.files;
           }
           showFiles(selectedFiles);
+          void inspectTextFiles(selectedFiles);
         });
       }
       window.addEventListener("dragover", function (event) {
@@ -613,8 +660,18 @@
             const type = sourceType(file);
             if (!type) throw new Error(file.name + " is not a PDF, PNG, JPEG, Markdown, or text file.");
             if (!file.size) throw new Error(file.name + " is empty.");
-            if (file.size > 10 * 1024 * 1024) throw new Error(file.name + " exceeds the 10 MiB file limit.");
+            if (file.size > maxFileBytes) throw new Error(file.name + " exceeds the 10 MiB file limit.");
           });
+          for (const file of files) {
+            if (!isTextFile(file)) continue;
+            let content;
+            try {
+              content = await readText(file);
+            } catch (_) {
+              throw new Error(file.name + " could not be read.");
+            }
+            if (textExceedsLimit(content)) throw new Error(file.name + " exceeds the 2,000,000 character text limit.");
+          }
           const failures = [];
           for (let index = 0; index < files.length; index += 1) {
             const file = files[index];
@@ -622,8 +679,11 @@
             if (statusNode) statusNode.textContent = "Importing " + (index + 1) + " of " + files.length + " · " + file.name;
             const title = rawTitle && files.length === 1 ? rawTitle : file.name.replace(/\.(pdf|png|jpe?g|md|txt)$/i, "");
             const payload = { mode: "upload", title, course_context: courseContext.trim() || null, source_type: type, filename: file.name };
-            if (type === "pdf" || type === "image") payload.content_base64 = base64(new Uint8Array(await file.arrayBuffer()));
-            else payload.content = await file.text();
+            if (type === "pdf" || type === "image") {
+              payload.content_base64 = base64(new Uint8Array(await file.arrayBuffer()));
+            } else {
+              payload.content = textContents.get(file) || await readText(file);
+            }
             try {
               results.push(await send(payload, intakeKey()));
             } catch (error) {
@@ -1102,7 +1162,19 @@
     });
 
     input.addEventListener("input", syncSend);
-    if (moduleSelect) moduleSelect.addEventListener("change", syncModule);
+    if (moduleSelect) moduleSelect.addEventListener("change", function () {
+      requestGeneration += 1;
+      loading = false;
+      lastFailedMessage = null;
+      log.querySelectorAll(".chat-dynamic").forEach(function (turn) { turn.remove(); });
+      history.length = 0;
+      input.value = "";
+      input.disabled = false;
+      syncModule();
+      syncSend();
+      if (welcome) welcome.hidden = false;
+      if (clearButton) clearButton.disabled = true;
+    });
     form.addEventListener("submit", function (event) {
       event.preventDefault();
       const message = input.value.trim();

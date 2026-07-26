@@ -69,6 +69,95 @@ test("clearing chat invalidates an in-flight answer without unlocking a newer re
   await expect(page.locator("#cp-chat-log")).toContainText("Fresh answer");
 });
 
+test("changing chat scope clears completed history before the next request", async ({ page }) => {
+  const requests = [];
+  await page.route("**/api/chat**", async (route) => {
+    requests.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ message: requests.length === 1 ? "All-scope answer" : "Module answer", citations: [] }),
+    });
+  });
+
+  await page.goto("/chat?mock=1");
+  const input = page.locator("#cp-chat-input");
+  const moduleSelect = page.locator("#cp-chat-module");
+  await input.fill("Question across all sources");
+  await page.locator("#cp-chat-send").click();
+  await expect(page.locator("#cp-chat-log")).toContainText("All-scope answer");
+
+  await moduleSelect.selectOption("11111111-1111-1111-1111-111111111111");
+  await expect(page.locator("#cp-chat-log .chat-dynamic")).toHaveCount(0);
+  await expect(page.locator("#cp-chat-welcome")).toBeVisible();
+  await expect(page.locator("#cp-chat-clear")).toBeDisabled();
+  await expect(input).toBeEnabled();
+  await expect(input).toHaveValue("");
+  await expect(input).toHaveAttribute("aria-label", "Ask from CS2030S");
+  await expect(page.locator("#cp-chat-send")).toBeDisabled();
+
+  await input.fill("Question for this module");
+  await page.locator("#cp-chat-send").click();
+  await expect(page.locator("#cp-chat-log")).toContainText("Module answer");
+  expect(requests).toHaveLength(2);
+  expect(requests[0]).toMatchObject({ enrollment_id: null, history: [] });
+  expect(requests[1]).toMatchObject({
+    enrollment_id: "11111111-1111-1111-1111-111111111111",
+    history: [],
+  });
+});
+
+test("changing chat scope invalidates a delayed response without unlocking a newer request", async ({ page }) => {
+  let releaseOldResponse;
+  let releaseNewResponse;
+  let markOldStarted;
+  let markNewStarted;
+  const oldResponseHeld = new Promise((resolve) => { releaseOldResponse = resolve; });
+  const newResponseHeld = new Promise((resolve) => { releaseNewResponse = resolve; });
+  const oldStarted = new Promise((resolve) => { markOldStarted = resolve; });
+  const newStarted = new Promise((resolve) => { markNewStarted = resolve; });
+  let requestCount = 0;
+
+  await page.route("**/api/chat**", async (route) => {
+    requestCount += 1;
+    if (requestCount === 1) {
+      markOldStarted();
+      await oldResponseHeld;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ message: "SENTINEL OLD-SCOPE ANSWER", citations: [] }) });
+      return;
+    }
+    markNewStarted();
+    await newResponseHeld;
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ message: "New-scope answer", citations: [] }) });
+  });
+
+  await page.goto("/chat?mock=1");
+  const input = page.locator("#cp-chat-input");
+  await input.fill("Old-scope question");
+  await page.locator("#cp-chat-send").click();
+  await oldStarted;
+
+  await page.locator("#cp-chat-module").selectOption("11111111-1111-1111-1111-111111111111");
+  await expect(page.locator("#cp-chat-log .chat-dynamic")).toHaveCount(0);
+  await expect(page.locator("#cp-chat-welcome")).toBeVisible();
+  await expect(input).toBeEnabled();
+
+  await input.fill("New-scope question");
+  await page.locator("#cp-chat-send").click();
+  await newStarted;
+
+  const oldResponse = page.waitForResponse((response) => response.request().postData().includes("Old-scope question"));
+  releaseOldResponse();
+  await (await oldResponse).finished();
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await expect(page.locator("#cp-chat-log")).not.toContainText("SENTINEL OLD-SCOPE ANSWER");
+  await expect(input).toBeDisabled();
+  await expect(page.locator("#cp-chat-log .loading-turn")).toHaveCount(1);
+
+  releaseNewResponse();
+  await expect(page.locator("#cp-chat-log")).toContainText("New-scope answer");
+});
+
 test("demo mutations are unavailable and anonymous live mutations require auth", async ({ page }) => {
   await page.goto("/login");
 

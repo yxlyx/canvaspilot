@@ -276,6 +276,8 @@ assert_contains 'data-endpoint="/api/chat?mock=1"'
 
 request "$BASE_URL/api/chat?mock=1" \
     --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
     --header 'Content-Type: application/json' \
     --data '{"message":"demo boundary check"}'
 assert_status 200
@@ -314,12 +316,16 @@ pathlib.Path(sys.argv[1]).write_text(json.dumps({"message": "x" * 9000}), encodi
 PY
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
     --header 'Content-Type: application/json' \
     --data-binary "@$TMP_DIR/oversized-request.json"
 assert_status 400
 
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
     --header 'Content-Type: application/json' \
     --data "$(python3 - <<'PY'
 import json
@@ -327,6 +333,35 @@ print(json.dumps({"message": "ok", "module_id": "m" * 257}))
 PY
 )"
 assert_status 400
+assert_backend_count 0
+
+# Cookie-authenticated live chat rejects non-JSON and cross-origin mutations before backend contact.
+request "$BASE_URL/api/chat" \
+    --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
+    --header 'Content-Type: text/plain' \
+    --data '{"message":"plain text boundary"}'
+assert_status 403
+assert_json_field error 'cross-site mutation rejected'
+
+request "$BASE_URL/api/chat" \
+    --header 'Cookie: cp_session=chat-boundary' \
+    --header 'Origin: https://evil.example.com' \
+    --header 'Sec-Fetch-Site: same-origin' \
+    --header 'Content-Type: application/json' \
+    --data '{"message":"hostile origin boundary"}'
+assert_status 403
+assert_json_field error 'cross-site mutation rejected'
+
+request "$BASE_URL/api/chat" \
+    --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: cross-site' \
+    --header 'Content-Type: application/json' \
+    --data '{"message":"hostile fetch site boundary"}'
+assert_status 403
+assert_json_field error 'cross-site mutation rejected'
 assert_backend_count 0
 
 # Authenticated live reads contact the backend and never substitute fixture identity or pages.
@@ -350,11 +385,13 @@ for route in /sources /flashcards /chat; do
         fail "$route: live failure rendered fixture sentinels"
     fi
 done
-assert_backend_count 9
+assert_backend_count 8
 
 # Authenticated live requests contact the backend and never substitute demo output.
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
     --header 'Content-Type: application/json' \
     --data '{"message":"live unavailable boundary"}'
 assert_status 502
@@ -362,37 +399,45 @@ assert_json_field error 'live chat is unavailable; no demo answer was substitute
 assert_json_absent source
 assert_json_absent message
 assert_json_absent citations
-assert_backend_count 10
+assert_backend_count 9
 
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
     --header 'Content-Type: application/json' \
     --data '{"message":"valid live boundary"}'
 assert_status 200
 assert_json_field source backend
 assert_json_field message 'Grounded live reply'
-assert_backend_count 11
+assert_backend_count 10
 
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
     --header 'Content-Type: application/json' \
     --data '{"message":"truncated live boundary"}'
 assert_status 502
 assert_json_field error 'live chat is unavailable; no demo answer was substituted'
 assert_json_absent message
 assert_contains 'no demo answer was substituted'
-assert_backend_count 12
+assert_backend_count 11
 
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
     --header 'Content-Type: application/json' \
     --data '{"message":"oversized response boundary"}'
 assert_status 502
 assert_json_field error 'live chat is unavailable; no demo answer was substituted'
-assert_backend_count 13
+assert_backend_count 12
 
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
     --header 'Content-Type: application/json' \
     --data '{"message":"unauthorized live boundary"}'
 assert_status 401
@@ -401,6 +446,8 @@ grep -Eiq '^set-cookie:[[:space:]]*cp_session=; Path=/; Max-Age=0; HttpOnly; Sec
 
 request "$BASE_URL/api/chat" \
     --header 'Cookie: cp_session=chat-boundary' \
+    --header "Origin: $PUBLIC_ORIGIN" \
+    --header 'Sec-Fetch-Site: same-origin' \
     --header 'Content-Type: application/json' \
     --data '{"message":"forbidden live boundary"}'
 assert_status 403
@@ -408,12 +455,12 @@ assert_json_field error 'chat access forbidden'
 if grep -Eiq '^set-cookie:' "$HEADERS"; then
     fail 'forbidden chat response expired a valid session cookie'
 fi
-assert_backend_count 15
+assert_backend_count 14
 
 request "$BASE_URL/api/sync" --header 'Cookie: cp_session=chat-boundary' --data 'action=sync'
 assert_status 303
 grep -Eiq '^location:[[:space:]]*/dashboard\?synced=1[[:space:]]*\r?$' "$HEADERS" || fail 'authenticated live sync did not return its success redirect'
-assert_backend_count 16
+assert_backend_count 15
 [[ "$(grep -Fxc '/api/chat' "$BACKEND_RECORD")" == "6" ]] || fail 'unexpected live chat backend request count'
 [[ "$(grep -Fxc '/api/modules/sync' "$BACKEND_RECORD")" == "1" ]] || fail 'unexpected live sync backend request count'
 
@@ -444,7 +491,7 @@ request "$BASE_URL/api/sources" \
     --header 'X-Forwarded-Proto: https' \
     --data "$source_payload"
 assert_status 403
-assert_backend_count 16
+assert_backend_count 15
 
 # A configured public origin works behind a proxy without trusting forwarding headers.
 for case in 'unauthorized source:401' 'forbidden source:403' 'invalid source:422' 'oversized source response:502'; do
@@ -474,7 +521,7 @@ request "$BASE_URL/api/sources" \
     --data '{"source_type":"link","origin":"test","title":"created source","source_url":"https://example.com"}'
 assert_status 201
 assert_json_field title 'created source'
-assert_backend_count 21
+assert_backend_count 20
 [[ "$(grep -Fxc '/api/sources' "$BACKEND_RECORD")" == "7" ]] || fail 'unexpected live source backend request count'
 
 printf 'chat-boundary-smoke: all assertions passed at %s\n' "$BASE_URL"

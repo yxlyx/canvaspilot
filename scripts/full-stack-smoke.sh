@@ -146,8 +146,8 @@ register_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
     --header "Origin: $FRONTEND_URL" --header 'Sec-Fetch-Site: same-origin' \
     --data-urlencode 'name=Full Stack Smoke' \
     --data-urlencode "email=$email" \
-    --data-urlencode 'password=smoke-password' \
-    --data-urlencode 'confirm_password=smoke-password' \
+    --data-urlencode 'password=Smoke-password1' \
+    --data-urlencode 'confirm_password=Smoke-password1' \
     "$FRONTEND_URL/api/auth/register")
 [[ "$register_status" == 303 ]]
 registered_me=$(curl --fail --silent --cookie "$COOKIE_JAR" "$FRONTEND_URL/api/me")
@@ -159,7 +159,7 @@ signin_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
     --cookie "$COOKIE_JAR" --cookie-jar "$COOKIE_JAR" \
     --header "Origin: $FRONTEND_URL" --header 'Sec-Fetch-Site: same-origin' \
     --data-urlencode "email=$email" \
-    --data-urlencode 'password=smoke-password' \
+    --data-urlencode 'password=Smoke-password1' \
     "$FRONTEND_URL/api/auth/signin")
 [[ "$signin_status" == 303 ]]
 

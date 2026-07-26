@@ -36,6 +36,13 @@ pub fn render(req: mer.Request) mer.Response {
     if (req.method != .POST) {
         return .{ .status = .method_not_allowed, .content_type = .text, .body = "POST only" };
     }
+
+    const explicit_demo = lib.m3.isExplicitDemo(req);
+    const session = lib.session.fromRequest(req);
+    if (!explicit_demo and session.isAuthenticated()) {
+        if (lib.mutation.guard(req, 128 * 1024)) |response| return response;
+    }
+
     if (req.body.len == 0) {
         return mer.badRequest("expected JSON body");
     }
@@ -65,11 +72,10 @@ pub fn render(req: mer.Request) mer.Response {
         if (entry.content.len > 8000) return mer.badRequest("chat history entry is too large");
     }
 
-    if (lib.m3.isExplicitDemo(req)) {
+    if (explicit_demo) {
         return mockReply(req.allocator, body.message, true);
     }
 
-    const session = lib.session.fromRequest(req);
     if (!session.isAuthenticated()) {
         return .{
             .status = .unauthorized,

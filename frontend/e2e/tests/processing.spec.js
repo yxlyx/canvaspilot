@@ -32,6 +32,60 @@ test("intake retries a network failure with one stable idempotency key", async (
   expect(keys[0]).toBe(keys[1]);
 });
 
+test("text upload status and submission enforce the backend character ceiling", async ({ page }) => {
+  await page.goto("/login");
+  let calls = 0;
+  await page.route("**/api/sources/import", async (route) => {
+    calls += 1;
+    return route.fulfill({ status: 201, contentType: "application/json", body: "{}" });
+  });
+  await page.setContent(`<main><input id="cp-source-search"><select id="cp-source-format"><option value=""></option></select><div id="cp-document-grid"></div><div id="cp-add-source-modal"><button data-source-mode="upload">Upload files</button><button data-source-mode="link">Add link</button><button data-source-mode="paste">Paste text</button><form id="cp-add-source-form" action="/api/sources/import"><input name="mode" value="upload"><div data-source-panel="upload"><input id="cp-source-files" type="file" multiple><ul class="source-file-list"></ul></div><div data-source-panel="link"></div><div data-source-panel="paste"><textarea id="cp-source-content"></textarea></div><input id="cp-new-source-title" value="Notes"><input id="cp-new-source-module"><button type="submit">Add</button><p class="cp-form-status"></p></form></div><script src="/app.js"></script></main>`);
+
+  for (const file of [
+    { name: "notes.txt", mimeType: "text/plain" },
+    { name: "notes.md", mimeType: "text/markdown" },
+  ]) {
+    await page.locator("#cp-source-files").setInputFiles({ ...file, buffer: Buffer.alloc(2000001) });
+    await expect(page.locator(".source-file-list")).toContainText("Over 2,000,000 characters");
+    await page.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(page.locator(".cp-form-status")).toHaveText(`${file.name} exceeds the 2,000,000 character text limit.`);
+  }
+
+  await page.locator("#cp-source-files").setInputFiles([
+    { name: "valid.pdf", mimeType: "application/pdf", buffer: Buffer.from("pdf") },
+    { name: "too-long.txt", mimeType: "text/plain", buffer: Buffer.alloc(2000001) },
+  ]);
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(page.locator(".cp-form-status")).toHaveText("too-long.txt exceeds the 2,000,000 character text limit.");
+  expect(calls).toBe(0);
+
+  await page.locator("#cp-source-files").setInputFiles({
+    name: "at-limit.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.alloc(2000000),
+  });
+  await expect(page.locator(".source-file-list")).toContainText("Ready to import");
+  await expect(page.locator(".cp-form-status")).toBeEmpty();
+
+  for (const file of [
+    { name: "paper.pdf", mimeType: "application/pdf" },
+    { name: "scan.png", mimeType: "image/png" },
+  ]) {
+    await page.locator("#cp-source-files").setInputFiles({ ...file, buffer: Buffer.alloc(10 * 1024 * 1024) });
+    await expect(page.locator(".source-file-list")).toContainText("Ready to import");
+  }
+  expect(calls).toBe(0);
+
+  await page.locator("#cp-source-files").setInputFiles({
+    name: "multilingual.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("界".repeat(1000000)),
+  });
+  await expect(page.locator(".source-file-list")).toContainText("Ready to import");
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await expect.poll(() => calls).toBe(1);
+});
+
 test("polling advances queued to running without wiping the timeline on failure", async ({ page }) => {
   await page.goto("/login");
   let calls = 0;
