@@ -26,87 +26,189 @@ fn safeUuid(value: []const u8) bool {
     return true;
 }
 
+const FlashView = enum { study, create, drafts };
+
+fn flashView(req: mer.Request) FlashView {
+    const value = req.queryParam("view") orelse return .study;
+    if (std.mem.eql(u8, value, "create")) return .create;
+    if (std.mem.eql(u8, value, "drafts")) return .drafts;
+    return .study;
+}
+
 pub fn render(req: mer.Request) mer.Response {
     const session = lib.session.fromRequest(req);
     if (lib.m3.access(req) == .login) return mer.redirect("/login", .see_other);
 
     const use_mock = lib.m3.isExplicitDemo(req);
+    const view = flashView(req);
     const selected_id = req.queryParam("deck") orelse "";
     var live_decks: ?[]const lib.types.FlashcardDeckResponse = null;
     var enrollments: []const lib.types.EnrollmentResponse = &.{};
     var sources: []const lib.types.SourceResponse = &.{};
     var wiki_pages: []const lib.types.WikiPageResponse = &.{};
     if (!use_mock) {
-        const result = lib.backend.listFlashcardDecks(req.allocator, session.token);
-        if (result.value) |parsed| live_decks = parsed.value else return lib.m3.liveError(req, "Flashcards", result.status);
-        const enrollment_result = lib.backend.listEnrollments(req.allocator, session.token);
-        if (enrollment_result.value) |parsed| enrollments = parsed.value else return lib.m3.liveError(req, "Flashcard scopes", enrollment_result.status);
-        const source_result = lib.backend.listSources(req.allocator, session.token);
-        if (source_result.value) |parsed| sources = parsed.value else return lib.m3.liveError(req, "Flashcard sources", source_result.status);
-        const wiki_result = lib.backend.listWikiPages(req.allocator, session.token);
-        if (wiki_result.value) |parsed| wiki_pages = parsed.value else return lib.m3.liveError(req, "Flashcard wiki pages", wiki_result.status);
+        if (view == .study or view == .drafts) {
+            const result = lib.backend.listFlashcardDecks(req.allocator, session.token);
+            if (result.value) |parsed| live_decks = parsed.value else return lib.m3.liveError(req, "Flashcards", result.status);
+        }
+        if (view == .create) {
+            const enrollment_result = lib.backend.listEnrollments(req.allocator, session.token);
+            if (enrollment_result.value) |parsed| enrollments = parsed.value else return lib.m3.liveError(req, "Flashcard scopes", enrollment_result.status);
+            const source_result = lib.backend.listSources(req.allocator, session.token);
+            if (source_result.value) |parsed| sources = parsed.value else return lib.m3.liveError(req, "Flashcard sources", source_result.status);
+            const wiki_result = lib.backend.listWikiPages(req.allocator, session.token);
+            if (wiki_result.value) |parsed| wiki_pages = parsed.value else return lib.m3.liveError(req, "Flashcard wiki pages", wiki_result.status);
+        }
     }
 
     var due: usize = 0;
-    if (live_decks) |decks| {
-        for (decks) |deck| if (std.mem.eql(u8, deck.lifecycle, "approved")) {
-            due += activeCardCount(deck.cards);
-        };
-    } else {
-        for (lib.mock.decks) |deck| due += deck.due_count;
+    if (view == .study) {
+        if (live_decks) |decks| {
+            for (decks) |deck| if (std.mem.eql(u8, deck.lifecycle, "approved")) {
+                due += activeCardCount(deck.cards);
+            };
+        } else {
+            for (lib.mock.decks) |deck| due += deck.due_count;
+        }
     }
 
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
     lib.m3.demoMarker(req, w) catch return mer.internalError("flashcards render failed");
-    w.print("<header class=\"cp-page-header\"><div><p class=\"cp-page-kicker\">{s}{d} approved cards available</p><h1 class=\"cp-page-title\">Flashcard workspace</h1><p class=\"cp-page-sub\">Create a source-bounded draft, review every card, then explicitly start studying an approved deck.</p></div></header>\n", .{ if (use_mock) "Synthetic demo · " else "", due }) catch return mer.internalError("flashcards render failed");
-    renderCreateArea(req, w, use_mock, enrollments, sources, wiki_pages) catch return mer.internalError("flashcards render failed");
-
-    if (!use_mock) {
-        if (req.queryParam("attempt")) |attempt| {
-            if (std.mem.eql(u8, attempt, "saved")) {
-                w.writeAll("<div class=\"cp-status-banner cp-status-info\" role=\"status\" aria-live=\"polite\">Practice result saved to learning evidence.</div>\n") catch return mer.internalError("flashcards render failed");
-            } else if (std.mem.eql(u8, attempt, "failed")) {
-                w.writeAll("<div class=\"cp-status-banner cp-status-error\" role=\"alert\">Practice result could not be saved. Your answer was not recorded; try again.</div>\n") catch return mer.internalError("flashcards render failed");
-            }
-        }
+    switch (view) {
+        .study => w.print("<header class=\"cp-page-header\"><div><p class=\"cp-page-kicker\">{s}{d} cards due</p><h1 class=\"cp-page-title\">Evidence-backed review</h1><p class=\"cp-page-sub\">Study one source-grounded card at a time.</p></div></header>\n", .{ if (use_mock) "Synthetic demo · " else "", due }) catch return mer.internalError("flashcards render failed"),
+        .create => w.writeAll("<header class=\"cp-page-header\"><div><p class=\"cp-page-kicker\">Source-grounded study</p><h1 class=\"cp-page-title\">Create flashcards</h1><p class=\"cp-page-sub\">Choose a stable evidence scope, then review every card before it reaches study.</p></div></header>\n") catch return mer.internalError("flashcards render failed"),
+        .drafts => w.writeAll("<header class=\"cp-page-header\"><div><p class=\"cp-page-kicker\">Deck history</p><h1 class=\"cp-page-title\">Drafts & published decks</h1><p class=\"cp-page-sub\">Continue a review or revisit an immutable study deck.</p></div></header>\n") catch return mer.internalError("flashcards render failed"),
     }
+    renderViewNav(req, w, view) catch return mer.internalError("flashcards render failed");
 
-    if (live_decks) |decks| {
-        if (decks.len == 0) {
-            if (selected_id.len > 0) {
-                renderPageStart(w) catch return mer.internalError("flashcards render failed");
-                renderDeckFooter(w, "/wiki") catch return mer.internalError("flashcards render failed");
-                renderDeckNotFound(req, w) catch return mer.internalError("flashcards render failed");
+    switch (view) {
+        .create => renderCreateArea(req, w, use_mock, enrollments, sources, wiki_pages) catch return mer.internalError("flashcards render failed"),
+        .drafts => {
+            if (live_decks) |decks| renderDeckLedger(req, w, decks) catch return mer.internalError("flashcards render failed") else renderFixtureLedger(req, w) catch return mer.internalError("flashcards render failed");
+        },
+        .study => {
+            if (!use_mock) if (req.queryParam("attempt")) |attempt| {
+                if (std.mem.eql(u8, attempt, "saved")) {
+                    w.writeAll("<div class=\"cp-status-banner cp-status-info\" role=\"status\" aria-live=\"polite\">Practice result saved to learning evidence.</div>\n") catch return mer.internalError("flashcards render failed");
+                } else if (std.mem.eql(u8, attempt, "failed")) {
+                    w.writeAll("<div class=\"cp-status-banner cp-status-error\" role=\"alert\">Practice result could not be saved. Your answer was not recorded; try again.</div>\n") catch return mer.internalError("flashcards render failed");
+                }
+            };
+            if (live_decks) |decks| {
+                if (decks.len == 0) {
+                    if (selected_id.len > 0) {
+                        renderPageStart(w) catch return mer.internalError("flashcards render failed");
+                        renderDeckFooter(w, "/wiki") catch return mer.internalError("flashcards render failed");
+                        renderDeckNotFound(req, w) catch return mer.internalError("flashcards render failed");
+                    } else {
+                        renderEmptyPage(w) catch return mer.internalError("flashcards render failed");
+                    }
+                } else {
+                    renderLivePage(req, w, decks, selected_id) catch return mer.internalError("flashcards render failed");
+                }
             } else {
-                renderEmptyPage(w) catch return mer.internalError("flashcards render failed");
+                renderFixturePage(req, w, selected_id) catch return mer.internalError("flashcards render failed");
             }
-        } else {
-            renderLivePage(req, w, decks, selected_id) catch return mer.internalError("flashcards render failed");
-        }
-    } else {
-        renderFixturePage(req, w, selected_id) catch return mer.internalError("flashcards render failed");
+        },
     }
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
+fn renderViewNav(req: mer.Request, w: *std.Io.Writer, view: FlashView) !void {
+    const items = [_]struct { view: FlashView, path: []const u8, label: []const u8 }{
+        .{ .view = .study, .path = "/flashcards", .label = "Study" },
+        .{ .view = .create, .path = "/flashcards?view=create", .label = "Create" },
+        .{ .view = .drafts, .path = "/flashcards?view=drafts", .label = "Drafts & history" },
+    };
+    try w.writeAll("<nav class=\"cp-local-tabs\" aria-label=\"Flashcard workspace views\"><div>");
+    for (items) |item| {
+        const href = try lib.m3.demoHref(req.allocator, req, item.path);
+        try w.print("<a href=\"{s}\"{s}>{s}</a>", .{ href, if (item.view == view) " aria-current=\"page\"" else "", item.label });
+    }
+    try w.writeAll("</div></nav>");
+}
+
 fn renderCreateArea(req: mer.Request, w: *std.Io.Writer, demo: bool, enrollments: []const lib.types.EnrollmentResponse, sources: []const lib.types.SourceResponse, wiki_pages: []const lib.types.WikiPageResponse) !void {
-    try w.writeAll("<section class=\"cp-flash-create surface\" aria-labelledby=\"create-draft-title\" data-flash-create><header><div><p class=\"eyebrow\">1 · Create from an explicit stable scope</p><h2 id=\"create-draft-title\">Create a review draft</h2><p>Choose exactly one scope. Generation creates or replays a draft; it never starts practice.</p></div></header><form><fieldset");
+    var has_enrollment = false;
+    for (enrollments) |item| if (!item.archived) {
+        has_enrollment = true;
+        break;
+    };
+    var has_source = false;
+    for (sources) |item| if (std.ascii.eqlIgnoreCase(item.status, "ready")) {
+        has_source = true;
+        break;
+    };
+    const default_scope: []const u8 = if (has_enrollment) "enrollment_id" else if (has_source) "source_ids" else if (wiki_pages.len > 0) "wiki_page_id" else "enrollment_id";
+
+    try w.writeAll("<section class=\"cp-flash-create\" aria-labelledby=\"create-draft-title\" data-flash-create><header><p class=\"eyebrow\">New review deck</p><h2 id=\"create-draft-title\">Build from trusted material</h2><p>Pick one bounded scope. The result opens as a draft, never directly in your study queue.</p></header><form><fieldset");
     if (demo) try w.writeAll(" disabled");
-    try w.writeAll("><legend>Generation scope</legend><div class=\"cp-scope-tabs\">");
-    const scopes = [_][2][]const u8{ .{ "enrollment_id", "Enrollment" }, .{ "topic_ids", "Topics" }, .{ "source_ids", "Ready sources" }, .{ "source_chunk_ids", "Current chunks" }, .{ "wiki_page_id", "Wiki page" } };
-    for (scopes, 0..) |scope, index| try w.print("<label><input type=\"radio\" name=\"scope_type\" value=\"{s}\"{s}><span>{s}</span></label>", .{ scope[0], if (index == 0) " checked" else "", scope[1] });
+    try w.writeAll("><legend>What should this deck cover?</legend><div class=\"cp-scope-tabs\">");
+    const scopes = [_]struct { value: []const u8, label: []const u8, available: bool }{
+        .{ .value = "enrollment_id", .label = "Enrollment", .available = has_enrollment },
+        .{ .value = "topic_ids", .label = "Topics", .available = has_enrollment },
+        .{ .value = "source_ids", .label = "Ready sources", .available = has_source },
+        .{ .value = "source_chunk_ids", .label = "Current chunks", .available = has_enrollment },
+        .{ .value = "wiki_page_id", .label = "Wiki page", .available = wiki_pages.len > 0 },
+    };
+    for (scopes) |scope| try w.print("<label><input type=\"radio\" name=\"scope_type\" value=\"{s}\"{s}{s}><span>{s}</span></label>", .{ scope.value, if (std.mem.eql(u8, scope.value, default_scope)) " checked" else "", if (!scope.available and !demo) " disabled" else "", scope.label });
     try w.writeAll("</div><div class=\"cp-scope-selectors\">");
-    try w.writeAll("<label data-scope=\"enrollment_id\"><span>Enrollment</span><select name=\"enrollment_id\" size=\"5\" required>");
+    try w.print("<label data-scope=\"enrollment_id\"{s}><span>Enrollment</span><select name=\"enrollment_id\" size=\"5\" required>", .{if (!std.mem.eql(u8, default_scope, "enrollment_id")) " hidden" else ""});
     for (enrollments) |item| if (!item.archived) try w.print("<option value=\"{s}\">{s} · {s}</option>", .{ lib.ui.escapeSafe(req.allocator, item.id), lib.ui.escapeSafe(req.allocator, item.code), lib.ui.escapeSafe(req.allocator, item.title) });
-    try w.writeAll("</select></label><label data-scope=\"topic_ids\" hidden><span>Canonical topics</span><select name=\"topic_ids\" size=\"6\" multiple></select><small>Select an enrollment above first; its canonical topics load here.</small></label>");
-    try w.writeAll("<label data-scope=\"source_ids\" hidden><span>READY sources</span><select name=\"source_ids\" size=\"6\" multiple>");
-    for (sources) |item| if (std.ascii.eqlIgnoreCase(item.status, "ready")) try w.print("<option value=\"{s}\">{s}</option>", .{ lib.ui.escapeSafe(req.allocator, item.id), lib.ui.escapeSafe(req.allocator, item.title) });
-    try w.writeAll("</select></label><div data-scope=\"source_chunk_ids\" hidden><label><span>Topic for evidence lookup</span><select name=\"chunk_topic_id\"></select></label><label><span>READY candidate source</span><select name=\"chunk_source_id\"></select></label><label><span>Current evidence chunks</span><select name=\"source_chunk_ids\" size=\"6\" multiple></select></label><small>Only currently selectable chunks returned for this enrollment, topic, and READY source are offered.</small></div><label data-scope=\"wiki_page_id\" hidden><span>Wiki page</span><select name=\"wiki_page_id\" size=\"6\">");
+    try w.print("</select></label><label data-scope=\"topic_ids\"{s}><span>Canonical topics</span><select name=\"topic_ids\" size=\"6\" multiple></select><small>Choose an enrollment first; its canonical topics load here.</small></label>", .{if (!std.mem.eql(u8, default_scope, "topic_ids")) " hidden" else ""});
+    try w.print("<label data-scope=\"source_ids\"{s}><span>Ready sources</span><select name=\"source_ids\" size=\"6\" multiple>", .{if (!std.mem.eql(u8, default_scope, "source_ids")) " hidden" else ""});
+    var selected_source = false;
+    for (sources) |item| if (std.ascii.eqlIgnoreCase(item.status, "ready")) {
+        try w.print("<option value=\"{s}\"{s}>{s}</option>", .{ lib.ui.escapeSafe(req.allocator, item.id), if (!selected_source and std.mem.eql(u8, default_scope, "source_ids")) " selected" else "", lib.ui.escapeSafe(req.allocator, item.title) });
+        selected_source = true;
+    };
+    try w.print("</select></label><div data-scope=\"source_chunk_ids\"{s}><label><span>Topic for evidence lookup</span><select name=\"chunk_topic_id\"></select></label><label><span>Ready candidate source</span><select name=\"chunk_source_id\"></select></label><label><span>Current evidence chunks</span><select name=\"source_chunk_ids\" size=\"6\" multiple></select></label><small>Only current chunks from the selected ready source are offered.</small></div><label data-scope=\"wiki_page_id\"{s}><span>Wiki page</span><select name=\"wiki_page_id\" size=\"6\">", .{ if (!std.mem.eql(u8, default_scope, "source_chunk_ids")) " hidden" else "", if (!std.mem.eql(u8, default_scope, "wiki_page_id")) " hidden" else "" });
     for (wiki_pages) |item| try w.print("<option value=\"{s}\">{s}</option>", .{ lib.ui.escapeSafe(req.allocator, item.id), lib.ui.escapeSafe(req.allocator, item.title) });
-    try w.writeAll("</select></label></div><label class=\"cp-field\"><span>Draft title (optional)</span><input name=\"deck_title\" maxlength=\"1000\"></label><label class=\"cp-field\"><span>Card limit</span><input name=\"limit\" type=\"number\" min=\"1\" max=\"20\" value=\"10\"></label><details><summary>Regenerate instead of replaying</summary><label class=\"cp-check-row\"><input type=\"checkbox\" name=\"regenerate\"><span>Create a linked successor draft<small>This intentionally supersedes the matching draft; the earlier draft remains in history.</small></span></label></details><p class=\"cp-scope-effective\" data-scope-effective role=\"status\">Effective scope: enrollment.</p><button class=\"cp-btn cp-btn-primary\" type=\"submit\">Generate review draft</button></fieldset></form><p data-flash-create-status aria-live=\"polite\"></p>");
-    if (demo) try w.writeAll("<p class=\"cp-demo-rating-note\">Synthetic demo fixture · read-only. Draft generation and all mutations are disabled.</p>");
+    try w.writeAll("</select></label></div><div class=\"cp-create-options\"><label class=\"cp-field\"><span>Draft title <small>Optional</small></span><input name=\"deck_title\" maxlength=\"1000\" placeholder=\"e.g. Linked lists review\"></label><label class=\"cp-field\"><span>Cards</span><input name=\"limit\" type=\"number\" min=\"1\" max=\"20\" value=\"10\"></label></div><details class=\"cp-regenerate-option\"><summary>Need a fresh version of an existing scope?</summary><label class=\"cp-check-row\"><input type=\"checkbox\" name=\"regenerate\"><span>Create a linked successor draft<small>The earlier draft remains visible in history.</small></span></label></details><footer class=\"cp-create-footer\"><p class=\"cp-scope-effective\" data-scope-effective role=\"status\">One stable scope will be used.</p><button class=\"cp-btn cp-btn-primary\" type=\"submit\">Create review draft</button></footer></fieldset></form><p data-flash-create-status role=\"status\" aria-live=\"polite\"></p>");
+    if (!has_enrollment and !has_source and wiki_pages.len == 0 and !demo) try w.writeAll("<div class=\"cp-empty cp-create-empty\"><div><h3>No ready material yet</h3><p>Process a source or build a Wiki page before creating flashcards.</p><a class=\"cp-btn cp-btn-ghost\" href=\"/sources\">Open sources</a></div></div>");
+    if (demo) try w.writeAll("<p class=\"cp-demo-rating-note\">Demo preview · generation is read-only.</p>");
     try w.writeAll("</section>");
+}
+
+fn deckLifecycleLabel(lifecycle: []const u8) []const u8 {
+    if (std.mem.eql(u8, lifecycle, "draft")) return "In review";
+    if (std.mem.eql(u8, lifecycle, "approved")) return "Published";
+    if (std.mem.eql(u8, lifecycle, "retired")) return "Retired";
+    if (std.mem.eql(u8, lifecycle, "archived")) return "Archived";
+    return "Recorded";
+}
+
+fn renderDeckLedger(req: mer.Request, w: *std.Io.Writer, decks: []const lib.types.FlashcardDeckResponse) !void {
+    try w.writeAll("<div class=\"cp-deck-history\"><section aria-labelledby=\"active-drafts-title\"><header class=\"cp-ledger-heading\"><div><p class=\"eyebrow\">Continue reviewing</p><h2 id=\"active-drafts-title\">Active drafts</h2></div><a class=\"cp-btn cp-btn-primary\" href=\"/flashcards?view=create\">New draft</a></header><div class=\"cp-deck-ledger\">");
+    var draft_count: usize = 0;
+    for (decks) |deck| if (std.mem.eql(u8, deck.lifecycle, "draft")) {
+        draft_count += 1;
+        const updated = lib.time.formatRelative(req.allocator, deck.updated_at, lib.time.nowSecs()) catch "—";
+        try w.print("<article class=\"cp-deck-ledger-row\"><div><span class=\"status-pill status-neutral\">In review</span><h3>{s}</h3><p>{d} cards · revision {d} · updated {s}</p></div><a class=\"cp-btn cp-btn-ghost\" href=\"/flashcards/drafts/{s}\">Review draft</a></article>", .{ lib.ui.escapeSafe(req.allocator, deck.title), deck.card_count, deck.revision, lib.ui.escapeSafe(req.allocator, updated), lib.ui.escapeSafe(req.allocator, deck.id) });
+    };
+    if (draft_count == 0) try w.writeAll("<div class=\"cp-empty-copy\"><h3>No drafts waiting</h3><p>Create a deck from a ready source when you are ready.</p></div>");
+    try w.writeAll("</div></section><section aria-labelledby=\"deck-history-title\"><header class=\"cp-ledger-heading\"><div><p class=\"eyebrow\">Study record</p><h2 id=\"deck-history-title\">Published history</h2></div></header><div class=\"cp-deck-ledger\">");
+    var history_count: usize = 0;
+    for (decks) |deck| if (!std.mem.eql(u8, deck.lifecycle, "draft")) {
+        history_count += 1;
+        const updated = lib.time.formatRelative(req.allocator, deck.updated_at, lib.time.nowSecs()) catch "—";
+        const action_label: []const u8 = if (std.mem.eql(u8, deck.lifecycle, "approved")) "Study deck" else "View record";
+        const action_path = if (std.mem.eql(u8, deck.lifecycle, "approved")) try std.fmt.allocPrint(req.allocator, "/flashcards?deck={s}", .{deck.id}) else try std.fmt.allocPrint(req.allocator, "/flashcards/drafts/{s}", .{deck.id});
+        try w.print("<article class=\"cp-deck-ledger-row\"><div><span class=\"status-pill status-neutral\">{s}</span><h3>{s}</h3><p>{d} cards · revision {d} · updated {s}</p></div><a class=\"cp-btn cp-btn-ghost\" href=\"{s}\">{s}</a></article>", .{ deckLifecycleLabel(deck.lifecycle), lib.ui.escapeSafe(req.allocator, deck.title), deck.card_count, deck.revision, lib.ui.escapeSafe(req.allocator, updated), action_path, action_label });
+    };
+    if (history_count == 0) try w.writeAll("<div class=\"cp-empty-copy\"><h3>No published decks yet</h3><p>Approved drafts appear here as an immutable study record.</p></div>");
+    try w.writeAll("</div></section></div>");
+}
+
+fn renderFixtureLedger(req: mer.Request, w: *std.Io.Writer) !void {
+    try w.writeAll("<div class=\"cp-deck-history\"><section aria-labelledby=\"active-drafts-title\"><header class=\"cp-ledger-heading\"><div><p class=\"eyebrow\">Continue reviewing</p><h2 id=\"active-drafts-title\">Active drafts</h2></div></header><div class=\"cp-deck-ledger\"><div class=\"cp-empty-copy\"><h3>No demo drafts waiting</h3><p>Draft mutations are unavailable in the read-only preview.</p></div></div></section><section aria-labelledby=\"deck-history-title\"><header class=\"cp-ledger-heading\"><div><p class=\"eyebrow\">Study record</p><h2 id=\"deck-history-title\">Published history</h2></div></header><div class=\"cp-deck-ledger\">");
+    for (lib.mock.decks) |deck| {
+        const path = try std.fmt.allocPrint(req.allocator, "/flashcards?deck={s}", .{deck.id});
+        const href = try lib.m3.demoHref(req.allocator, req, path);
+        try w.print("<article class=\"cp-deck-ledger-row\"><div><span class=\"status-pill status-neutral\">Published</span><h3>{s}</h3><p>{d} cards · demo record</p></div><a class=\"cp-btn cp-btn-ghost\" href=\"{s}\">Study deck</a></article>", .{ lib.ui.escapeSafe(req.allocator, deck.title), deck.card_count, href });
+    }
+    try w.writeAll("</div></section></div>");
 }
 
 fn renderEmptyPage(w: *std.Io.Writer) !void {
@@ -161,15 +263,6 @@ fn renderLivePage(req: mer.Request, w: *std.Io.Writer, decks: []const lib.types.
         if ((selected_id.len == 0 and active == null) or std.mem.eql(u8, deck.id, selected_id)) active = deck;
     }
     const active_id = if (active) |deck| deck.id else "";
-    try w.writeAll("<section class=\"cp-draft-decks surface\" aria-labelledby=\"draft-decks-title\"><header><div><p class=\"eyebrow\">Pipeline stage · Flashcard draft generation</p><h2 id=\"draft-decks-title\">Draft decks awaiting review</h2><p>Draft cards never enter the practice queue until you approve and publish the deck.</p></div></header><div class=\"cp-draft-list\">");
-    var draft_count: usize = 0;
-    for (decks) |deck| if (std.mem.eql(u8, deck.lifecycle, "draft")) {
-        draft_count += 1;
-        const updated = lib.time.formatRelative(req.allocator, deck.updated_at, lib.time.nowSecs()) catch "—";
-        try w.print("<article><div><strong>{s}</strong><span>{d} draft cards · revision {d} · updated {s}</span></div><a class=\"cp-btn cp-btn-ghost\" href=\"/flashcards/drafts/{s}\">Review draft</a></article>", .{ lib.ui.escapeSafe(req.allocator, deck.title), deck.card_count, deck.revision, lib.ui.escapeSafe(req.allocator, updated), lib.ui.escapeSafe(req.allocator, deck.id) });
-    };
-    if (draft_count == 0) try w.writeAll("<p class=\"cp-empty-copy\">No draft decks are awaiting review.</p>");
-    try w.writeAll("</div><p id=\"draft-review\" class=\"cp-inline-status\">Draft review surface reserved for the review workflow. Publishing remains an explicit action.</p></section>");
     try renderPageStart(w);
     for (decks) |deck| {
         if (!std.mem.eql(u8, deck.lifecycle, "approved")) continue;
