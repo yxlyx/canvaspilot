@@ -53,6 +53,7 @@ async def chat(
                         "grounded": False,
                         "confidence": 0,
                         "message": "No relevant content found in your workspace sources.",
+                        "outcome": "no_evidence",
                     }
                 ),
             }

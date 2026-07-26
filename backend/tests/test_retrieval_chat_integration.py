@@ -657,6 +657,7 @@ async def test_chat_no_relevant_source_returns_safe_fallback(retrieval_client, m
                 "grounded": False,
                 "confidence": 0,
                 "message": "No relevant content found in your workspace sources.",
+                "outcome": "no_evidence",
             },
         )
     ]

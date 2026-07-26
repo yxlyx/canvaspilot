@@ -9,12 +9,27 @@ from app.services.processing import work_once
 
 logger = logging.getLogger(__name__)
 
+MAX_ERROR_BACKOFF_SECONDS = 30.0
+
 
 async def run_worker(*, once: bool = False, poll_seconds: float = 1.0) -> None:
     worker_id = f"{socket.gethostname()}:{uuid.uuid4()}"
+    error_backoff = poll_seconds
     while True:
-        async with async_session_factory() as db:
-            run = await work_once(db, worker_id)
+        try:
+            async with async_session_factory() as db:
+                run = await work_once(db, worker_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if once:
+                raise
+            delay = min(error_backoff, MAX_ERROR_BACKOFF_SECONDS)
+            error_backoff = min(delay * 2, MAX_ERROR_BACKOFF_SECONDS)
+            logger.exception("processing worker iteration failed; retrying in %.2fs", delay)
+            await asyncio.sleep(delay)
+            continue
+        error_backoff = poll_seconds
         if once:
             return
         if run is None:
