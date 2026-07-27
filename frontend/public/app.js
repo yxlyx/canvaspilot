@@ -1240,6 +1240,41 @@
     const enrollment = form.elements.enrollment_id;
     const topics = form.elements.topic_ids;
     const chunks = form.elements.source_chunk_ids;
+    const createRecoveryKey = "flashcard-create-recovery";
+    let createRecovery = null;
+
+    function snapshotCreateForm() {
+      const values = {};
+      Array.from(form.elements).forEach(function (control) {
+        if (!control.name || ((control.type === "radio" || control.type === "checkbox") && !control.checked)) return;
+        values[control.name] = control.multiple
+          ? Array.from(control.selectedOptions).map(function (option) { return option.value; })
+          : control.value;
+      });
+      return values;
+    }
+
+    function applyCreateRecovery() {
+      if (!createRecovery) return;
+      Object.keys(createRecovery).forEach(function (name) {
+        const control = form.elements[name];
+        if (!control) return;
+        if (control instanceof RadioNodeList) {
+          Array.from(control).forEach(function (item) { item.checked = item.value === createRecovery[name]; });
+        } else if (control.multiple && Array.isArray(createRecovery[name])) {
+          Array.from(control.options).forEach(function (option) { option.selected = createRecovery[name].includes(option.value); });
+        } else if (control.type === "checkbox") {
+          control.checked = Boolean(createRecovery[name]);
+        } else {
+          control.value = createRecovery[name];
+        }
+      });
+    }
+
+    try {
+      createRecovery = JSON.parse(sessionStorage.getItem(createRecoveryKey) || "null");
+      applyCreateRecovery();
+    } catch (_) { createRecovery = null; }
 
     async function loadChunks() {
       const topic = form.elements.chunk_topic_id;
@@ -1248,6 +1283,7 @@
       if (!enrollment.value || !topic.value || !source.value) return;
       const records = await flashRequest("chunks", { deckId: enrollment.value, payload: { topic_id: topic.value, source_id: source.value } });
       records.slice(0, 100).forEach(function (record) { chunks.add(new Option(record.citation + " · " + (record.excerpt || "current evidence"), record.chunk_id)); });
+      applyCreateRecovery();
     }
 
     async function loadEnrollmentScope() {
@@ -1266,6 +1302,7 @@
         candidates.filter(function (source) { return source.eligible && source.state === "ready"; }).slice(0, 100).forEach(function (source) {
           chunkSource.add(new Option(source.title, source.id));
         });
+        applyCreateRecovery();
         await loadChunks();
       } catch (_) {
         status.textContent = "Canonical topics or current chunks could not be loaded. Other stable scopes remain available.";
@@ -1276,13 +1313,24 @@
     form.elements.chunk_source_id.addEventListener("change", function () { loadChunks().catch(function () { status.textContent = "Current chunks could not be loaded."; }); });
     loadEnrollmentScope();
 
-    form.addEventListener("change", function () {
-      const selected = form.querySelector('[name="scope_type"]:checked');
+    function syncScope() {
+      const selected = form.querySelector('[name="scope_type"]:checked:not(:disabled)');
       const scope = selected ? selected.value : "";
-      form.querySelectorAll("[data-scope]").forEach(function (node) { node.hidden = node.dataset.scope !== scope; });
-      effective.textContent = "Effective scope: " + scope.replaceAll("_", " ") + ". Only the visible bounded selection will be sent.";
-    });
-    form.dispatchEvent(new Event("change"));
+      form.querySelectorAll("[data-scope]").forEach(function (node) {
+        const activeScopes = node.dataset.scope.split(/\s+/);
+        const active = activeScopes.includes(scope);
+        node.hidden = !active;
+        node.querySelectorAll("input, select, textarea, button").forEach(function (control) {
+          control.disabled = !active;
+          control.required = active && (control.name === scope || control.name === "enrollment_id");
+        });
+      });
+      const label = selected && selected.nextElementSibling ? selected.nextElementSibling.textContent.trim() : "No available material";
+      effective.textContent = selected ? label + " will be used as the only generation scope." : "Process a source or create a Wiki page to continue.";
+      form.querySelector('button[type="submit"]').disabled = !selected;
+    }
+    form.addEventListener("change", syncScope);
+    syncScope();
     form.addEventListener("submit", async function (event) {
       event.preventDefault();
       const scope = form.querySelector('[name="scope_type"]:checked').value;
@@ -1298,14 +1346,25 @@
       try {
         const result = await flashRequest("generate", { payload: payload });
         if (!result.deck) throw new Error("request-failed");
+        try { sessionStorage.removeItem(createRecoveryKey); } catch (_) {}
         window.location.href = "/flashcards/drafts/" + encodeURIComponent(result.deck.id);
       } catch (error) {
         const code = error.body && error.body.error;
         const providerIssue = ["provider_not_configured", "credential_unavailable", "reauth_required", "provider_authentication_failed", "provider_unavailable", "local_codex_unavailable", "local_codex_login_required"].includes(code);
-        status.textContent = providerIssue
-          ? "Connect or reconnect an answer provider before generating this draft. Your scope selection is preserved. "
-          : "The draft could not be created. Your scope selection is preserved; try again.";
-        if (providerIssue) {
+        if (error.status === 401) {
+          createRecovery = snapshotCreateForm();
+          try { sessionStorage.setItem(createRecoveryKey, JSON.stringify(createRecovery)); } catch (_) {}
+          status.textContent = "Your session expired. This scope is saved in this browser. ";
+          const loginLink = document.createElement("a");
+          loginLink.href = "/login";
+          loginLink.textContent = "Sign in, then return to Create";
+          status.appendChild(loginLink);
+        } else {
+          status.textContent = providerIssue
+            ? "Connect or reconnect an answer provider before generating this draft. Your scope selection is preserved. "
+            : "The draft could not be created. Your scope selection is preserved; try again.";
+        }
+        if (providerIssue && error.status !== 401) {
           const settingsLink = document.createElement("a");
           settingsLink.href = "/settings/providers";
           settingsLink.textContent = "Open provider settings";
@@ -1322,40 +1381,80 @@
     let revision = Number(page.dataset.revision);
     const deckId = page.dataset.deckId;
     const status = page.querySelector("[data-draft-status]");
+    const editable = page.dataset.lifecycle === "draft";
     let pending = false;
+    const dirtyForms = new Set();
     const recoveryKey = "flashcard-draft-reapply-" + deckId;
+    let recoveryState = null;
     try {
-      const recovery = JSON.parse(sessionStorage.getItem(recoveryKey) || "null");
-      if (recovery) {
-        page.querySelectorAll("form").forEach(function (form, index) {
-          const values = recovery[index] || {};
+      recoveryState = JSON.parse(sessionStorage.getItem(recoveryKey) || "null");
+      if (recoveryState && editable) {
+        page.querySelectorAll("form[data-recovery-key]").forEach(function (form) {
+          const values = recoveryState[form.dataset.recoveryKey] || {};
           Object.keys(values).forEach(function (name) {
             const control = form.elements[name];
             if (!control) return;
             if (control instanceof RadioNodeList) Array.from(control).forEach(function (item) { item.checked = item.value === values[name]; });
             else control.value = values[name];
           });
+          if (Object.keys(values).length) dirtyForms.add(form);
         });
-        sessionStorage.removeItem(recoveryKey);
         status.className = "cp-status-banner cp-status-info";
         status.textContent = "Latest revision loaded. Your local field edits were reapplied; review and save them.";
+      } else if (recoveryState) {
+        sessionStorage.removeItem(recoveryKey);
+        recoveryState = null;
       }
-    } catch (_) {}
-    function ids(activeOnly) {
+    } catch (_) { recoveryState = null; }
+    function ids(approvableOnly) {
       return Array.from(page.querySelectorAll("[data-card-id]"))
-        .filter(function (card) { return !activeOnly || card.dataset.discarded !== "true"; })
+        .filter(function (card) { return !approvableOnly || card.dataset.approvable === "true"; })
         .map(function (card) { return card.dataset.cardId; });
+    }
+    function syncBulkApproval() {
+      const button = page.querySelector("[data-approve-selected]");
+      if (button) button.disabled = !page.querySelector("[data-card-select]:checked") || dirtyForms.size > 0;
+    }
+    page.querySelectorAll("form[data-recovery-key]").forEach(function (form) {
+      form.addEventListener("input", function () { dirtyForms.add(form); syncBulkApproval(); });
+      form.addEventListener("change", function () { dirtyForms.add(form); syncBulkApproval(); });
+    });
+    page.addEventListener("change", function (event) {
+      if (event.target.matches("[data-card-select]")) syncBulkApproval();
+    });
+    syncBulkApproval();
+    window.addEventListener("beforeunload", function (event) {
+      if (!dirtyForms.size) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
+    function snapshotForm(form) {
+      const values = {};
+      Array.from(form.elements).forEach(function (control) {
+        if (!control.name || ((control.type === "radio" || control.type === "checkbox") && !control.checked)) return;
+        values[control.name] = control.value;
+      });
+      return values;
+    }
+    function persistDirtyForms(exclude) {
+      const snapshot = Object.assign({}, recoveryState || {});
+      if (exclude && exclude.dataset.recoveryKey) delete snapshot[exclude.dataset.recoveryKey];
+      dirtyForms.forEach(function (form) {
+        if (form === exclude) return;
+        snapshot[form.dataset.recoveryKey] = snapshotForm(form);
+      });
+      recoveryState = snapshot;
+      try {
+        if (Object.keys(snapshot).length) sessionStorage.setItem(recoveryKey, JSON.stringify(snapshot));
+        else sessionStorage.removeItem(recoveryKey);
+      } catch (_) {}
     }
     function conflict() {
       status.className = "cp-status-banner cp-status-error";
       status.innerHTML = "This draft changed elsewhere. Your unsaved fields remain on this page. <button type=\"button\" data-conflict-reload>Reload latest and reapply my edits</button>";
       status.querySelector("button").addEventListener("click", function () {
-        const snapshot = Array.from(page.querySelectorAll("form")).map(function (form) {
-          const values = {};
-          new FormData(form).forEach(function (value, name) { values[name] = value; });
-          return values;
-        });
-        try { sessionStorage.setItem(recoveryKey, JSON.stringify(snapshot)); } catch (_) {}
+        persistDirtyForms(null);
+        dirtyForms.clear();
         window.location.reload();
       });
     }
@@ -1372,14 +1471,26 @@
         return result;
       } catch (error) {
         if (error.status === 409) conflict();
-        else { status.className = "cp-status-banner cp-status-error"; status.textContent = "The change was not saved. Your local edits are preserved; try again."; }
+        else if (error.status === 401) {
+          persistDirtyForms(null);
+          status.className = "cp-status-banner cp-status-error";
+          status.innerHTML = "Your session expired. Local edits are saved in this browser. <a href=\"/login\">Sign in, then return to this draft</a>.";
+        } else {
+          status.className = "cp-status-banner cp-status-error";
+          status.textContent = "The change was not saved. Your local edits are preserved; try again.";
+        }
         return null;
       } finally { pending = false; }
     }
     const deckForm = page.querySelector("[data-deck-form]");
     if (deckForm) deckForm.addEventListener("submit", async function (event) {
       event.preventDefault();
-      if (await mutate("update_deck", { title: deckForm.elements.title.value.trim() })) window.location.reload();
+      if (await mutate("update_deck", { title: deckForm.elements.title.value.trim() })) {
+        dirtyForms.delete(deckForm);
+        persistDirtyForms(deckForm);
+        dirtyForms.clear();
+        window.location.reload();
+      }
     });
     page.querySelectorAll("[data-card-form]").forEach(function (form) {
       form.addEventListener("submit", async function (event) {
@@ -1391,37 +1502,64 @@
         const chunkId = citationParts[1] || "";
         const wikiId = citationParts[2] || "";
         if (!personal && (!sourceId || !chunkId)) {
+          const citation = form.elements.citation_choice;
+          form.querySelectorAll("details").forEach(function (details) { details.open = true; });
+          citation.setAttribute("aria-invalid", "true");
           status.className = "cp-status-banner cp-status-error";
           status.textContent = "Select a current evidence citation, or clearly label this as a personal note.";
+          citation.focus();
           return;
         }
+        form.elements.citation_choice.removeAttribute("aria-invalid");
         const split = function (value) { return value.split(",").map(function (part) { return part.trim(); }).filter(Boolean); };
         const citation = personal ? [] : [{ source_id: sourceId, source_chunk_id: chunkId, wiki_page_id: wikiId || null }];
         const payload = { question: form.elements.question.value.trim(), answer: form.elements.answer.value.trim(), tags: split(form.elements.tags.value), topic_ids: split(form.elements.topic_ids.value), citations: citation, manual_note: personal };
-        if (await mutate("update_card", payload, card.dataset.cardId)) window.location.reload();
+        if (await mutate("update_card", payload, card.dataset.cardId)) {
+          dirtyForms.delete(form);
+          persistDirtyForms(form);
+          dirtyForms.clear();
+          window.location.reload();
+        }
       });
     });
     page.addEventListener("click", async function (event) {
       const button = event.target.closest("button");
       if (!button) return;
       const card = button.closest("[data-card-id]");
+      const lifecycleAction = button.matches("[data-move], [data-approve], [data-discard], [data-approve-selected], [data-approve-all], [data-publish], [data-archive], [data-retire], [data-add-card]");
+      if (lifecycleAction && dirtyForms.size > 0) {
+        status.className = "cp-status-banner cp-status-warn";
+        status.textContent = "Save your local card edits before changing approval, order, or deck status.";
+        const firstDirty = dirtyForms.values().next().value;
+        const disclosure = firstDirty && firstDirty.closest("details");
+        if (disclosure) disclosure.open = true;
+        if (firstDirty) firstDirty.querySelector("input, textarea, select")?.focus();
+        return;
+      }
       let action = null, payload = null;
       if (button.dataset.move) {
-        const list = page.querySelector("[data-card-list]");
-        const sibling = button.dataset.move === "up" ? card.previousElementSibling : card.nextElementSibling;
-        if (!sibling) return;
-        if (button.dataset.move === "up") list.insertBefore(card, sibling); else list.insertBefore(sibling, card);
-        action = "reorder"; payload = { card_ids: ids(false) };
+        const activeCards = Array.from(page.querySelectorAll("[data-card-id]")).filter(function (item) { return item.dataset.discarded !== "true"; });
+        const index = activeCards.indexOf(card);
+        const target = button.dataset.move === "up" ? index - 1 : index + 1;
+        if (index < 0 || target < 0 || target >= activeCards.length) return;
+        const orderedIds = activeCards.map(function (item) { return item.dataset.cardId; });
+        [orderedIds[index], orderedIds[target]] = [orderedIds[target], orderedIds[index]];
+        action = "reorder"; payload = { card_ids: orderedIds };
       } else if (button.hasAttribute("data-approve")) { action = "approve"; payload = { card_ids: [card.dataset.cardId] }; }
       else if (button.hasAttribute("data-discard")) {
         const reasonSelect = card.querySelector("[data-rejection-reason]");
         const reason = reasonSelect ? reasonSelect.value : "";
         if (!reason) {
+          const control = card.querySelector("[data-rejection-reason]");
+          const disclosure = control.closest("details");
+          if (disclosure) disclosure.open = true;
+          control.setAttribute("aria-invalid", "true");
           status.className = "cp-status-banner cp-status-error";
           status.textContent = "Choose why this card is not useful before discarding it.";
-          if (reasonSelect) reasonSelect.focus();
+          control.focus();
           return;
         }
+        reasonSelect.removeAttribute("aria-invalid");
         action = "discard";
         payload = { card_ids: [card.dataset.cardId], rejection_reason: reason };
       }
@@ -1431,7 +1569,12 @@
         if (!selected.length) { status.textContent = "Select at least one active card to approve."; return; }
         action = "approve"; payload = { card_ids: selected };
       }
-      else if (button.hasAttribute("data-approve-all")) { action = "approve"; payload = { card_ids: ids(true) }; }
+      else if (button.hasAttribute("data-approve-all")) {
+        const approvable = ids(true);
+        if (!approvable.length) { status.textContent = "No supported cards are waiting for approval."; return; }
+        action = "approve";
+        payload = { card_ids: approvable };
+      }
       else if (button.hasAttribute("data-publish")) { action = "publish"; payload = {}; }
       else if (button.hasAttribute("data-archive") && window.confirm("Archive this draft? It will leave the active review list.")) { action = "archive"; payload = {}; }
       else if (button.hasAttribute("data-retire") && window.confirm("Retire this approved deck? It will leave study, but its immutable snapshot remains.")) { action = "retire"; payload = {}; }
@@ -1440,7 +1583,14 @@
         const answer = window.prompt("Personal-note answer"); if (!answer) return;
         action = "add_card"; payload = { question: question, answer: answer, tags: [], topic_ids: [], citations: [], manual_note: true };
       }
-      if (action && await mutate(action, payload, card && card.dataset.cardId)) window.location.reload();
+      if (action && await mutate(action, payload, card && card.dataset.cardId)) {
+        if (action === "restore" && dirtyForms.size) {
+          persistDirtyForms(null);
+          dirtyForms.clear();
+        }
+        if (action === "archive" || action === "retire") window.location.href = "/flashcards?view=drafts";
+        else window.location.reload();
+      }
     });
   }
 
@@ -1473,11 +1623,24 @@
     flashcard.insertAdjacentElement("afterend", ratingPanel);
     const deckId = ratingForms.length ? ratingForms[0].elements.deck_id.value : "";
     const currentCardKey = deckId ? "flashcard-current-" + deckId : "";
+    const pendingRatingKey = deckId ? "flashcard-pending-rating-" + deckId : "";
     if (currentCardKey) try {
       const savedCardId = sessionStorage.getItem(currentCardKey);
       const savedIndex = cards.findIndex(function (card) { return card.dataset.cardId === savedCardId; });
       if (savedIndex >= 0) index = savedIndex;
     } catch (_) {}
+    if (pendingRatingKey) try {
+      const savedPending = JSON.parse(sessionStorage.getItem(pendingRatingKey) || "null");
+      const pendingIndex = savedPending && cards.findIndex(function (card) { return card.dataset.cardId === savedPending.cardId; });
+      if (savedPending && pendingIndex >= 0 && savedPending.rating && savedPending.key) {
+        pendingRating = savedPending;
+        index = pendingIndex;
+      } else if (savedPending) {
+        sessionStorage.removeItem(pendingRatingKey);
+      }
+    } catch (_) {
+      try { sessionStorage.removeItem(pendingRatingKey); } catch (_) {}
+    }
 
     document.querySelectorAll("[data-deck-url]").forEach(function (button) {
       button.addEventListener("click", function () {
@@ -1565,6 +1728,14 @@
       });
     }
 
+    function persistPendingRating() {
+      if (!pendingRatingKey) return;
+      try {
+        if (pendingRating) sessionStorage.setItem(pendingRatingKey, JSON.stringify(pendingRating));
+        else sessionStorage.removeItem(pendingRatingKey);
+      } catch (_) {}
+    }
+
     function skipCurrent() {
       if (pendingRating) {
         showFailure("Resolve the pending " + pendingRating.rating + " save before skipping this card.");
@@ -1596,6 +1767,7 @@
           }
           if (!pendingRating || pendingRating.cardId !== cardId) {
             pendingRating = { cardId: cardId, rating: rating, key: flashKey("rating") };
+            persistPendingRating();
           }
           const saved = await flashRequest("attempt", {
             deckId: form.elements.deck_id.value,
@@ -1604,6 +1776,7 @@
             payload: { rating: pendingRating.rating, answer_text: "" },
           });
           pendingRating = null;
+          persistPendingRating();
           rate(saved);
         } catch (error) {
           const message = error && error.status === 401
@@ -1633,5 +1806,9 @@
       }
     });
     renderCurrent();
+    if (pendingRating) {
+      setRevealed(true);
+      showFailure("The previous save outcome is unknown. Retry the same " + pendingRating.rating + " rating with the same interaction key.");
+    }
   }
 })();

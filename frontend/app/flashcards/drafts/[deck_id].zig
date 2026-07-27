@@ -34,10 +34,25 @@ fn generationLabel(provider: []const u8) []const u8 {
 fn revisionActionLabel(action: []const u8) []const u8 {
     if (std.mem.eql(u8, action, "generated")) return "Draft created";
     if (std.mem.eql(u8, action, "regenerated")) return "Draft regenerated";
-    if (std.mem.eql(u8, action, "updated")) return "Cards updated";
-    if (std.mem.eql(u8, action, "published")) return "Deck published";
+    if (std.mem.eql(u8, action, "edit_deck")) return "Deck title updated";
+    if (std.mem.eql(u8, action, "edit_card")) return "Card updated";
+    if (std.mem.eql(u8, action, "add_card")) return "Card added";
+    if (std.mem.eql(u8, action, "reorder")) return "Cards reordered";
+    if (std.mem.eql(u8, action, "approve")) return "Cards approved";
+    if (std.mem.eql(u8, action, "discard")) return "Card discarded";
+    if (std.mem.eql(u8, action, "restore")) return "Card restored";
+    if (std.mem.eql(u8, action, "publish")) return "Deck published";
+    if (std.mem.eql(u8, action, "retired")) return "Deck retired";
     if (std.mem.eql(u8, action, "archived")) return "Draft archived";
     return "Draft changed";
+}
+
+fn lifecycleLabel(lifecycle: []const u8) []const u8 {
+    if (std.mem.eql(u8, lifecycle, "draft")) return "Draft";
+    if (std.mem.eql(u8, lifecycle, "approved")) return "Approved snapshot";
+    if (std.mem.eql(u8, lifecycle, "retired")) return "Retired snapshot";
+    if (std.mem.eql(u8, lifecycle, "archived")) return "Archived draft";
+    return "Deck record";
 }
 
 fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
@@ -57,17 +72,29 @@ fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     return false;
 }
 
-fn isLowSignalCard(question: []const u8, answer: []const u8) bool {
-    const terms = [_][]const u8{ "source header", "cover page", "document title", "course code", "module code", "which institution", "which university", "prepared by", "academic year" };
+fn isLowSignalCard(question: []const u8) bool {
+    const terms = [_][]const u8{ "source header", "cover page", "document title", "course code shown", "module code shown", "prepared by", "academic year shown" };
     for (terms) |term| if (containsIgnoreCase(question, term)) return true;
-    const asks_metadata = containsIgnoreCase(question, "what") or containsIgnoreCase(question, "which");
-    if (asks_metadata and (containsIgnoreCase(question, "institution") or containsIgnoreCase(question, "university") or containsIgnoreCase(question, "department") or containsIgnoreCase(question, "faculty"))) return true;
-    return std.mem.count(u8, answer, " ") > 95;
+    return false;
 }
 
-test "legacy metadata cards require rewriting" {
-    try std.testing.expect(isLowSignalCard("What institution appears in this material?", "A university header"));
-    try std.testing.expect(!isLowSignalCard("Why do immutable values preserve history?", "Updates create new values."));
+test "legacy metadata cards receive an advisory without blocking legitimate concepts" {
+    try std.testing.expect(isLowSignalCard("Which institution is named in the source header?"));
+    try std.testing.expect(!isLowSignalCard("Which institution accredits this qualification?"));
+    try std.testing.expect(!isLowSignalCard("What institutional controls preserve data integrity?"));
+    try std.testing.expect(!isLowSignalCard("Why do immutable values preserve history?"));
+}
+
+fn canPublish(editable: bool, active: usize, approved: usize, unsupported: usize) bool {
+    return editable and active > 0 and approved == active and unsupported == 0;
+}
+
+test "publishing requires a supported fully approved non-empty draft" {
+    try std.testing.expect(canPublish(true, 2, 2, 0));
+    try std.testing.expect(!canPublish(true, 0, 0, 0));
+    try std.testing.expect(!canPublish(true, 2, 1, 0));
+    try std.testing.expect(!canPublish(true, 2, 2, 1));
+    try std.testing.expect(!canPublish(false, 2, 2, 0));
 }
 
 test "draft metadata uses learner-facing labels" {
@@ -100,45 +127,52 @@ fn renderReview(req: mer.Request, deck: lib.types.FlashcardDeckResponse, history
     var active: usize = 0;
     var approved: usize = 0;
     var unsupported: usize = 0;
-    var low_signal: usize = 0;
+    var attention: usize = 0;
     for (deck.cards) |card| if (!std.mem.eql(u8, card.state, "discarded")) {
         active += 1;
+        const unsupported_card = !card.manual_note and (card.source_id == null or (card.source_chunk_id == null and card.wiki_page_id == null));
         if (card.approved) approved += 1;
-        if (!card.manual_note and (card.source_id == null or (card.source_chunk_id == null and card.wiki_page_id == null))) unsupported += 1;
-        if (isLowSignalCard(card.question, card.answer)) low_signal += 1;
+        if (unsupported_card) unsupported += 1;
+        if (!card.approved or unsupported_card) attention += 1;
     };
-    const publishable = editable and active > 0 and approved == active and unsupported == 0 and low_signal == 0;
+    const publishable = canPublish(editable, active, approved, unsupported);
     const scope_kind = objectString(deck.scope_snapshot, "kind") orelse deck.generation_scope;
     const provider = objectString(deck.generator_snapshot, "provider") orelse "Provider";
     const model = objectString(deck.generator_snapshot, "model") orelse "default model";
     const evidence_count = objectArrayLength(deck.scope_snapshot, "ordered_provenance");
     const source_count = objectArrayLength(deck.scope_snapshot, "source_ids") orelse deck.source_ids.len;
     const evidence_summary = if (evidence_count) |count| std.fmt.allocPrint(req.allocator, "{d} evidence passage{s}", .{ count, if (count == 1) "" else "s" }) catch "Evidence count unavailable" else "Evidence count unavailable";
-    w.print("<div class=\"cp-draft-review\" data-draft-review data-deck-id=\"{s}\" data-revision=\"{d}\" data-lifecycle=\"{s}\"><a class=\"cp-back-link\" href=\"/flashcards\">← Flashcard workspace</a><header class=\"cp-page-header\"><div><p class=\"cp-page-kicker\">{s} · revision {d}</p><h1 class=\"cp-page-title\">Review draft</h1><p class=\"cp-page-sub\">Check each prompt against its evidence, then approve the cards you want to study.</p></div></header><div data-draft-status role=\"status\" aria-live=\"polite\"></div>", .{ deck.id, deck.revision, lib.ui.escapeSafe(req.allocator, deck.lifecycle), if (editable) "Draft" else "Approved", deck.revision }) catch return mer.internalError("draft render failed");
+    w.print("<div class=\"cp-draft-review\" data-draft-review data-deck-id=\"{s}\" data-revision=\"{d}\" data-lifecycle=\"{s}\"><a class=\"cp-back-link\" href=\"/flashcards?view=drafts\">← Drafts & history</a><header class=\"cp-page-header\"><div><p class=\"cp-page-kicker\">{s} · revision {d}</p><h1 class=\"cp-page-title\">Review draft</h1><p class=\"cp-page-sub\">Refine one card at a time. Only approved, supported cards can be published.</p></div></header><div data-draft-status role=\"status\" aria-live=\"polite\"></div>", .{ deck.id, deck.revision, lib.ui.escapeSafe(req.allocator, deck.lifecycle), lifecycleLabel(deck.lifecycle), deck.revision }) catch return mer.internalError("draft render failed");
     if (immutable) w.print("<section class=\"cp-status-banner cp-status-info\"><strong>Approved snapshot — immutable.</strong> <a class=\"cp-btn cp-btn-primary\" href=\"/flashcards?deck={s}#cp-flash-review\">Start studying</a></section>", .{deck.id}) catch return mer.internalError("draft render failed");
-    w.print("<section class=\"cp-draft-meta surface\"><form data-deck-form><label class=\"cp-field\"><span>Deck title</span><input name=\"title\" maxlength=\"1000\" value=\"{s}\"{s}></label><button class=\"cp-btn cp-btn-ghost\" type=\"submit\"{s}>Save title</button></form><dl class=\"cp-provenance\"><div><dt>Source scope</dt><dd><strong>{s}</strong><span>{d} source{s} · {s}</span></dd></div><div><dt>Generation</dt><dd><strong>{s}</strong><span>{s}</span></dd></div><div><dt>Draft lineage</dt><dd><strong>{s}</strong><span>Evidence-first generation</span></dd></div></dl></section>", .{ lib.ui.escapeSafe(req.allocator, deck.title), if (editable) "" else " disabled", if (editable) "" else " disabled", scopeLabel(scope_kind), source_count, if (source_count == 1) "" else "s", lib.ui.escapeSafe(req.allocator, evidence_summary), lib.ui.escapeSafe(req.allocator, generationLabel(provider)), lib.ui.escapeSafe(req.allocator, generationLabel(model)), if (deck.predecessor_id) |_| "Regenerated draft" else "First generation" }) catch return mer.internalError("draft render failed");
-    w.writeAll("<section><div class=\"cp-section-heading-row\"><div><p class=\"eyebrow\">2 · Review evidence and content</p><h2>Cards</h2></div>") catch return mer.internalError("draft render failed");
-    if (editable) w.writeAll("<button class=\"cp-btn cp-btn-ghost\" type=\"button\" data-add-card>Add card</button>") catch return mer.internalError("draft render failed");
-    w.writeAll("</div><ol class=\"cp-draft-cards\" data-card-list>") catch return mer.internalError("draft render failed");
-    for (deck.cards) |card| renderCard(req, w, card, deck.scope_snapshot, editable) catch return mer.internalError("draft render failed");
-    w.writeAll("</ol></section>") catch return mer.internalError("draft render failed");
+    w.print("<section class=\"cp-draft-meta surface\"><form data-deck-form data-recovery-key=\"deck\"><label class=\"cp-field\"><span>Deck title</span><input name=\"title\" maxlength=\"1000\" value=\"{s}\"{s}></label><button class=\"cp-btn cp-btn-ghost\" type=\"submit\"{s}>Save title</button></form><dl class=\"cp-provenance\"><div><dt>Scope</dt><dd><strong>{s}</strong><span>{d} source{s} · {s}</span></dd></div><div><dt>Generated with</dt><dd><strong>{s}</strong><span>{s}</span></dd></div><div><dt>Lineage</dt><dd><strong>{s}</strong><span>Evidence-first draft</span></dd></div></dl></section>", .{ lib.ui.escapeSafe(req.allocator, deck.title), if (editable) "" else " disabled", if (editable) "" else " disabled", scopeLabel(scope_kind), source_count, if (source_count == 1) "" else "s", lib.ui.escapeSafe(req.allocator, evidence_summary), lib.ui.escapeSafe(req.allocator, generationLabel(provider)), lib.ui.escapeSafe(req.allocator, generationLabel(model)), if (deck.predecessor_id) |_| "Regenerated" else "First generation" }) catch return mer.internalError("draft render failed");
     if (editable) {
-        w.print("<section class=\"cp-publish-panel surface\"><div><p class=\"eyebrow\">3 · Publish</p><h2>Approve and publish</h2><p>{d} active · {d} approved · {d} need attention</p>", .{ active, approved, unsupported + low_signal }) catch return mer.internalError("draft render failed");
-        if (active == 0) w.writeAll("<p role=\"alert\">Publish is disabled because the deck has no active cards.</p>") catch return mer.internalError("draft render failed");
-        if (approved != active) w.writeAll("<p role=\"alert\">Publish is disabled until every active card is approved.</p>") catch return mer.internalError("draft render failed");
-        if (unsupported > 0) w.writeAll("<p role=\"alert\">Publish is disabled while a card lacks evidence or a personal-note label.</p>") catch return mer.internalError("draft render failed");
-        if (low_signal > 0) w.writeAll("<p role=\"alert\">Publish is disabled until low-signal document metadata is rewritten or discarded.</p>") catch return mer.internalError("draft render failed");
-        w.writeAll("</div><div class=\"cp-action-row\"><button class=\"cp-btn cp-btn-ghost\" type=\"button\" data-approve-selected>Approve selected</button><button class=\"cp-btn cp-btn-ghost\" type=\"button\" data-approve-all>Approve all supported</button><button class=\"cp-btn cp-btn-primary\" type=\"button\" data-publish") catch return mer.internalError("draft render failed");
+        w.print("<section class=\"cp-review-toolbar surface\" aria-label=\"Draft approval\"><div class=\"cp-review-summary\"><p><strong>{d} of {d}</strong> active cards approved</p><div class=\"cp-draft-progress\"><i style=\"width:{d}%\"></i></div><small>{d} card{s} need attention before publishing.</small></div><div class=\"cp-review-toolbar-actions\"><button class=\"cp-btn cp-btn-ghost\" type=\"button\" data-approve-selected disabled>Approve selected</button><button class=\"cp-btn cp-btn-ghost\" type=\"button\" data-approve-all>Approve supported</button><button class=\"cp-btn cp-btn-primary\" type=\"button\" data-publish", .{ approved, active, if (active > 0) approved * 100 / active else 0, attention, if (attention == 1) "" else "s" }) catch return mer.internalError("draft render failed");
         if (!publishable) w.writeAll(" disabled") catch return mer.internalError("draft render failed");
-        w.writeAll(">Publish approved snapshot</button><button class=\"cp-btn cp-btn-danger\" type=\"button\" data-archive>Archive draft</button></div></section>") catch return mer.internalError("draft render failed");
-    } else if (immutable) w.writeAll("<section class=\"cp-publish-panel surface\"><p>Retiring removes this immutable approved deck from study without rewriting it.</p><button class=\"cp-btn cp-btn-danger\" type=\"button\" data-retire>Retire approved deck</button></section>") catch return mer.internalError("draft render failed");
-    w.writeAll("<details class=\"cp-draft-history surface\"><summary>Revision history and discarded-card audit</summary><ol>") catch return mer.internalError("draft render failed");
+        w.writeAll(">Publish deck</button></div></section>") catch return mer.internalError("draft render failed");
+    }
+    w.writeAll("<section class=\"cp-card-review-section\"><div class=\"cp-section-heading-row\"><div><p class=\"eyebrow\">Card review</p><h2>Questions & answers</h2><p>Expand a row to edit its content or inspect the saved evidence.</p></div>") catch return mer.internalError("draft render failed");
+    if (editable) w.writeAll("<button class=\"cp-btn cp-btn-ghost\" type=\"button\" data-add-card>Add personal card</button>") catch return mer.internalError("draft render failed");
+    w.writeAll("</div><ol class=\"cp-draft-cards\" data-card-list>") catch return mer.internalError("draft render failed");
+    var opened_attention = false;
+    for (deck.cards) |card| {
+        const discarded = std.mem.eql(u8, card.state, "discarded");
+        const unsupported_card = !card.manual_note and (card.source_id == null or (card.source_chunk_id == null and card.wiki_page_id == null));
+        const needs_attention = !discarded and (!card.approved or unsupported_card or isLowSignalCard(card.question));
+        const open = needs_attention and !opened_attention;
+        if (open) opened_attention = true;
+        renderCard(req, w, card, deck.scope_snapshot, editable, open) catch return mer.internalError("draft render failed");
+    }
+    w.writeAll("</ol></section><section class=\"cp-draft-history\" aria-labelledby=\"draft-history-title\"><header class=\"cp-ledger-heading\"><div><p class=\"eyebrow\">Audit trail</p><h2 id=\"draft-history-title\">Revision history</h2><p>Every saved review action remains attached to this deck.</p></div><div class=\"cp-action-row\">") catch return mer.internalError("draft render failed");
+    if (editable) w.writeAll("<button class=\"cp-btn cp-btn-danger\" type=\"button\" data-archive>Archive draft</button>") catch return mer.internalError("draft render failed");
+    if (immutable) w.writeAll("<button class=\"cp-btn cp-btn-danger\" type=\"button\" data-retire>Retire deck</button>") catch return mer.internalError("draft render failed");
+    w.writeAll("</div></header><ol class=\"cp-history-ledger\">") catch return mer.internalError("draft render failed");
     for (history) |item| {
         const when = lib.time.formatRelative(req.allocator, item.created_at, lib.time.nowSecs()) catch "—";
         const exact = lib.time.formatAbsolute(req.allocator, item.created_at) catch "—";
-        w.print("<li><strong>Revision {d} · {s}</strong><time datetime=\"{s}\" title=\"{s}\">{s}</time></li>", .{ item.revision, revisionActionLabel(item.action), lib.ui.escapeSafe(req.allocator, item.created_at), lib.ui.escapeSafe(req.allocator, exact), lib.ui.escapeSafe(req.allocator, when) }) catch return mer.internalError("draft render failed");
+        w.print("<li><span>Revision {d}</span><strong>{s}</strong><time datetime=\"{s}\" title=\"{s}\">{s}</time></li>", .{ item.revision, revisionActionLabel(item.action), lib.ui.escapeSafe(req.allocator, item.created_at), lib.ui.escapeSafe(req.allocator, exact), lib.ui.escapeSafe(req.allocator, when) }) catch return mer.internalError("draft render failed");
     }
-    w.writeAll("</ol></details></div>") catch return mer.internalError("draft render failed");
+    if (history.len == 0) w.writeAll("<li class=\"cp-empty-copy\">No revision events recorded yet.</li>") catch return mer.internalError("draft render failed");
+    w.writeAll("</ol></section></div>") catch return mer.internalError("draft render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
@@ -181,22 +215,28 @@ fn citationExcerpt(card: lib.types.FlashcardResponse) []const u8 {
     return objectString(card.citations[0], "excerpt") orelse "No excerpt captured";
 }
 
-fn renderCard(req: mer.Request, w: *std.Io.Writer, card: lib.types.FlashcardResponse, scope: std.json.Value, editable: bool) !void {
+fn renderCard(req: mer.Request, w: *std.Io.Writer, card: lib.types.FlashcardResponse, scope: std.json.Value, editable: bool, open: bool) !void {
     const discarded = std.mem.eql(u8, card.state, "discarded");
-    const low_signal = isLowSignalCard(card.question, card.answer);
+    const low_signal = isLowSignalCard(card.question);
+    const unsupported = !card.manual_note and (card.source_id == null or (card.source_chunk_id == null and card.wiki_page_id == null));
+    const approvable = editable and !discarded and !unsupported and !card.approved;
     const disabled = if (editable and !discarded) "" else " disabled";
-    try w.print("<li class=\"cp-draft-card surface{s}\" data-card-id=\"{s}\" data-approved=\"{s}\" data-discarded=\"{s}\"><header><span>Card {d}</span><span class=\"status-pill status-{s}\">{s}</span>{s}</header>", .{ if (discarded) " is-discarded" else "", card.id, if (card.approved) "true" else "false", if (discarded) "true" else "false", card.order_index + 1, if (discarded) "neutral" else if (low_signal) "warn" else if (card.approved) "ok" else "info", if (discarded) "Discarded" else if (low_signal) "Needs rewrite" else if (card.approved) "Approved" else "Needs approval", if (editable and !discarded and !low_signal) "<label><input type=\"checkbox\" data-card-select> Select card</label>" else "" });
-    if (low_signal and !discarded) try w.writeAll("<div class=\"notice notice-warn\" role=\"alert\"><strong>This card tests document metadata</strong> <span>Rewrite it around a useful course concept or discard it before publishing.</span></div>");
-    try w.print("<form data-card-form><label class=\"cp-field\"><span>Prompt</span><textarea name=\"question\" maxlength=\"10000\"{s}>{s}</textarea></label><label class=\"cp-field\"><span>Answer</span><textarea name=\"answer\" maxlength=\"20000\"{s}>{s}</textarea></label>", .{ disabled, lib.ui.escapeSafe(req.allocator, card.question), disabled, lib.ui.escapeSafe(req.allocator, card.answer) });
-    try w.print("<div class=\"cp-card-fields\"><label class=\"cp-field\"><span>Tags</span><input name=\"tags\" value=\"{s}\"{s}></label><label class=\"cp-field\"><span>Topic links</span><input name=\"topic_ids\" value=\"{s}\"{s}><small>Optional connections to topics already in your Wiki.</small></label></div><fieldset class=\"cp-evidence-choice\"><legend>Strict evidence selection</legend><label><input type=\"radio\" name=\"evidence_kind\" value=\"citation\"{s}{s}> Evidence-backed citation</label><label><input type=\"radio\" name=\"evidence_kind\" value=\"personal\"{s}{s}> Clearly labelled personal note</label>", .{ lib.ui.escapeSafe(req.allocator, join(req.allocator, card.tags)), disabled, lib.ui.escapeSafe(req.allocator, join(req.allocator, card.topic_ids)), disabled, if (!card.manual_note) " checked" else "", disabled, if (card.manual_note) " checked" else "", disabled });
+    const state_class: []const u8 = if (discarded) "neutral" else if (unsupported) "warn" else if (card.approved) "ok" else if (low_signal) "warn" else "info";
+    const state_label: []const u8 = if (discarded) "Discarded" else if (unsupported) "Needs evidence" else if (card.approved) "Approved" else if (low_signal) "Review wording" else "Needs approval";
+    try w.print("<li class=\"cp-draft-card{s}\" id=\"card-{s}\" data-card-id=\"{s}\" data-approved=\"{s}\" data-discarded=\"{s}\" data-approvable=\"{s}\"><details class=\"cp-card-disclosure\"{s}><summary><span class=\"cp-card-number\">Card {d}</span><strong>{s}</strong><span class=\"status-pill status-{s}\">{s}</span><small>{s}{s}{s}</small></summary><div class=\"cp-card-disclosure-body\">", .{ if (discarded) " is-discarded" else "", card.id, card.id, if (card.approved) "true" else "false", if (discarded) "true" else "false", if (approvable) "true" else "false", if (open) " open" else "", card.order_index, lib.ui.escapeSafe(req.allocator, card.question), state_class, state_label, if (card.manual_note) "Personal note" else lib.ui.escapeSafe(req.allocator, card.source_title), if (!card.manual_note and card.location_label.len > 0) " · " else "", if (!card.manual_note) lib.ui.escapeSafe(req.allocator, card.location_label) else "" });
+    if (low_signal and !discarded) try w.writeAll("<div class=\"notice notice-warn\" role=\"status\"><strong>Review this card's wording.</strong> Document metadata is usually less useful than a course concept, but you can still approve a supported card.</div>");
+    if (unsupported and !discarded) try w.writeAll("<div class=\"notice notice-warn\" role=\"alert\"><strong>Evidence is missing.</strong> Choose a saved citation or label the card as a personal note.</div>");
+    if (approvable) try w.print("<label class=\"cp-card-selection\"><input type=\"checkbox\" data-card-select><span>Select card {d} for bulk approval</span></label>", .{card.order_index});
+    try w.print("<form class=\"cp-card-editor\" data-card-form data-recovery-key=\"card:{s}\"><label class=\"cp-field\"><span>Prompt</span><textarea name=\"question\" maxlength=\"10000\"{s}>{s}</textarea></label><label class=\"cp-field\"><span>Answer</span><textarea name=\"answer\" maxlength=\"20000\"{s}>{s}</textarea></label><details class=\"cp-card-settings\"><summary><span>Card details & saved evidence</span><small>Tags, Wiki links, citation, and source excerpt</small></summary><div class=\"cp-card-settings-body\">", .{ card.id, disabled, lib.ui.escapeSafe(req.allocator, card.question), disabled, lib.ui.escapeSafe(req.allocator, card.answer) });
+    try w.print("<div class=\"cp-card-fields\"><label class=\"cp-field\"><span>Tags</span><input name=\"tags\" value=\"{s}\"{s}></label><label class=\"cp-field\"><span>Topic links</span><input name=\"topic_ids\" value=\"{s}\"{s}><small>Optional Wiki connections.</small></label></div><fieldset class=\"cp-evidence-choice\"><legend>Evidence type</legend><label><input type=\"radio\" name=\"evidence_kind\" value=\"citation\"{s}{s}> Saved citation</label><label><input type=\"radio\" name=\"evidence_kind\" value=\"personal\"{s}{s}> Personal note</label>", .{ lib.ui.escapeSafe(req.allocator, join(req.allocator, card.tags)), disabled, lib.ui.escapeSafe(req.allocator, join(req.allocator, card.topic_ids)), disabled, if (!card.manual_note) " checked" else "", disabled, if (card.manual_note) " checked" else "", disabled });
     try renderCitationSelector(req, w, card, scope, disabled);
-    try w.print("<article class=\"cp-citation-detail\"><p class=\"eyebrow\">Concept · {s}</p><strong>{s}</strong><span>{s}</span><blockquote>{s}</blockquote><details><summary>Evidence identifiers</summary><span>Source <code>{s}</code></span><span>Current chunk <code>{s}</code></span><span>Wiki page <code>{s}</code></span></details><a href=\"/sources?source={s}\">Open exact source context →</a></article></fieldset>", .{ lib.ui.escapeSafe(req.allocator, card.topic_tag), lib.ui.escapeSafe(req.allocator, card.source_title), lib.ui.escapeSafe(req.allocator, card.location_label), lib.ui.escapeSafe(req.allocator, citationExcerpt(card)), lib.ui.escapeSafe(req.allocator, card.source_id orelse "None"), lib.ui.escapeSafe(req.allocator, card.source_chunk_id orelse "None"), lib.ui.escapeSafe(req.allocator, card.wiki_page_id orelse "None"), lib.ui.escapeSafe(req.allocator, card.source_id orelse "") });
-    if (editable and !discarded) try w.writeAll("<button class=\"cp-btn cp-btn-ghost\" type=\"submit\">Save card</button>");
-    try w.writeAll("</form><footer class=\"cp-action-row\">");
-    if (editable) if (discarded) try w.writeAll("<button type=\"button\" class=\"cp-btn cp-btn-ghost\" data-restore>Restore</button>") else {
-        try w.writeAll("<button type=\"button\" class=\"cp-btn cp-btn-ghost\" data-move=\"up\" aria-label=\"Move card up\">↑ Up</button><button type=\"button\" class=\"cp-btn cp-btn-ghost\" data-move=\"down\" aria-label=\"Move card down\">↓ Down</button><button type=\"button\" class=\"cp-btn cp-btn-ghost\" data-approve");
-        if (low_signal) try w.writeAll(" disabled title=\"Rewrite this card before approving\"");
-        try w.writeAll(">Approve</button><label class=\"cp-rejection-reason\"><span>Why reject?</span><select data-rejection-reason><option value=\"\">Choose a reason</option><option value=\"too_generic\">Too generic</option><option value=\"ambiguous_answer\">Ambiguous answer</option><option value=\"wrong_concept\">Wrong concept</option><option value=\"poor_evidence\">Poor evidence</option><option value=\"duplicate\">Duplicate</option><option value=\"other\">Other</option></select></label><button type=\"button\" class=\"cp-btn cp-btn-danger\" data-discard>Discard</button>");
+    try w.print("<article class=\"cp-citation-detail\"><p class=\"eyebrow\">Saved evidence · {s}</p><strong>{s}</strong><span>{s}</span><blockquote>{s}</blockquote><details><summary>Evidence identifiers</summary><span>Source <code>{s}</code></span><span>Current chunk <code>{s}</code></span><span>Wiki page <code>{s}</code></span></details><a href=\"/sources?source={s}\">Open exact source context →</a></article></fieldset></div></details>", .{ lib.ui.escapeSafe(req.allocator, card.topic_tag), lib.ui.escapeSafe(req.allocator, card.source_title), lib.ui.escapeSafe(req.allocator, card.location_label), lib.ui.escapeSafe(req.allocator, citationExcerpt(card)), lib.ui.escapeSafe(req.allocator, card.source_id orelse "None"), lib.ui.escapeSafe(req.allocator, card.source_chunk_id orelse "None"), lib.ui.escapeSafe(req.allocator, card.wiki_page_id orelse "None"), lib.ui.escapeSafe(req.allocator, card.source_id orelse "") });
+    if (editable and !discarded) try w.writeAll("<div class=\"cp-card-editor-actions\"><button class=\"cp-btn cp-btn-primary\" type=\"submit\">Save card</button></div>");
+    try w.writeAll("</form><footer class=\"cp-card-lifecycle-actions\">");
+    if (editable) if (discarded) try w.writeAll("<button type=\"button\" class=\"cp-btn cp-btn-ghost\" data-restore>Restore card</button>") else {
+        try w.writeAll("<div class=\"cp-card-order\" aria-label=\"Card order\"><button type=\"button\" class=\"cp-btn cp-btn-ghost\" data-move=\"up\" aria-label=\"Move card up\">↑</button><button type=\"button\" class=\"cp-btn cp-btn-ghost\" data-move=\"down\" aria-label=\"Move card down\">↓</button></div><button type=\"button\" class=\"cp-btn cp-btn-ghost\" data-approve");
+        if (!approvable) try w.writeAll(" disabled title=\"Resolve this card's content and evidence before approving\"");
+        try w.writeAll(">Approve card</button><details class=\"cp-discard-control\"><summary>Discard options</summary><div><label class=\"cp-rejection-reason\"><span>Reason</span><select data-rejection-reason><option value=\"\">Choose a reason</option><option value=\"too_generic\">Too generic</option><option value=\"ambiguous_answer\">Ambiguous answer</option><option value=\"wrong_concept\">Wrong concept</option><option value=\"poor_evidence\">Poor evidence</option><option value=\"duplicate\">Duplicate</option><option value=\"other\">Other</option></select></label><button type=\"button\" class=\"cp-btn cp-btn-danger\" data-discard>Discard card</button></div></details>");
     };
-    try w.writeAll("</footer></li>");
+    try w.writeAll("</footer></div></details></li>");
 }
