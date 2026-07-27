@@ -768,6 +768,20 @@
         return run.dataset.runStatus === "queued" || run.dataset.runStatus === "running";
       });
     }
+    function stageExplanation(status) {
+      if (status === "queued") return "Waiting for an available local processing worker.";
+      if (status === "running") return "Work is in progress; this timeline updates automatically.";
+      if (status === "blocked") return "Starts automatically after the previous stage succeeds.";
+      if (status === "succeeded") return "Finished and saved.";
+      if (status === "skipped") return "Not required for this source; the workflow continued safely.";
+      if (status === "failed") return "Needs attention; retry resumes this run without duplicating the source.";
+      if (status === "paused") return "Paused safely until its requirement is available.";
+      if (status === "cancelled") return "Stopped; saved completed work is retained.";
+      return "Persisted processing state.";
+    }
+    function stageLabel(name) {
+      return ({ parse_index: "Parse and index", topic_proposals: "Deterministic topic mapping", coverage: "Coverage snapshot", wiki: "Wiki compilation", flashcards: "Flashcard draft generation", ready: "Completed processing" })[name] || name;
+    }
     function apply(run) {
       const node = panel.querySelector('[data-processing-run="' + CSS.escape(run.id) + '"]');
       if (!node) return;
@@ -782,10 +796,20 @@
         const item = node.querySelector('[data-stage="' + CSS.escape(stage.name) + '"]');
         if (!item) return;
         item.dataset.status = stage.status;
-        const spans = item.querySelectorAll("span");
-        if (spans[0]) spans[0].textContent = "Status: " + stage.status;
-        if (spans[1]) spans[1].textContent = (stage.completed_at || stage.started_at || stage.available_at) + " · attempt " + stage.attempt_count + " of " + stage.max_attempts;
+        const explanation = item.querySelector("[data-stage-explanation]");
+        const meta = item.querySelector("[data-stage-meta]");
+        if (explanation) explanation.textContent = stageExplanation(stage.status);
+        if (meta) meta.textContent = (stage.completed_at || stage.started_at || stage.available_at) + " · attempt " + stage.attempt_count + " of " + stage.max_attempts;
       });
+      const sourceCard = document.querySelector('[data-source-id="' + CSS.escape(run.source_id) + '"]');
+      if (sourceCard && sourceCard.dataset.latestRunId === run.id) {
+        const stageNode = sourceCard.querySelector("[data-source-stage]");
+        const statusNode = sourceCard.querySelector("[data-source-run-status]");
+        const updatedNode = sourceCard.querySelector("[data-source-run-updated]");
+        if (stageNode) stageNode.textContent = stageLabel(run.current_stage);
+        if (statusNode) statusNode.textContent = run.status === "ready" ? "completed" : run.status;
+        if (updatedNode) updatedNode.textContent = "just now";
+      }
       if ((run.status === "ready" || run.status === "failed" || run.status === "cancelled" || run.status === "paused") && previous !== run.status) {
         stopped = true;
         window.location.reload();
@@ -965,6 +989,9 @@
 
     function syncSend() {
       sendButton.disabled = loading || input.value.trim().length === 0;
+      log.querySelectorAll(".answer-error button").forEach(function (button) {
+        button.disabled = loading;
+      });
     }
 
     function showConversation() {
@@ -1027,13 +1054,13 @@
       return "#";
     }
 
-    function appendAnswer(message, citations) {
+    function appendAnswer(message, citations, outcome, grounded) {
       const article = document.createElement("article");
       article.className = "answer-turn chat-dynamic";
       article.appendChild(makeMark("answer"));
       const content = document.createElement("div");
       const label = document.createElement("small");
-      label.textContent = "Grounded answer";
+      label.textContent = outcome === "no_evidence" ? "No matching evidence" : grounded === false ? "Answer lacks cited support" : "Grounded answer";
       const text = document.createElement("p");
       text.textContent = message;
       content.append(label, text);
@@ -1081,29 +1108,45 @@
       log.appendChild(article);
     }
 
-    function appendError(message, retryMessage) {
+    function appendError(code, message, retryMessage) {
       const article = document.createElement("article");
       article.className = "answer-turn answer-error chat-dynamic";
+      article.dataset.errorCode = code;
       article.appendChild(makeMark("error"));
       const content = document.createElement("div");
       const label = document.createElement("small");
-      label.textContent = "Retrieval interrupted";
+      const labels = {
+        session_expired: "Sign-in required",
+        provider_unavailable: "Answer provider unavailable",
+        backend_unavailable: "Workspace service unavailable",
+        retrieval_unavailable: "Retrieval interrupted",
+      };
+      label.textContent = labels[code] || labels.retrieval_unavailable;
       const text = document.createElement("p");
       text.textContent = message;
-      const retry = document.createElement("button");
-      retry.className = "cp-btn cp-btn-ghost";
-      retry.type = "button";
-      retry.textContent = "Retry";
-      retry.addEventListener("click", function () {
-        article.remove();
-        sendMessage(retryMessage, false);
-      });
-      content.append(label, text, retry);
+      const action = document.createElement(code === "session_expired" || code === "provider_unavailable" ? "a" : "button");
+      action.className = "cp-btn cp-btn-ghost";
+      if (code === "session_expired") {
+        action.href = "/login";
+        action.textContent = "Sign in";
+      } else if (code === "provider_unavailable") {
+        action.href = "/settings/providers";
+        action.textContent = "Open provider settings";
+      } else {
+        action.type = "button";
+        action.textContent = "Retry safely";
+        action.addEventListener("click", function () {
+          article.remove();
+          sendMessage(retryMessage, false);
+        });
+      }
+      content.append(label, text, action);
       article.appendChild(content);
       log.appendChild(article);
     }
 
     async function sendMessage(message, addStudent) {
+      if (loading) return;
       const generation = requestGeneration += 1;
       loading = true;
       lastFailedMessage = null;
@@ -1126,12 +1169,16 @@
             history: priorHistory,
           }),
         });
-        if (!response.ok) throw new Error("HTTP " + response.status);
-        const data = await response.json();
+        const data = await response.json().catch(function () { return {}; });
+        if (!response.ok) {
+          const failure = new Error(data.detail || "The retrieval step could not complete. Your question is still here.");
+          failure.code = response.status === 401 ? "session_expired" : (data.error || "retrieval_unavailable");
+          throw failure;
+        }
         if (generation !== requestGeneration) return;
         pending.remove();
-        const reply = data.message || "No grounded answer was returned.";
-        appendAnswer(reply, data.citations);
+        const reply = data.message || "No matching evidence was found in the selected source scope.";
+        appendAnswer(reply, data.citations, data.outcome, data.grounded);
         history.push({ role: "assistant", content: reply });
         input.value = "";
       } catch (error) {
@@ -1139,7 +1186,7 @@
         pending.remove();
         history.length = 0;
         history.push.apply(history, priorHistory);
-        appendError("The retrieval step could not complete. Your question is still here, so you can retry safely.", message);
+        appendError(error.code || "retrieval_unavailable", error.message || "The retrieval step could not complete. Your question is still here, so you can retry safely.", message);
         lastFailedMessage = message;
         input.value = message;
       } finally {
@@ -1179,7 +1226,12 @@
       event.preventDefault();
       const message = input.value.trim();
       if (!message || loading) return;
-      sendMessage(message, true);
+      const retryingFailedQuestion = lastFailedMessage === message;
+      if (retryingFailedQuestion) {
+        const errorTurn = log.querySelector(".answer-error:last-of-type");
+        if (errorTurn) errorTurn.remove();
+      }
+      sendMessage(message, !retryingFailedQuestion);
     });
     if (clearButton) {
       clearButton.addEventListener("click", function () {
@@ -1188,6 +1240,7 @@
         lastFailedMessage = null;
         log.querySelectorAll(".chat-dynamic").forEach(function (turn) { turn.remove(); });
         history.length = 0;
+        input.value = "";
         input.disabled = false;
         syncSend();
         if (welcome) welcome.hidden = false;

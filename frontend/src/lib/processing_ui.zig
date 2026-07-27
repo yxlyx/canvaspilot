@@ -1,13 +1,15 @@
 const std = @import("std");
 const types = @import("types.zig");
+const time = @import("time.zig");
 const ui = @import("ui.zig");
 
-fn stageLabel(name: []const u8) []const u8 {
+pub fn stageLabel(name: []const u8) []const u8 {
     if (std.mem.eql(u8, name, "parse_index")) return "Parse and index";
     if (std.mem.eql(u8, name, "topic_proposals")) return "Deterministic topic mapping";
     if (std.mem.eql(u8, name, "coverage")) return "Coverage snapshot";
     if (std.mem.eql(u8, name, "wiki")) return "Wiki compilation";
     if (std.mem.eql(u8, name, "flashcards")) return "Flashcard draft generation";
+    if (std.mem.eql(u8, name, "ready")) return "Completed processing";
     return name;
 }
 
@@ -50,6 +52,18 @@ fn publicError(message: ?[]const u8) []const u8 {
     return value;
 }
 
+fn stageExplanation(status: []const u8) []const u8 {
+    if (std.mem.eql(u8, status, "queued")) return "Waiting for an available local processing worker.";
+    if (std.mem.eql(u8, status, "running")) return "Work is in progress; this timeline updates automatically.";
+    if (std.mem.eql(u8, status, "blocked")) return "Starts automatically after the previous stage succeeds.";
+    if (std.mem.eql(u8, status, "succeeded")) return "Finished and saved.";
+    if (std.mem.eql(u8, status, "skipped")) return "Not required for this source; the workflow continued safely.";
+    if (std.mem.eql(u8, status, "failed")) return "Needs attention; retry resumes this run without duplicating the source.";
+    if (std.mem.eql(u8, status, "paused")) return "Paused safely until its requirement is available.";
+    if (std.mem.eql(u8, status, "cancelled")) return "Stopped; saved completed work is retained.";
+    return "Persisted processing state.";
+}
+
 pub fn render(allocator: std.mem.Allocator, w: *std.Io.Writer, runs: []const types.ProcessingRunResponse, selected_id: []const u8, demo: bool) !void {
     try w.writeAll("<section class=\"cp-processing-panel surface\" id=\"processing\" aria-labelledby=\"processing-title\"");
     if (!demo) try w.writeAll(" data-processing-panel");
@@ -67,11 +81,15 @@ pub fn render(allocator: std.mem.Allocator, w: *std.Io.Writer, runs: []const typ
         try w.writeAll("<ol class=\"cp-stage-list\">");
         for (run.stages) |stage| {
             const timestamp = stage.completed_at orelse stage.started_at orelse stage.available_at;
-            try w.print("<li data-stage=\"{s}\" data-status=\"{s}\"><strong>{s}</strong><span>Status / current outcome: {s}</span><span><time datetime=\"{s}\">{s}</time> · attempt {d} of {d}</span>", .{ ui.escapeSafe(allocator, stage.name), ui.escapeSafe(allocator, stage.status), stageLabel(stage.name), ui.escapeSafe(allocator, stage.status), ui.escapeSafe(allocator, timestamp), ui.escapeSafe(allocator, timestamp), stage.attempt_count, stage.max_attempts });
+            try w.print("<li data-stage=\"{s}\" data-status=\"{s}\"><strong>{s}</strong><span data-stage-explanation>{s}</span><span data-stage-meta><time datetime=\"{s}\">{s}</time> · attempt {d} of {d}</span>", .{ ui.escapeSafe(allocator, stage.name), ui.escapeSafe(allocator, stage.status), stageLabel(stage.name), stageExplanation(stage.status), ui.escapeSafe(allocator, timestamp), ui.escapeSafe(allocator, timestamp), stage.attempt_count, stage.max_attempts });
             if (stage.@"error" != null) try w.print("<p role=\"alert\">{s}</p>", .{ui.escapeSafe(allocator, publicError(stage.@"error"))});
             try w.writeAll("</li>");
         }
         try w.writeAll("</ol>");
+        if (std.mem.eql(u8, run.status, "queued")) {
+            const updated_secs = time.parseIsoSecs(run.updated_at);
+            if (updated_secs != null and time.nowSecs() - updated_secs.? >= 60) try w.writeAll("<p class=\"cp-run-guidance\" role=\"status\"><strong>Processing has not started yet.</strong> The local processor may be unavailable. Your upload is saved; reload once, then contact the workspace owner if this remains queued.</p>");
+        }
         if (run.pause_reason) |reason| try w.print("<p class=\"cp-run-guidance\"><strong>Paused:</strong> {s} {s} <a href=\"{s}\">Open settings</a>.</p>", .{ ui.escapeSafe(allocator, reason), if (std.mem.eql(u8, reason, "source_processing_disabled")) "Enable source processing before retrying." else "Connect a generation provider if this stage needs one, then retry.", if (std.mem.eql(u8, reason, "source_processing_disabled")) "/settings/learning" else "/settings/providers" });
         if (run.@"error" != null) try w.print("<p class=\"cp-run-guidance\" role=\"alert\">{s}</p>", .{ui.escapeSafe(allocator, publicError(run.@"error"))});
         try w.writeAll("<div class=\"cp-action-row\">");
@@ -123,4 +141,19 @@ test "succeeded stage actions use only validated outcome identifiers" {
     try std.testing.expect(std.mem.indexOf(u8, html, "href=\"/learning/123e4567-e89b-12d3-a456-426614174000\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "href=\"/wiki/safe-page?enrollment=123e4567-e89b-12d3-a456-426614174000\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "href=\"/flashcards?draft=223e4567-e89b-12d3-a456-426614174000&amp;enrollment=123e4567-e89b-12d3-a456-426614174000#draft-review\"") != null);
+}
+
+test "terminal processing labels remain learner readable" {
+    try std.testing.expectEqualStrings("Completed processing", stageLabel("ready"));
+    try std.testing.expectEqualStrings("Not required for this source; the workflow continued safely.", stageExplanation("skipped"));
+}
+
+test "queued processing explains persisted state and stale worker guidance" {
+    const stage: types.ProcessingStageResponse = .{ .id = "1", .name = "parse_index", .position = 0, .status = "queued", .attempt_count = 0, .max_attempts = 3, .available_at = "2020-01-01T00:00:00Z" };
+    const run: types.ProcessingRunResponse = .{ .id = "123e4567-e89b-12d3-a456-426614174000", .source_id = "223e4567-e89b-12d3-a456-426614174000", .source_version_id = "323e4567-e89b-12d3-a456-426614174000", .status = "queued", .current_stage = "parse_index", .attempt_count = 0, .created_at = "2020-01-01T00:00:00Z", .updated_at = "2020-01-01T00:00:00Z", .stages = &.{stage} };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try render(std.testing.allocator, &out.writer, &.{run}, "", false);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "Waiting for an available local processing worker.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "Your upload is saved") != null);
 }

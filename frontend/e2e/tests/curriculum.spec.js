@@ -53,9 +53,46 @@ test("validation, preview selection, explicit archive, and confirmation are boun
   await expect(page.getByText("XX0000 — Unavailable module")).toBeVisible();
   await expect(page.locator('input[value="XX0000"]')).toBeDisabled();
   await page.getByLabel("Archive CS1010S").check();
+  const refresh = page.waitForRequest((request) => new URL(request.url()).pathname === "/settings/learning");
   await page.getByRole("button", { name: "Confirm selected decisions" }).click();
   await expect(page.getByRole("status")).toContainText("Import confirmed");
   expect(requests.at(-1).payload).toEqual({ selected_codes: ["CS2040S"], archive_codes: ["CS1010S"] });
+  expect(new URL((await refresh).url()).searchParams.get("import")).toBe("success");
+});
+
+test("partial NUSMods imports retain successes and use a distinct result banner", async ({ page }) => {
+  await mount(page, async (body) => body.action === "import.preview" ? { body: preview } : { body: { items: [{ code: "CS2040S", status: "imported" }, { code: "XX0000", status: "not_found" }] } });
+  await page.getByLabel("NUSMods share URL").last().fill("https://nusmods.com/timetable/sem-1/share?CS2040S=LEC:1");
+  await page.getByRole("button", { name: "Preview modules" }).click();
+  const refresh = page.waitForRequest((request) => new URL(request.url()).pathname === "/settings/learning");
+  await page.getByRole("button", { name: "Confirm selected decisions" }).click();
+  await expect(page.getByRole("status")).toContainText("Some modules were not changed");
+  expect(new URL((await refresh).url()).searchParams.get("import")).toBe("partial");
+
+  await page.goto("/settings/learning?mock=1&import=partial");
+  await expect(page.getByText("Module import partly completed", { exact: true })).toBeVisible();
+  await page.goto("/settings/learning?mock=1&import=success");
+  await expect(page.getByText("Module import confirmed", { exact: true })).toBeVisible();
+});
+
+test("confirmation rejects an empty import decision", async ({ page }) => {
+  const requests = [];
+  const unavailable = {
+    ...preview,
+    reconciliation: { added: [], unchanged: [], removed: [], ambiguous: ["XX0000"] },
+    items: [preview.items[1]],
+  };
+  await mount(page, async (body) => {
+    requests.push(body);
+    return { body: unavailable };
+  });
+  await page.getByLabel("NUSMods share URL").last().fill("https://nusmods.com/timetable/sem-1/share?XX0000=LEC:1");
+  await page.getByRole("button", { name: "Preview modules" }).click();
+
+  await page.getByRole("button", { name: "Confirm selected decisions" }).click();
+
+  await expect(page.getByRole("status")).toContainText("Choose at least one available module");
+  expect(requests).toHaveLength(1);
 });
 
 test("failed confirmation states that existing enrollments remain", async ({ page }) => {

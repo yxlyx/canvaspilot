@@ -9,6 +9,7 @@ const DoneEvent = struct {
     grounded: bool,
     confidence: f64,
     message: ?[]const u8 = null,
+    outcome: []const u8 = "answer",
 };
 
 pub const Reply = struct {
@@ -17,6 +18,7 @@ pub const Reply = struct {
     grounded: bool = true,
     confidence: f64 = 0.0,
     source: []const u8 = "backend",
+    outcome: []const u8 = "answer",
 };
 
 pub fn aggregateSse(allocator: std.mem.Allocator, sse: []const u8) !Reply {
@@ -26,6 +28,7 @@ pub fn aggregateSse(allocator: std.mem.Allocator, sse: []const u8) !Reply {
     var grounded = false;
     var confidence: f64 = 0.0;
     var override_message: ?[]const u8 = null;
+    var outcome: []const u8 = "answer";
     var done_seen = false;
 
     // SSE producers commonly use CRLF. Normalize it so blank-frame splitting
@@ -86,6 +89,8 @@ pub fn aggregateSse(allocator: std.mem.Allocator, sse: []const u8) !Reply {
             grounded = parsed.grounded;
             confidence = parsed.confidence;
             override_message = parsed.message;
+            const legacy_no_evidence = !grounded and parsed.message != null and message_buf.items.len == 0 and citations.len == 0;
+            outcome = if (std.mem.eql(u8, parsed.outcome, "no_evidence") or legacy_no_evidence) "no_evidence" else "answer";
             done_seen = true;
         }
     }
@@ -98,5 +103,6 @@ pub fn aggregateSse(allocator: std.mem.Allocator, sse: []const u8) !Reply {
         .citations = citations,
         .grounded = grounded,
         .confidence = confidence,
+        .outcome = outcome,
     };
 }
