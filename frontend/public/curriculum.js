@@ -113,12 +113,18 @@
     const button = event.target.closest("[data-commit-import]"); if (!button) return;
     const selected_codes = [...previewRegion.querySelectorAll('input[name="selected_codes"]:checked')].map((input) => input.value);
     const archive_codes = [...previewRegion.querySelectorAll('input[name="archive_codes"]:checked')].map((input) => input.value);
+    if (!selected_codes.length && !archive_codes.length) {
+      status.textContent = "Choose at least one available module or an explicit archive decision before confirming.";
+      status.focus();
+      return;
+    }
     setBusy(button, true, "Confirming…");
     try {
       const result = await call("import.commit", { preview_id: previewId }, { selected_codes, archive_codes });
       const failures = (result.items || []).filter((item) => ["failed", "unavailable", "not_found"].includes(item.status));
-      status.textContent = failures.length ? "Some modules were not changed. Existing enrollments were not deleted by these failures. Reloading your local enrollments…" : "Import confirmed. Reloading your local enrollments…";
-      setTimeout(() => window.location.reload(), 600);
+      status.textContent = failures.length ? "Some modules were not changed. Existing enrollments were not deleted by these failures. Refreshing your local enrollments…" : "Import confirmed. Refreshing your local enrollments…";
+      const outcome = failures.length ? "partial" : "success";
+      setTimeout(() => { window.location.assign("/settings/learning?import=" + outcome); }, 600);
     } catch (error) { status.textContent = `${error.message} Existing enrollments remain unchanged unless an archive decision was confirmed.`; status.focus(); setBusy(button, false, ""); }
   });
 

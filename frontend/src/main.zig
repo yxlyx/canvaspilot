@@ -274,10 +274,23 @@ test "chat SSE aggregation requires a valid completed response" {
 
     const no_context = try lib.chat.aggregateSse(
         alloc,
-        "event: done\ndata: {\"grounded\":false,\"confidence\":0.0,\"message\":\"No grounded context was found.\"}\n\n",
+        "event: done\ndata: {\"grounded\":false,\"confidence\":0.0,\"message\":\"No grounded context was found.\",\"outcome\":\"no_evidence\"}\n\n",
     );
     try testing.expectEqualStrings("No grounded context was found.", no_context.message);
     try testing.expect(!no_context.grounded);
+    try testing.expectEqualStrings("no_evidence", no_context.outcome);
+
+    const legacy_no_context = try lib.chat.aggregateSse(
+        alloc,
+        "event: done\ndata: {\"grounded\":false,\"confidence\":0.0,\"message\":\"No relevant content found in your workspace sources.\"}\n\n",
+    );
+    try testing.expectEqualStrings("no_evidence", legacy_no_context.outcome);
+
+    const ungrounded_answer = try lib.chat.aggregateSse(
+        alloc,
+        "event: token\ndata: {\"text\":\"Answer lacked citations.\"}\n\nevent: done\ndata: {\"grounded\":false,\"confidence\":0.0}\n\n",
+    );
+    try testing.expectEqualStrings("answer", ungrounded_answer.outcome);
 
     try testing.expectError(error.InvalidSse, lib.chat.aggregateSse(alloc, "event: token\ndata: {\"text\":\"truncated\"}\n\n"));
     try testing.expectError(error.InvalidSse, lib.chat.aggregateSse(alloc, "event: token\ndata: not-json\n\nevent: done\ndata: {\"grounded\":false,\"confidence\":0.0}\n\n"));

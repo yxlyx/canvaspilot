@@ -359,6 +359,23 @@ test("Knowledge recommendations retain contextual destinations", async ({ page }
   await expect(page.getByRole("link", { name: "Review paper evidence" })).toHaveAttribute("href", /\/sources\/papers\/demo-paper-functional-midterm\?mock=1$/);
 });
 
+test("activity timestamps and source-processing guidance stay learner readable", async ({ page }) => {
+  await page.goto("/wiki/activity?mock=1");
+  const times = page.locator(".cp-activity-ledger time");
+  await expect(times).not.toHaveCount(0);
+  for (const time of await times.all()) {
+    await expect(time).toHaveAttribute("datetime", /^\d{4}-\d{2}-\d{2}T/);
+    await expect(time).toHaveAttribute("title", /UTC$/);
+    await expect(time).toHaveText(/(?:ago|in \d)/);
+  }
+
+  await page.goto("/chat?mock=1");
+  await expect(page.locator(".context-sources a").first()).toHaveAttribute("href", /\/sources\?mock=1#processing$/);
+  const wikiSource = fs.readFileSync(path.join(__dirname, "../../app/wiki/index.zig"), "utf8");
+  expect(wikiSource).toContain("Check source processing");
+  expect(wikiSource).toContain("#processing");
+});
+
 test("dark landing closing panel keeps readable editorial contrast", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Switch to dark mode" }).click();

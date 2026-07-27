@@ -107,10 +107,10 @@ pub fn render(req: mer.Request) mer.Response {
                 .body = "{\"error\":\"chat access forbidden\"}",
             };
         }
-        return .{
-            .status = .bad_gateway,
-            .content_type = .json,
-            .body = "{\"error\":\"live chat is unavailable; no demo answer was substituted\"}",
+        return switch (e) {
+            error.ProviderUnavailable => .{ .status = .conflict, .content_type = .json, .body = "{\"error\":\"provider_unavailable\",\"detail\":\"The answer provider needs attention. Your sources remain available.\"}" },
+            error.BackendUnreachable => .{ .status = .bad_gateway, .content_type = .json, .body = "{\"error\":\"backend_unavailable\",\"detail\":\"WikiBase could not reach the local backend. Your question and source data are safe.\"}" },
+            else => .{ .status = .service_unavailable, .content_type = .json, .body = "{\"error\":\"retrieval_unavailable\",\"detail\":\"Source retrieval stopped before an answer was created.\"}" },
         };
     }
 }
@@ -120,10 +120,37 @@ pub fn render(req: mer.Request) mer.Response {
 const BackendError = error{
     BackendUnreachable,
     BackendBadStatus,
+    ProviderUnavailable,
     SerializeFailed,
     AuthFailed,
     Forbidden,
 };
+
+const ErrorEnvelope = struct {
+    @"error": []const u8 = "",
+};
+
+fn isProviderError(allocator: std.mem.Allocator, body: []const u8) bool {
+    const parsed = std.json.parseFromSlice(ErrorEnvelope, allocator, body, .{
+        .ignore_unknown_fields = true,
+    }) catch return false;
+    defer parsed.deinit();
+    const code = parsed.value.@"error";
+    return std.mem.eql(u8, code, "provider_not_configured") or
+        std.mem.eql(u8, code, "credential_unavailable") or
+        std.mem.eql(u8, code, "reauth_required") or
+        std.mem.eql(u8, code, "provider_authentication_failed") or
+        std.mem.eql(u8, code, "provider_unavailable") or
+        std.mem.startsWith(u8, code, "local_codex_");
+}
+
+fn classifyBackendFailure(allocator: std.mem.Allocator, status: u16, body: []const u8) ?BackendError {
+    if (isProviderError(allocator, body)) return error.ProviderUnavailable;
+    if (status == 401) return error.AuthFailed;
+    if (status == 403) return error.Forbidden;
+    if (status >= 400) return error.BackendBadStatus;
+    return null;
+}
 
 fn callBackend(
     allocator: std.mem.Allocator,
@@ -159,14 +186,24 @@ fn callBackend(
     defer res.deinit(allocator);
 
     const status_int: u16 = @intFromEnum(res.status);
-    if (status_int == 401) return error.AuthFailed;
-    if (status_int == 403) return error.Forbidden;
-    if (status_int >= 400) {
-        log.warn("chat: backend returned HTTP {d}", .{status_int});
-        return error.BackendBadStatus;
+    if (classifyBackendFailure(allocator, status_int, res.body)) |failure| {
+        if (failure == error.BackendBadStatus) log.warn("chat: backend returned HTTP {d}", .{status_int});
+        return failure;
     }
 
     return try lib.chat.aggregateSse(allocator, res.body);
+}
+
+test "provider error envelopes are distinguished from session and retrieval errors" {
+    const allocator = std.testing.allocator;
+    try std.testing.expect(isProviderError(allocator, "{\"error\":\"reauth_required\",\"detail\":\"Reconnect\"}"));
+    try std.testing.expect(isProviderError(allocator, "{\"error\":\"provider_not_configured\"}"));
+    try std.testing.expect(isProviderError(allocator, "{\"error\":\"provider_authentication_failed\"}"));
+    try std.testing.expect(isProviderError(allocator, "{\"error\":\"local_codex_unavailable\"}"));
+    try std.testing.expect(!isProviderError(allocator, "{\"error\":\"authentication_required\"}"));
+    try std.testing.expect(!isProviderError(allocator, "{\"error\":\"retrieval_failed\"}"));
+    try std.testing.expectEqual(error.ProviderUnavailable, classifyBackendFailure(allocator, 401, "{\"error\":\"reauth_required\"}").?);
+    try std.testing.expectEqual(error.AuthFailed, classifyBackendFailure(allocator, 401, "{\"error\":\"authentication_required\"}").?);
 }
 
 // ── SSE aggregator ──────────────────────────────────────────────────────────

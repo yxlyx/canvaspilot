@@ -60,6 +60,9 @@ pub fn render(req: mer.Request) mer.Response {
     const w = &buf.writer;
     lib.m3.demoMarker(req, w) catch return mer.internalError("learning render failed");
     lib.settings_ui.heading(req, w, "learning", "Module scope", "Learning", "Import your modules, verify their topic maps, and choose a stable local learning scope.", demo) catch return mer.internalError("learning render failed");
+    if (req.queryParam("import")) |outcome| {
+        if (std.mem.eql(u8, outcome, "success")) w.writeAll("<div class=\"notice notice-success\" role=\"status\"><strong>Module import confirmed</strong><span>Your enrollment list below includes the saved selection.</span></div>") catch return mer.internalError("learning render failed") else if (std.mem.eql(u8, outcome, "partial")) w.writeAll("<div class=\"notice notice-warn\" role=\"status\"><strong>Module import partly completed</strong><span>Successful selections are saved. Review the enrollment list and retry only the unavailable modules.</span></div>") catch return mer.internalError("learning render failed");
+    }
 
     w.writeAll("<div class=\"cp-learning-workflow\"><section class=\"cp-settings-section cp-import-section\"><header><div><p class=\"eyebrow\">1 · Import</p><h2>Add modules from NUSMods</h2><p>A share link and manual module codes use the same validated preview. Nothing changes until you confirm.</p></div></header><form data-module-import novalidate><fieldset") catch return mer.internalError("learning render failed");
     if (demo) w.writeAll(" disabled") catch return mer.internalError("learning render failed");

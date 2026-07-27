@@ -63,6 +63,10 @@ fn payloadJson(allocator: std.mem.Allocator, payload: ?std.json.Value) ![]const 
     return out.written();
 }
 
+const CommitPayload = struct {
+    selected_codes: []const []const u8 = &.{},
+    archive_codes: []const []const u8 = &.{},
+};
 const ProposalPayload = struct { source_ids: []const []const u8 = &.{} };
 const ManualPayload = struct {
     topic_id: []const u8,
@@ -73,6 +77,23 @@ const ManualPayload = struct {
 const DecisionPayload = struct { decision: []const u8 };
 
 fn validCoverageBody(allocator: std.mem.Allocator, action: []const u8, body: []const u8) bool {
+    if (std.mem.eql(u8, action, "import.commit")) {
+        var parsed = std.json.parseFromSlice(CommitPayload, allocator, body, .{ .ignore_unknown_fields = false }) catch return false;
+        defer parsed.deinit();
+        const selected = parsed.value.selected_codes;
+        const archived = parsed.value.archive_codes;
+        if (selected.len + archived.len < 1 or selected.len + archived.len > 30) return false;
+        for (selected, 0..) |code, index| {
+            if (!validCode(code)) return false;
+            for (selected[0..index]) |prior| if (std.ascii.eqlIgnoreCase(code, prior)) return false;
+            for (archived) |other| if (std.ascii.eqlIgnoreCase(code, other)) return false;
+        }
+        for (archived, 0..) |code, index| {
+            if (!validCode(code)) return false;
+            for (archived[0..index]) |prior| if (std.ascii.eqlIgnoreCase(code, prior)) return false;
+        }
+        return true;
+    }
     if (std.mem.eql(u8, action, "coverage.recompute")) {
         var parsed = std.json.parseFromSlice(ProposalPayload, allocator, body, .{ .ignore_unknown_fields = false }) catch return false;
         defer parsed.deinit();
@@ -149,7 +170,7 @@ pub fn render(req: mer.Request) mer.Response {
     const target = route(req.allocator, parsed.value) catch return mer.badRequest("invalid curriculum action or identifier");
     const body = if (target[0].requestHasBody()) payloadJson(req.allocator, parsed.value.payload) catch return mer.badRequest("invalid curriculum payload") else null;
     if (std.mem.eql(u8, parsed.value.action, "import.preview") and !validPreviewBody(req.allocator, body.?)) return mer.badRequest("invalid import preview fields");
-    if (target[0].requestHasBody() and !validCoverageBody(req.allocator, parsed.value.action, body.?)) return mer.badRequest("invalid coverage payload");
+    if (target[0].requestHasBody() and !validCoverageBody(req.allocator, parsed.value.action, body.?)) return mer.badRequest("invalid curriculum payload");
     const result = lib.backend.proxy(req.allocator, session.token, "", target[0], target[1], body, 2 * 1024 * 1024);
     if (result.status == 0) return .{ .status = .bad_gateway, .content_type = .json, .body = "{\"error\":\"curriculum service unavailable\"}" };
     if (result.status == 401) {
@@ -165,6 +186,14 @@ test "import preview validation mirrors bounded backend fields" {
     try std.testing.expect(validPreviewBody(std.testing.allocator, "{\"academic_year\":\"2025-2026\",\"module_codes\":[\"CS2040S\"],\"semester\":1}"));
     try std.testing.expect(!validPreviewBody(std.testing.allocator, "{\"academic_year\":\"2025-2027\",\"module_codes\":[\"CS 2040\"],\"semester\":1}"));
     try std.testing.expect(!validPreviewBody(std.testing.allocator, "{\"academic_year\":\"2025-2026\",\"share_url\":\"https://nusmods.com\",\"module_codes\":[\"CS2040S\"],\"semester\":1}"));
+}
+
+test "import commit requires bounded unique disjoint decisions" {
+    const allocator = std.testing.allocator;
+    try std.testing.expect(validCoverageBody(allocator, "import.commit", "{\"selected_codes\":[\"CS2040S\"],\"archive_codes\":[\"CS1010S\"]}"));
+    try std.testing.expect(!validCoverageBody(allocator, "import.commit", "{\"selected_codes\":[],\"archive_codes\":[]}"));
+    try std.testing.expect(!validCoverageBody(allocator, "import.commit", "{\"selected_codes\":[\"CS2040S\"],\"archive_codes\":[\"cs2040s\"]}"));
+    try std.testing.expect(!validCoverageBody(allocator, "import.commit", "{\"selected_codes\":[\"CS 2040\"],\"archive_codes\":[]}"));
 }
 
 test "curriculum bridge only accepts UUID-bound routes" {
