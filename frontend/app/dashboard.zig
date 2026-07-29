@@ -37,6 +37,7 @@ pub fn render(req: mer.Request) mer.Response {
     var sources_available = true;
     var pages_available = true;
     var decks_available = true;
+    var provider_state: lib.provider_ui.State = if (use_mock) .active else .unavailable;
 
     if (!use_mock) {
         const enrollments_result = lib.backend.listEnrollments(req.allocator, session.token);
@@ -53,6 +54,8 @@ pub fn render(req: mer.Request) mer.Response {
         if (pages_result.value) |pages| live_pages = pages.value else if (pages_result.status == 401) return lib.m3.liveError(req, "Workspace", 401) else pages_available = false;
         const decks_result = lib.backend.listFlashcardDecks(req.allocator, session.token);
         if (decks_result.value) |decks| live_decks = decks.value else if (decks_result.status == 401) return lib.m3.liveError(req, "Workspace", 401) else decks_available = false;
+        const provider_result = lib.backend.providerSettings(req.allocator, session.token);
+        if (provider_result.value) |items| provider_state = lib.provider_ui.classify(items.value) else if (provider_result.status == 401) return lib.m3.liveError(req, "Workspace", 401);
     }
 
     const now_secs = lib.time.nowSecs();
@@ -130,22 +133,22 @@ pub fn render(req: mer.Request) mer.Response {
     metricVisual(w, ICON_WIKI, "moss", if (pages_available) wiki_total else null, "Wiki topics", if (pages_available) "Generated from evidence" else "Temporarily unavailable") catch return mer.internalError("workspace render failed");
     metricVisual(w, ICON_CARDS, "gold", if (decks_available) due_cards else null, "Approved cards", if (decks_available) "Available for self-reported review" else "Temporarily unavailable") catch return mer.internalError("workspace render failed");
     metricVisual(w, ICON_ASK, "rose", null, "Cited questions", "Measured after grounded answers") catch return mer.internalError("workspace render failed");
+    w.writeAll("</section>") catch return mer.internalError("workspace render failed");
+    lib.provider_ui.renderBoundary(w, provider_state, "Ask and new flashcard drafts need a provider. Sources, Wiki, existing decks, and module management remain available.") catch return mer.internalError("workspace render failed");
     const learning_settings_href = lib.m3.demoHref(req.allocator, req, "/settings/learning") catch return mer.internalError("workspace render failed");
-    w.print("</section><div class=\"dashboard-columns\"><section><div class=\"section-title\"><div><h2>Local modules</h2><p>Stable enrollment scopes for sources, Wiki, cards, and learning evidence.</p></div><a href=\"{s}\">Manage modules</a></div><div class=\"module-list surface\">", .{learning_settings_href}) catch return mer.internalError("workspace render failed");
+    w.print("<div class=\"dashboard-columns\"><section><div class=\"section-title\"><div><h2>Local modules</h2><p>Stable enrollment scopes for sources, Wiki, cards, and learning evidence.</p></div><a href=\"{s}\">Manage modules</a></div><div class=\"module-grid\">", .{learning_settings_href}) catch return mer.internalError("workspace render failed");
     if (use_mock) {
-        for (modules_slice, 0..) |module, index| {
+        for (modules_slice) |module| {
             const module_href = lib.m3.demoHref(req.allocator, req, "/wiki") catch wiki_href;
-            const color: []const u8 = if (index % 2 == 0) "blue" else "green";
             const initials = if (module.code.len >= 2) module.code[0..2] else module.code;
-            w.print("<a href=\"{s}\"><span class=\"module-code {s}\">{s}</span><div><strong>{s}</strong><small>{s} · synthetic enrollment</small></div><b>Demo</b></a>", .{ module_href, color, lib.ui.escapeSafe(req.allocator, initials), lib.ui.escapeSafe(req.allocator, module.code), lib.ui.escapeSafe(req.allocator, module.name) }) catch return mer.internalError("workspace render failed");
+            w.print("<article class=\"module-tile surface\"><span class=\"module-code\">{s}</span><div><p class=\"eyebrow\">Synthetic enrollment</p><h3>{s}</h3><p>{s}</p><small>Illustrative topics</small></div><a href=\"{s}\">Open <span aria-hidden=\"true\">→</span></a></article>", .{ lib.ui.escapeSafe(req.allocator, initials), lib.ui.escapeSafe(req.allocator, module.code), lib.ui.escapeSafe(req.allocator, module.name), module_href }) catch return mer.internalError("workspace render failed");
         }
     } else if (enrollments.len == 0) {
         w.writeAll("<div class=\"cp-empty\">No local module enrollments yet. Import one to begin the learning loop.</div>") catch return mer.internalError("workspace render failed");
-    } else for (enrollments, 0..) |enrollment, index| {
+    } else for (enrollments) |enrollment| {
         const href = std.fmt.allocPrint(req.allocator, "/learning/{s}", .{enrollment.id}) catch "/settings/learning";
-        const color: []const u8 = if (index % 2 == 0) "blue" else "green";
         const initials = if (enrollment.code.len >= 2) enrollment.code[0..2] else enrollment.code;
-        w.print("<a href=\"{s}\"><span class=\"module-code {s}\">{s}</span><div><strong>{s}</strong><small>{s} · Semester {d} · {s} topics</small></div><b>Open</b></a>", .{ lib.ui.escapeSafe(req.allocator, href), color, lib.ui.escapeSafe(req.allocator, initials), lib.ui.escapeSafe(req.allocator, enrollment.code), lib.ui.escapeSafe(req.allocator, enrollment.academic_year), enrollment.semester, lib.ui.escapeSafe(req.allocator, enrollment.topic_state) }) catch return mer.internalError("workspace render failed");
+        w.print("<article class=\"module-tile surface\"><span class=\"module-code\">{s}</span><div><p class=\"eyebrow\">{s} · Semester {d}</p><h3>{s}</h3><p>{s}</p><small>{s} topics</small></div><a href=\"{s}\">Open <span aria-hidden=\"true\">→</span></a></article>", .{ lib.ui.escapeSafe(req.allocator, initials), lib.ui.escapeSafe(req.allocator, enrollment.academic_year), enrollment.semester, lib.ui.escapeSafe(req.allocator, enrollment.code), lib.ui.escapeSafe(req.allocator, enrollment.title), lib.ui.escapeSafe(req.allocator, enrollment.topic_state), lib.ui.escapeSafe(req.allocator, href) }) catch return mer.internalError("workspace render failed");
     }
     w.print("</div></section><section><div class=\"section-title\"><div><h2>Recent evidence</h2><p>Latest activity across the workspace.</p></div><a href=\"{s}\">All sources</a></div><div class=\"activity-list surface\">", .{sources_href}) catch return mer.internalError("workspace render failed");
     if (use_mock and lib.mock.sources.len > 0) {

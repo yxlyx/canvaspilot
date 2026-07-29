@@ -160,7 +160,9 @@ test("module settings stays focused and disables only the demo importer", async 
   for (const control of await importer.locator("input, select, button").all()) await expect(control).toBeDisabled();
   await expect(page.getByRole("heading", { name: "Your local modules" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Choose what happens after intake" })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Your daily starting point" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Your daily starting point" })).toBeVisible();
+  const defaults = page.getByRole("group", { name: "Default module and daily review target" });
+  await expect(defaults).toHaveAttribute("disabled", "");
 });
 
 test("source health owns the relocated processing controls", async ({ page }) => {
@@ -183,9 +185,15 @@ test("source activity uses concise words and distinct visual states", async ({ p
   await expect(completed).toBeVisible();
   await expect(waiting).toBeVisible();
   await expect(running).toBeVisible();
-  const colors = await Promise.all([completed, waiting].map((item) => item.evaluate((node) => getComputedStyle(node).backgroundColor)));
+  const colors = await Promise.all([completed, waiting].map((item) => item.locator("svg:visible").evaluate((node) => getComputedStyle(node).color)));
   expect(colors[0]).not.toBe(colors[1]);
-  await expect.poll(() => running.evaluate((node) => getComputedStyle(node).animationName)).not.toBe("none");
+  await expect(running.locator(".cp-state-icon-progress")).toBeVisible();
+  const alignment = await running.evaluate((node) => {
+    const box = node.getBoundingClientRect();
+    const icon = node.querySelector("svg:where(.cp-state-icon-progress)").getBoundingClientRect();
+    return Math.abs((box.left + box.width / 2) - (icon.left + icon.width / 2));
+  });
+  expect(alignment).toBeLessThanOrEqual(1);
 });
 
 test("exact source context focuses and opens the owned source record", async ({ page }) => {
