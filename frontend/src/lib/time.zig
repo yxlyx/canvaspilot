@@ -127,6 +127,14 @@ pub fn isUrgent(iso: []const u8, now_secs: i64) bool {
     return delta >= 0 and delta <= SECS_PER_DAY * 2;
 }
 
+/// Return the first calendar year of the academic year containing `now_secs`.
+/// The NUSMods catalogue rolls over in July, ahead of Semester 1.
+pub fn academicYearStart(now_secs: i64, start_month: u8) i64 {
+    const month = if (start_month >= 1 and start_month <= 12) start_month else 7;
+    const civ = civilFromDays(@divFloor(now_secs, SECS_PER_DAY));
+    return if (civ.m >= month) civ.y else civ.y - 1;
+}
+
 /// Wall-clock seconds since the Unix epoch. `std.time.timestamp()` was
 /// removed in Zig 0.16, so we read REALTIME directly via libc — same
 /// trick merjs's server.zig uses internally.
@@ -163,6 +171,12 @@ test "formatAbsolute includes the year" {
     const value = try formatAbsolute(testing.allocator, "2026-05-12T09:30:00Z");
     defer testing.allocator.free(value);
     try testing.expectEqualStrings("12 May 2026, 09:30 UTC", value);
+}
+
+test "academic year rolls over in July" {
+    try testing.expectEqual(@as(i64, 2025), academicYearStart(parseIsoSecs("2026-06-30T23:59:59Z").?, 7));
+    try testing.expectEqual(@as(i64, 2026), academicYearStart(parseIsoSecs("2026-07-01T00:00:00Z").?, 7));
+    try testing.expectEqual(@as(i64, 2026), academicYearStart(parseIsoSecs("2027-01-15T00:00:00Z").?, 7));
 }
 
 test "isUrgent flags deadlines within 48h" {

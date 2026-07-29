@@ -15,9 +15,8 @@ async function mount(page, handler) {
   });
   await page.goto("/login");
   await page.setContent(`
-    <main><form data-module-import novalidate><fieldset><label><input type="radio" name="import_method" value="share_url" checked> NUSMods share URL</label><label><input type="radio" name="import_method" value="manual_codes"> Manual module codes</label><label data-share-field>NUSMods share URL<input name="share_url"></label><label data-codes-field hidden>Module codes<input name="module_codes"></label><label>Academic year<input name="academic_year" value="2025-2026"></label><label>Semester<select name="semester"><option value="1">Semester 1</option></select></label><button type="submit">Preview modules</button></fieldset><p class="cp-form-status" role="status" tabindex="-1"></p></form>
-    <section data-import-preview hidden aria-live="polite"></section>
-    <article data-enrollment-id="${enrollmentId}"><button type="button" data-review-topics>Review canonical topics</button><section data-topic-review hidden></section></article></main>`);
+    <main><form data-module-import novalidate><fieldset><label><input type="radio" name="import_method" value="share_url" checked> NUSMods share link</label><label><input type="radio" name="import_method" value="manual_codes"> Module codes</label><label data-share-field>NUSMods share URL<input name="share_url"></label><label data-codes-field hidden>Module codes<input name="module_codes"></label><label>Academic year<select name="academic_year"><option value="2025-2026">2025–2026</option></select></label><label data-semester-field hidden>Semester<select name="semester"><option value="1">Semester 1</option></select></label><button type="submit">Import modules</button></fieldset><p class="cp-form-status" data-import-status role="status" tabindex="-1"></p></form>
+    <section data-import-preview hidden aria-live="polite" tabindex="-1"></section></main>`);
   await page.addScriptTag({ path: asset });
 }
 
@@ -30,11 +29,6 @@ const preview = {
   ],
 };
 
-const topics = [
-  { id: revisionId, title: "Asymptotic analysis", archived: false, state: "provisional", provenance: "nusmods lesson plan", source_sha256: "source-hash" },
-  { id: enrollmentId, title: "Sorting", archived: false, state: "provisional", provenance: "nusmods lesson plan", source_sha256: "source-hash" },
-];
-
 test("validation, preview selection, explicit archive, and confirmation are bounded", async ({ page }) => {
   const requests = [];
   await mount(page, async (body) => {
@@ -43,19 +37,24 @@ test("validation, preview selection, explicit archive, and confirmation are boun
     return { body: { preview_id: revisionId, items: [{ code: "CS2040S", status: "imported", enrollment_id: enrollmentId }] } };
   });
   await page.getByLabel("NUSMods share URL").last().fill("https://example.com/not-supported");
-  await page.getByRole("button", { name: "Preview modules" }).click();
-  await expect(page.getByRole("status")).toContainText("supported HTTPS nusmods.com");
+  await page.getByRole("button", { name: "Import modules" }).click();
+  await expect(page.getByRole("status")).toContainText("complete HTTPS NUSMods");
   expect(requests).toHaveLength(0);
 
   await page.getByLabel("NUSMods share URL").last().fill("https://nusmods.com/timetable/sem-1/share?CS2040S=LEC:1");
-  await page.getByRole("button", { name: "Preview modules" }).click();
-  await expect(page.getByText("CS2040S — Data Structures and Algorithms")).toBeVisible();
-  await expect(page.getByText("XX0000 — Unavailable module")).toBeVisible();
+  await page.getByRole("button", { name: "Import modules" }).click();
+  const availableCard = page.locator(".cp-preview-card").filter({ hasText: "Data Structures and Algorithms" });
+  const unavailableCard = page.locator(".cp-preview-card").filter({ hasText: "Unavailable module" });
+  await expect(availableCard.getByText("CS2040S", { exact: true })).toBeVisible();
+  await expect(availableCard.getByText("Data Structures and Algorithms", { exact: true })).toBeVisible();
+  await expect(unavailableCard.getByText("XX0000", { exact: true })).toBeVisible();
   await expect(page.locator('input[value="XX0000"]')).toBeDisabled();
   await page.getByLabel("Archive CS1010S").check();
-  const refresh = page.waitForRequest((request) => new URL(request.url()).pathname === "/settings/learning");
-  await page.getByRole("button", { name: "Confirm selected decisions" }).click();
-  await expect(page.getByRole("status")).toContainText("Import confirmed");
+  await expect(page.locator("[data-commit-import]")).toHaveText("Import 1 module and archive 1 module");
+  await expect(page.locator("[data-commit-import]")).toHaveClass(/cp-btn-danger/);
+  const refresh = page.waitForRequest((request) => new URL(request.url()).pathname === "/dashboard");
+  await page.locator("[data-commit-import]").click();
+  await expect(page.getByRole("status")).toContainText("Modules imported");
   expect(requests.at(-1).payload).toEqual({ selected_codes: ["CS2040S"], archive_codes: ["CS1010S"] });
   expect(new URL((await refresh).url()).searchParams.get("import")).toBe("success");
 });
@@ -63,16 +62,16 @@ test("validation, preview selection, explicit archive, and confirmation are boun
 test("partial NUSMods imports retain successes and use a distinct result banner", async ({ page }) => {
   await mount(page, async (body) => body.action === "import.preview" ? { body: preview } : { body: { items: [{ code: "CS2040S", status: "imported" }, { code: "XX0000", status: "not_found" }] } });
   await page.getByLabel("NUSMods share URL").last().fill("https://nusmods.com/timetable/sem-1/share?CS2040S=LEC:1");
-  await page.getByRole("button", { name: "Preview modules" }).click();
-  const refresh = page.waitForRequest((request) => new URL(request.url()).pathname === "/settings/learning");
-  await page.getByRole("button", { name: "Confirm selected decisions" }).click();
-  await expect(page.getByRole("status")).toContainText("Some modules were not changed");
+  await page.getByRole("button", { name: "Import modules" }).click();
+  const refresh = page.waitForRequest((request) => new URL(request.url()).pathname === "/dashboard");
+  await page.locator("[data-commit-import]").click();
+  await expect(page.getByRole("status")).toContainText("Some modules still need attention");
   expect(new URL((await refresh).url()).searchParams.get("import")).toBe("partial");
 
-  await page.goto("/settings/learning?mock=1&import=partial");
-  await expect(page.getByText("Module import partly completed", { exact: true })).toBeVisible();
-  await page.goto("/settings/learning?mock=1&import=success");
-  await expect(page.getByText("Module import confirmed", { exact: true })).toBeVisible();
+  await page.goto("/dashboard?mock=1&import=partial");
+  await expect(page.getByText("Some modules need attention.", { exact: true })).toBeVisible();
+  await page.goto("/dashboard?mock=1&import=success");
+  await expect(page.getByText("Modules imported.", { exact: true })).toBeVisible();
 });
 
 test("confirmation rejects an empty import decision", async ({ page }) => {
@@ -87,59 +86,65 @@ test("confirmation rejects an empty import decision", async ({ page }) => {
     return { body: unavailable };
   });
   await page.getByLabel("NUSMods share URL").last().fill("https://nusmods.com/timetable/sem-1/share?XX0000=LEC:1");
-  await page.getByRole("button", { name: "Preview modules" }).click();
+  await page.getByRole("button", { name: "Import modules" }).click();
 
-  await page.getByRole("button", { name: "Confirm selected decisions" }).click();
+  await page.locator("[data-commit-import]").click();
 
   await expect(page.getByRole("status")).toContainText("Choose at least one available module");
   expect(requests).toHaveLength(1);
 });
 
-test("failed confirmation states that existing enrollments remain", async ({ page }) => {
+test("uncertain confirmation failures direct users to reconcile before retrying", async ({ page }) => {
   await mount(page, async (body) => body.action === "import.preview" ? { body: preview } : { status: 503, body: { detail: "Provider unavailable" } });
   await page.getByLabel("NUSMods share URL").last().fill("https://nusmods.com/timetable/sem-1/share?CS2040S=LEC:1");
-  await page.getByRole("button", { name: "Preview modules" }).click();
-  await page.getByRole("button", { name: "Confirm selected decisions" }).click();
-  await expect(page.getByRole("status")).toContainText("Existing enrollments remain unchanged");
+  await page.getByRole("button", { name: "Import modules" }).click();
+  await page.locator("[data-commit-import]").click();
+  await expect(page.getByRole("status")).toContainText("result could not be confirmed");
 });
 
-test("topic IDs survive rename, reorder and archive; syllabus requires explicit decision", async ({ page }) => {
+test("archive-only confirmation is labelled as a destructive archive", async ({ page }) => {
   const requests = [];
   await mount(page, async (body) => {
     requests.push(body);
-    if (body.action === "topics.list") return { body: topics };
-    if (body.action === "topics.save") return { body: body.payload.topics.map((topic, position) => ({ ...topic, position, state: "canonical", provenance: "student review", source_sha256: "source-hash" })) };
-    if (body.action === "revision.preview") return { body: { id: revisionId, algorithm: "deterministic-v1", status: "pending", base_topics: topics, proposed_topics: [{ id: revisionId, title: "Complexity" }], mapping: { preserved: [revisionId] } } };
-    return { body: { id: revisionId, status: body.payload.decision === "accept" ? "accepted" : "rejected" } };
+    if (body.action === "import.preview") return { body: preview };
+    return { body: { items: [{ code: "CS1010S", status: "archived" }] } };
   });
-  await page.getByRole("button", { name: "Review canonical topics" }).click();
-  const titles = page.getByLabel("Topic title");
-  await titles.nth(0).fill("Complexity analysis");
-  await page.locator(".cp-topic-row").nth(1).getByRole("button", { name: "Move up" }).click();
-  await page.locator(".cp-topic-row").nth(1).getByLabel("Archived").check();
-  await page.getByRole("button", { name: "Save complete topic list" }).click();
-  const save = requests.find((request) => request.action === "topics.save");
-  expect(save.payload.topics.map((topic) => topic.id)).toEqual([enrollmentId, revisionId]);
-  expect(save.payload.topics[1]).toMatchObject({ title: "Complexity analysis", archived: true });
-  await expect(page.getByRole("article").getByRole("status")).toContainText("Canonical topic list saved");
-
-  await page.getByLabel("User-owned READY source UUID").fill(enrollmentId);
-  await page.getByRole("button", { name: "Preview syllabus proposal" }).click();
-  await expect(page.getByText("It has not changed your canonical topics.")).toBeVisible();
-  await page.getByRole("button", { name: "Reject proposal" }).click();
-  expect(requests.at(-1)).toMatchObject({ action: "revision.decide", payload: { decision: "reject" } });
-  await expect(page.getByRole("article").getByRole("status")).toContainText("Canonical topics were not changed");
+  await page.getByLabel("NUSMods share URL").fill("https://nusmods.com/timetable/sem-1/share?CS2040S=LEC:1");
+  await page.getByRole("button", { name: "Import modules" }).click();
+  await page.locator('input[value="CS2040S"]').uncheck();
+  await page.getByLabel("Archive CS1010S").check();
+  const confirm = page.locator("[data-commit-import]");
+  await expect(confirm).toHaveText("Archive 1 module");
+  await expect(confirm).toHaveClass(/cp-btn-danger/);
+  await confirm.click();
+  expect(requests.at(-1).payload).toEqual({ selected_codes: [], archive_codes: ["CS1010S"] });
 });
 
-test("mobile controls remain keyboard reachable and labelled", async ({ page }) => {
+test("confirmation enforces the combined 30-decision limit", async ({ page }) => {
+  const requests = [];
+  const codes = Array.from({ length: 30 }, (_, index) => `CS${String(index).padStart(4, "0")}`);
+  const largePreview = {
+    ...preview,
+    reconciliation: { added: codes, unchanged: [], removed: ["MA1521"], ambiguous: [] },
+    items: codes.map((code) => ({ ...preview.items[0], code, title: `Module ${code}` })),
+  };
+  await mount(page, async (body) => { requests.push(body); return { body: largePreview }; });
+  await page.getByLabel("NUSMods share URL").fill("https://nusmods.com/timetable/sem-1/share?CS2040S=LEC:1");
+  await page.getByRole("button", { name: "Import modules" }).click();
+  await page.getByLabel("Archive MA1521").check();
+  await page.locator("[data-commit-import]").click();
+  await expect(page.getByRole("status")).toContainText("no more than 30 combined");
+  expect(requests).toHaveLength(1);
+});
+
+test("mobile import controls remain keyboard reachable and labelled", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 667 });
-  await mount(page, async () => ({ body: topics }));
-  await page.getByRole("button", { name: "Review canonical topics" }).focus();
+  await mount(page, async () => ({ body: preview }));
+  await page.getByLabel("NUSMods share URL").fill("https://nusmods.com/timetable/sem-1/share?CS2040S=LEC:1");
+  await page.getByRole("button", { name: "Import modules" }).focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByLabel("Topic title").first()).toBeVisible();
-  await page.getByRole("button", { name: "Add topic" }).focus();
-  await page.keyboard.press("Enter");
-  await expect(page.getByLabel("Topic title").last()).toBeFocused();
+  await expect(page.locator("[data-import-preview]")).toBeVisible();
+  await expect(page.locator("[data-commit-import]")).toBeVisible();
 });
 
 test("module-scoped link intake stays a bookmark and retains enrollment identity", async ({ page }) => {

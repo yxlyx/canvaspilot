@@ -215,13 +215,11 @@ test("legacy workspace pages keep fixtures behind exact explicit demo mode", asy
   await expect.poll(() => new URL(page.url()).searchParams.get("mock")).toBe("1");
 });
 
-test("workspace exposes the complete student learning loop without a sync action", async ({ page }) => {
+test("workspace omits the redundant learning-loop card without losing module access", async ({ page }) => {
   await page.goto("/dashboard?mock=1");
-  const loop = page.getByRole("region", { name: /Move from curriculum to evidence/ });
-  await expect(loop.getByRole("link", { name: /Import module and review topics/ })).toHaveAttribute("href", /\/settings\/learning\?mock=1$/);
-  await expect(loop.getByRole("link", { name: /Add and process sources/ })).toHaveAttribute("href", /\/sources\?mock=1$/);
-  await expect(loop.getByRole("link", { name: /Read and ask with citations/ })).toHaveAttribute("href", /\/wiki\?mock=1$/);
-  await expect(loop.getByRole("link", { name: /Review drafts, publish, and study/ })).toHaveAttribute("href", /\/flashcards\?mock=1$/);
+  await expect(page.getByText("Student learning loop", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Local modules" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Manage modules" })).toHaveAttribute("href", /\/settings\/learning\?mock=1$/);
   await expect(page.getByText("Approved cards", { exact: true })).toBeVisible();
   await expect(page.locator("#cp-dashboard-sync")).toHaveCount(0);
 });

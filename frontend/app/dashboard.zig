@@ -105,6 +105,13 @@ pub fn render(req: mer.Request) mer.Response {
     if (auth) |auth_state| {
         if (std.mem.eql(u8, auth_state, "registered") or std.mem.eql(u8, auth_state, "signed_in")) w.writeAll("<p class=\"cp-inline-status\" role=\"status\">Your account is ready.</p>") catch return mer.internalError("workspace render failed");
     }
+    if (req.queryParam("import")) |import_state| {
+        if (std.mem.eql(u8, import_state, "success")) {
+            w.writeAll("<p class=\"cp-inline-status cp-dashboard-import-status\" role=\"status\"><strong>Modules imported.</strong> Your local modules are ready below.</p>") catch return mer.internalError("workspace render failed");
+        } else if (std.mem.eql(u8, import_state, "partial")) {
+            w.writeAll("<p class=\"cp-inline-status cp-dashboard-import-status is-warning\" role=\"status\"><strong>Some modules need attention.</strong> Successful modules are ready below; retry unavailable modules from Manage modules.</p>") catch return mer.internalError("workspace render failed");
+        }
+    }
 
     const hero_path: []const u8 = if (use_mock) "/wiki/immutable-lists" else if (enrollments.len > 0) std.fmt.allocPrint(req.allocator, "/learning/{s}", .{enrollments[0].id}) catch "/settings/learning" else "/settings/learning";
     const hero_href = lib.m3.demoHref(req.allocator, req, hero_path) catch return mer.internalError("workspace render failed");
@@ -124,8 +131,7 @@ pub fn render(req: mer.Request) mer.Response {
     metricVisual(w, ICON_CARDS, "gold", if (decks_available) due_cards else null, "Approved cards", if (decks_available) "Available for self-reported review" else "Temporarily unavailable") catch return mer.internalError("workspace render failed");
     metricVisual(w, ICON_ASK, "rose", null, "Cited questions", "Measured after grounded answers") catch return mer.internalError("workspace render failed");
     const learning_settings_href = lib.m3.demoHref(req.allocator, req, "/settings/learning") catch return mer.internalError("workspace render failed");
-    const flashcards_href = lib.m3.demoHref(req.allocator, req, "/flashcards") catch return mer.internalError("workspace render failed");
-    w.print("</section><section class=\"surface cp-learning-loop\" aria-labelledby=\"learning-loop-title\"><p class=\"eyebrow\">Student learning loop</p><h2 id=\"learning-loop-title\">Move from curriculum to evidence, then study what you reviewed.</h2><ol><li><a href=\"{s}\"><strong>1 · Import module and review topics</strong><span>Create the stable curriculum scope.</span></a></li><li><a href=\"{s}\"><strong>2 · Add and process sources</strong><span>Track durable parsing and indexing stages.</span></a></li><li><a href=\"{s}\"><strong>3 · Read and ask with citations</strong><span>Use the Wiki and grounded Q&amp;A.</span></a></li><li><a href=\"{s}\"><strong>4 · Review drafts, publish, and study</strong><span>Only approved cards enter practice.</span></a></li></ol></section><div class=\"dashboard-columns\"><section><div class=\"section-title\"><div><h2>Local modules</h2><p>Stable enrollment scopes for sources, Wiki, cards, and learning evidence.</p></div><a href=\"{s}\">Manage modules</a></div><div class=\"module-list surface\">", .{ learning_settings_href, sources_href, wiki_href, flashcards_href, learning_settings_href }) catch return mer.internalError("workspace render failed");
+    w.print("</section><div class=\"dashboard-columns\"><section><div class=\"section-title\"><div><h2>Local modules</h2><p>Stable enrollment scopes for sources, Wiki, cards, and learning evidence.</p></div><a href=\"{s}\">Manage modules</a></div><div class=\"module-list surface\">", .{learning_settings_href}) catch return mer.internalError("workspace render failed");
     if (use_mock) {
         for (modules_slice, 0..) |module, index| {
             const module_href = lib.m3.demoHref(req.allocator, req, "/wiki") catch wiki_href;

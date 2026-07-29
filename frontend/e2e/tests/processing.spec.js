@@ -153,16 +153,39 @@ test("policy controls save independent durable values", async ({ page }) => {
   expect(body.payload).toEqual({ process_sources: false, map_topics: true, compile_wiki: true, flashcard_mode: "draft" });
 });
 
-test("explicit learning demo disables policy and target fieldsets semantically", async ({ page }) => {
+test("module settings stays focused and disables only the demo importer", async ({ page }) => {
   await page.goto("/settings/learning?mock=1");
-  const policy = page.getByRole("group", { name: "Processing policy controls" });
-  const defaults = page.getByRole("group", { name: "Default learning scope and daily target" });
+  const importer = page.getByRole("group", { name: "Choose an import method" });
+  await expect(importer).toHaveAttribute("disabled", "");
+  for (const control of await importer.locator("input, select, button").all()) await expect(control).toBeDisabled();
+  await expect(page.getByRole("heading", { name: "Your local modules" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Choose what happens after intake" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Your daily starting point" })).toHaveCount(0);
+});
+
+test("source health owns the relocated processing controls", async ({ page }) => {
+  await page.goto("/sources/health?mock=1");
+  const policy = page.getByRole("group", { name: "Source processing defaults" });
+  await expect(page.getByRole("heading", { name: "Source processing defaults" })).toBeVisible();
   await expect(policy).toHaveAttribute("disabled", "");
-  await expect(defaults).toHaveAttribute("disabled", "");
   await expect(policy.locator("input, select")).toHaveCount(4);
-  await expect(defaults.locator("input, select")).toHaveCount(2);
   for (const control of await policy.locator("input, select").all()) await expect(control).toBeDisabled();
-  for (const control of await defaults.locator("input, select").all()) await expect(control).toBeDisabled();
+});
+
+test("source activity uses concise words and distinct visual states", async ({ page }) => {
+  await page.goto("/sources?mock=1");
+  await expect(page.getByRole("heading", { name: "What happened to your sources" })).toBeVisible();
+  await expect(page.getByText("Current and recent runs")).toHaveCount(0);
+  await expect(page.getByText(/Source version/)).toHaveCount(0);
+  const completed = page.locator('.cp-stage-list [data-status="succeeded"] .cp-stage-indicator');
+  const waiting = page.locator('.cp-stage-list [data-status="blocked"] .cp-stage-indicator');
+  const running = page.locator('.cp-stage-list [data-status="running"] .cp-stage-indicator');
+  await expect(completed).toBeVisible();
+  await expect(waiting).toBeVisible();
+  await expect(running).toBeVisible();
+  const colors = await Promise.all([completed, waiting].map((item) => item.evaluate((node) => getComputedStyle(node).backgroundColor)));
+  expect(colors[0]).not.toBe(colors[1]);
+  await expect.poll(() => running.evaluate((node) => getComputedStyle(node).animationName)).not.toBe("none");
 });
 
 test("exact source context focuses and opens the owned source record", async ({ page }) => {

@@ -43,13 +43,15 @@ test("settings pages share the current immutable script version", async () => {
     "app/notifications.zig",
     "app/settings/index.zig",
     "app/settings/appearance.zig",
-    "app/settings/learning.zig",
     "app/settings/notifications.zig",
     "app/settings/data.zig",
   ]) {
     const source = fs.readFileSync(path.join(__dirname, "../..", relative), "utf8");
     expect(source).toContain("/settings.js?v=20260728-1");
   }
+  const learning = fs.readFileSync(path.join(__dirname, "../../app/settings/learning.zig"), "utf8");
+  expect(learning).not.toContain("/settings.js");
+  expect(learning).toContain("/curriculum.js?v=20260728-3");
   const layout = fs.readFileSync(path.join(__dirname, "../../app/layout.zig"), "utf8");
   expect(layout).toContain("/app.js?v=wikibase-17");
 });

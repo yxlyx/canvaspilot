@@ -60,10 +60,10 @@ fn renderMockMeter(req: mer.Request, w: *std.Io.Writer, meter: lib.types.Knowled
 fn renderLiveMeter(req: mer.Request, w: *std.Io.Writer, meter: lib.types.TopicMeterResponse) !void {
     const state_label = if (std.mem.eql(u8, meter.state, "measured")) "Evidence available" else if (std.mem.eql(u8, meter.state, "insufficient")) "More evidence needed" else "Not measured";
     try w.print("<article class=\"wb-m3-meter-card\"><div><p class=\"eyebrow\">{s}</p><h3>{s}</h3><p>{d} factual signal(s) · {s}</p></div><div>", .{ state_label, lib.ui.escapeSafe(req.allocator, meter.topic), meter.evidence_count, if (meter.stale) "needs refreshing" else "current" });
-    try w.writeAll("<p class=\"cp-unknown-meter\"><strong>No completion score yet.</strong> Open the learning settings to review source coverage, self-reported recall, and activity separately.</p>");
+    try w.writeAll("<p class=\"cp-unknown-meter\"><strong>No completion score yet.</strong> Open a module dashboard to review source coverage, self-reported recall, and activity separately.</p>");
     try w.writeAll("<ul class=\"cp-plain-list wb-m3-signals\">");
     for (meter.signals) |signal| try w.print("<li><strong>{s}</strong>: {d} evidence item(s){s}</li>", .{ lib.ui.escapeSafe(req.allocator, signal.name), signal.evidence_count, if (signal.value == null) " · value uncertain" else "" });
-    try w.print("</ul><aside class=\"wb-m3-recommendation\"><strong>Next step</strong><p>{s}</p><div class=\"cp-action-row\"><a class=\"cp-btn cp-btn-ghost\" href=\"/settings/learning\">Open learning settings</a></div></aside></div></article>", .{lib.ui.escapeSafe(req.allocator, meter.recommendation)});
+    try w.print("</ul><aside class=\"wb-m3-recommendation\"><strong>Next step</strong><p>{s}</p><div class=\"cp-action-row\"><a class=\"cp-btn cp-btn-ghost\" href=\"/dashboard\">Choose a module dashboard</a></div></aside></div></article>", .{lib.ui.escapeSafe(req.allocator, meter.recommendation)});
 }
 
 fn mockRecommendation(topic_id: []const u8) ?lib.types.KnowledgeRecommendation {
