@@ -53,7 +53,7 @@ test("settings pages share the current immutable script version", async () => {
   expect(learning).not.toContain("/settings.js");
   expect(learning).toContain("/curriculum.js?v=20260728-3");
   const layout = fs.readFileSync(path.join(__dirname, "../../app/layout.zig"), "utf8");
-  expect(layout).toContain("/app.js?v=wikibase-17");
+  expect(layout).toContain("/app.js?v=wikibase-18");
 });
 
 test("explicit demo renders grounded and insufficient study-guide states", async ({ page }) => {

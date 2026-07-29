@@ -1369,30 +1369,96 @@
     const status = area.querySelector("[data-flash-create-status]");
     const effective = area.querySelector("[data-scope-effective]");
     if (!form || form.querySelector("fieldset:disabled")) return;
-    const enrollment = form.elements.enrollment_id;
-    const topics = form.elements.topic_ids;
-    const chunks = form.elements.source_chunk_ids;
+    const demo = form.hasAttribute("data-demo");
+
+    function checkedValues(name) {
+      return Array.from(form.querySelectorAll('[name="' + CSS.escape(name) + '"]:checked')).map(function (input) { return input.value; });
+    }
+
+    function choice(container, type, name, value, title, detail) {
+      const label = document.createElement("label");
+      label.className = "cp-choice-row";
+      const input = document.createElement("input");
+      input.type = type;
+      input.name = name;
+      input.value = value;
+      const check = document.createElement("span");
+      check.className = "cp-choice-check";
+      check.setAttribute("aria-hidden", "true");
+      check.textContent = "✓";
+      const copy = document.createElement("span");
+      const strong = document.createElement("strong");
+      strong.textContent = title;
+      const small = document.createElement("small");
+      small.textContent = detail;
+      copy.append(strong, small);
+      label.append(input, check, copy);
+      container.appendChild(label);
+    }
+
+    function addSearch(container) {
+      if (!container || container.children.length <= 8 || container.previousElementSibling?.matches("[data-choice-search]")) return;
+      const search = document.createElement("input");
+      search.type = "search";
+      search.className = "cp-choice-search";
+      search.dataset.choiceSearch = "";
+      search.placeholder = "Search choices";
+      search.setAttribute("aria-label", "Search available evidence");
+      container.before(search);
+      search.addEventListener("input", function () {
+        const query = search.value.trim().toLowerCase();
+        Array.from(container.children).forEach(function (item) { item.hidden = Boolean(query) && !item.textContent.toLowerCase().includes(query); });
+      });
+    }
+
+    area.querySelectorAll("[data-choice-list]").forEach(addSearch);
 
     async function loadChunks() {
+      const enrollmentId = checkedValues("enrollment_id")[0];
       const topic = form.elements.chunk_topic_id;
       const source = form.elements.chunk_source_id;
+      const chunks = area.querySelector('[data-choice-list="source_chunk_ids"]');
       chunks.innerHTML = "";
-      if (!enrollment.value || !topic.value || !source.value) return;
-      const records = await flashRequest("chunks", { deckId: enrollment.value, payload: { topic_id: topic.value, source_id: source.value } });
-      records.slice(0, 100).forEach(function (record) { chunks.add(new Option(record.citation + " · " + (record.excerpt || "current evidence"), record.chunk_id)); });
+      if (!enrollmentId || !topic.value || !source.value) return;
+      if (demo) {
+        choice(chunks, "checkbox", "source_chunk_ids", "51111111-1111-1111-1111-111111111111", "Lecture 9, section 2", "Immutable lists preserve earlier versions.");
+        choice(chunks, "checkbox", "source_chunk_ids", "61111111-1111-1111-1111-111111111111", "Lab 6 brief", "Functional transformations return new values.");
+        syncEffective();
+        return;
+      }
+      const records = await flashRequest("chunks", { deckId: enrollmentId, payload: { topic_id: topic.value, source_id: source.value } });
+      records.slice(0, 100).forEach(function (record) { choice(chunks, "checkbox", "source_chunk_ids", record.chunk_id, record.citation, record.excerpt || "Current evidence"); });
+      addSearch(chunks);
+      syncEffective();
     }
 
     async function loadEnrollmentScope() {
-      if (!enrollment || !enrollment.value) return;
+      const enrollmentId = checkedValues("enrollment_id")[0];
+      if (!enrollmentId) return;
+      if (demo) {
+        const topics = area.querySelector('[data-choice-list="topic_ids"]');
+        topics.innerHTML = "";
+        choice(topics, "checkbox", "topic_ids", "71111111-1111-1111-1111-111111111111", "Immutable lists", "Canonical CS2030S topic");
+        choice(topics, "checkbox", "topic_ids", "81111111-1111-1111-1111-111111111111", "Lazy streams", "Canonical CS2030S topic");
+        const chunkTopic = form.elements.chunk_topic_id;
+        chunkTopic.innerHTML = '<option value="71111111-1111-1111-1111-111111111111">Immutable lists</option><option value="81111111-1111-1111-1111-111111111111">Lazy streams</option>';
+        const chunkSource = form.elements.chunk_source_id;
+        chunkSource.innerHTML = '<option value="21111111-1111-1111-1111-111111111111">Lecture 9: Immutable Lists and Lazy Streams</option><option value="31111111-1111-1111-1111-111111111111">Lab 6: Functional Collections Brief</option>';
+        await loadChunks();
+        return;
+      }
       try {
-        const loadedTopics = await flashRequest("topics", { deckId: enrollment.value });
+        const loadedTopics = await flashRequest("topics", { deckId: enrollmentId });
+        const topics = area.querySelector('[data-choice-list="topic_ids"]');
         topics.innerHTML = "";
         loadedTopics.filter(function (topic) { return !topic.archived; }).slice(0, 100).forEach(function (topic) {
-          topics.add(new Option(topic.title + " · " + topic.provenance, topic.id));
+          choice(topics, "checkbox", "topic_ids", topic.id, topic.title, topic.provenance);
         });
+        addSearch(topics);
         const chunkTopic = form.elements.chunk_topic_id;
-        chunkTopic.innerHTML = topics.innerHTML;
-        const candidates = await flashRequest("candidates", { deckId: enrollment.value });
+        chunkTopic.innerHTML = "";
+        loadedTopics.filter(function (topic) { return !topic.archived; }).slice(0, 100).forEach(function (topic) { chunkTopic.add(new Option(topic.title, topic.id)); });
+        const candidates = await flashRequest("candidates", { deckId: enrollmentId });
         const chunkSource = form.elements.chunk_source_id;
         chunkSource.innerHTML = "";
         candidates.filter(function (source) { return source.eligible && source.state === "ready"; }).slice(0, 100).forEach(function (source) {
@@ -1403,28 +1469,42 @@
         status.textContent = "Canonical topics or current chunks could not be loaded. Other stable scopes remain available.";
       }
     }
-    enrollment.addEventListener("change", loadEnrollmentScope);
     form.elements.chunk_topic_id.addEventListener("change", function () { loadChunks().catch(function () { status.textContent = "Current chunks could not be loaded."; }); });
     form.elements.chunk_source_id.addEventListener("change", function () { loadChunks().catch(function () { status.textContent = "Current chunks could not be loaded."; }); });
     loadEnrollmentScope();
 
-    form.addEventListener("change", function () {
+    function syncEffective() {
       const selected = form.querySelector('[name="scope_type"]:checked');
       const scope = selected ? selected.value : "";
       form.querySelectorAll("[data-scope]").forEach(function (node) { node.hidden = node.dataset.scope !== scope; });
-      effective.textContent = "Effective scope: " + scope.replaceAll("_", " ") + ". Only the visible bounded selection will be sent.";
+      const count = checkedValues(scope).length;
+      const label = selected?.closest("label")?.querySelector("strong")?.textContent || scope.replaceAll("_", " ");
+      effective.textContent = label + " · " + count + " selected. Only this bounded selection will be sent.";
+      const custom = form.querySelector(".cp-custom-count");
+      if (custom) custom.hidden = form.querySelector('[name="limit_choice"]:checked')?.value !== "custom";
+    }
+    form.addEventListener("change", function (event) {
+      if (event.target.name === "enrollment_id") loadEnrollmentScope();
+      syncEffective();
     });
-    form.dispatchEvent(new Event("change"));
+    syncEffective();
     form.addEventListener("submit", async function (event) {
       event.preventDefault();
       const scope = form.querySelector('[name="scope_type"]:checked').value;
-      const control = form.elements[scope];
-      const values = control && control.multiple ? Array.from(control.selectedOptions).map(function (option) { return option.value; }) : [control && control.value].filter(Boolean);
+      const values = checkedValues(scope);
       if (!values.length) { status.textContent = "Select at least one item in the visible scope."; return; }
       if (form.elements.regenerate.checked && !window.confirm("Regenerate creates a linked successor draft. The current matching draft remains in history. Continue?")) return;
-      const payload = { limit: Number(form.elements.limit.value), regenerate: form.elements.regenerate.checked };
+      const limitChoice = form.querySelector('[name="limit_choice"]:checked')?.value || "10";
+      const limit = Number(limitChoice === "custom" ? form.elements.custom_limit.value : limitChoice);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 20) { status.textContent = "Choose between 1 and 20 cards."; return; }
+      const payload = { limit: limit, regenerate: form.elements.regenerate.checked };
       if (form.elements.deck_title.value.trim()) payload.deck_title = form.elements.deck_title.value.trim();
-      payload[scope] = control.multiple ? values : values[0];
+      payload[scope] = scope === "enrollment_id" || scope === "wiki_page_id" ? values[0] : values;
+      if (demo) {
+        status.className = "cp-status-banner cp-status-info";
+        status.textContent = "Demo request ready: " + limit + " cards from " + values.length + " selected " + (values.length === 1 ? "item" : "items") + ". Nothing was saved.";
+        return;
+      }
       form.querySelector('button[type="submit"]').disabled = true;
       status.textContent = "Creating or replaying the review draft…";
       try {
