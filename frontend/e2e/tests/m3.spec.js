@@ -50,7 +50,7 @@ test("settings pages share the current immutable script version", async () => {
     expect(source).toContain("/settings.js?v=20260728-1");
   }
   const learning = fs.readFileSync(path.join(__dirname, "../../app/settings/learning.zig"), "utf8");
-  expect(learning).not.toContain("/settings.js");
+  expect(learning).toContain("/settings.js?v=20260728-1");
   expect(learning).toContain("/curriculum.js?v=20260728-3");
   const layout = fs.readFileSync(path.join(__dirname, "../../app/layout.zig"), "utf8");
   expect(layout).toContain("/app.js?v=wikibase-18");

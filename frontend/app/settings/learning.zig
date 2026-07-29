@@ -25,6 +25,21 @@ pub fn render(req: mer.Request) mer.Response {
     if (lib.m3.gate(req, "Manage modules")) |response| return response;
     const demo = lib.m3.isExplicitDemo(req);
     const current_academic_year = lib.time.academicYearStart(lib.time.nowSecs(), 7);
+    const token = lib.session.fromRequest(req).token;
+    const preferences = if (demo) demoPreferences() else blk: {
+        const result = lib.backend.preferences(req.allocator, token);
+        break :blk if (result.value) |parsed| parsed.value else return lib.m3.liveError(req, "Learning settings", result.status);
+    };
+    var enrollments: []const lib.types.EnrollmentResponse = &.{};
+    var modules: []const lib.types.Module = if (demo) lib.mock.modules else &.{};
+    var scopes_loaded = demo;
+    if (!demo) {
+        const enrollment_result = lib.backend.listEnrollments(req.allocator, token);
+        const module_result = lib.backend.listModules(req.allocator, token);
+        if (enrollment_result.value) |parsed| enrollments = parsed.value;
+        if (module_result.value) |parsed| modules = parsed.value;
+        scopes_loaded = enrollment_result.value != null and module_result.value != null;
+    }
 
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
@@ -61,8 +76,22 @@ pub fn render(req: mer.Request) mer.Response {
     if (demo) {
         w.writeAll("<p class=\"cp-settings-readonly\">Synthetic preview · importing is disabled.</p>") catch return mer.internalError("module import render failed");
     }
-    w.writeAll(
-        "<p class=\"cp-form-status cp-import-status\" data-import-status role=\"status\" aria-live=\"polite\" tabindex=\"-1\"></p><noscript><p class=\"cp-inline-error\" role=\"alert\">Module import needs JavaScript to validate the NUSMods snapshot before saving.</p></noscript></form><section class=\"cp-import-preview\" data-import-preview hidden aria-live=\"polite\" tabindex=\"-1\"></section></section></div><script src=\"/curriculum.js?v=20260728-3\" defer></script>",
-    ) catch return mer.internalError("module import render failed");
+    w.writeAll("<p class=\"cp-form-status cp-import-status\" data-import-status role=\"status\" aria-live=\"polite\" tabindex=\"-1\"></p><noscript><p class=\"cp-inline-error\" role=\"alert\">Module import needs JavaScript to validate the NUSMods snapshot before saving.</p></noscript></form><section class=\"cp-import-preview\" data-import-preview hidden aria-live=\"polite\" tabindex=\"-1\"></section></section><section class=\"cp-settings-section cp-study-defaults\" aria-labelledby=\"study-defaults-title\"><header><div><p class=\"eyebrow\">Study defaults</p><h2 id=\"study-defaults-title\">Your daily starting point</h2><p>Choose where WikiBase opens first and set a realistic review goal. This target is not a mastery score.</p></div></header><form method=\"post\" action=\"/api/settings\" data-settings-form><input type=\"hidden\" name=\"action\" value=\"preferences.update\"><input type=\"hidden\" name=\"next\" value=\"/settings/learning\"><fieldset class=\"cp-settings-fieldset\"") catch return mer.internalError("module import render failed");
+    if (demo) w.writeAll(" disabled") catch return mer.internalError("module import render failed");
+    w.writeAll("><legend class=\"sr-only\">Default module and daily review target</legend><div class=\"cp-study-default-grid\"><label class=\"cp-field\"><span>Default module</span><select name=\"default_scope\"><option value=\"\">Most recently active</option><optgroup label=\"Local enrollments\">") catch return mer.internalError("module import render failed");
+    for (enrollments) |enrollment| if (!enrollment.archived) w.print("<option value=\"enrollment:{s}\"{s}>{s} — {s}</option>", .{ lib.ui.escapeSafe(req.allocator, enrollment.id), if (preferences.default_enrollment_id) |id| if (std.mem.eql(u8, id, enrollment.id)) " selected" else "" else "", lib.ui.escapeSafe(req.allocator, enrollment.code), lib.ui.escapeSafe(req.allocator, enrollment.title) }) catch return mer.internalError("module import render failed");
+    w.writeAll("</optgroup><optgroup label=\"Connected modules\">") catch return mer.internalError("module import render failed");
+    for (modules) |module| w.print("<option value=\"module:{s}\"{s}>{s} — {s}</option>", .{ lib.ui.escapeSafe(req.allocator, module.id), if (preferences.default_module_id) |id| if (std.mem.eql(u8, id, module.id)) " selected" else "" else "", lib.ui.escapeSafe(req.allocator, module.code), lib.ui.escapeSafe(req.allocator, module.name) }) catch return mer.internalError("module import render failed");
+    w.writeAll("</optgroup></select><small>Used as the default scope for learning views.</small></label><label class=\"cp-field\"><span>Daily review target</span><input type=\"number\" name=\"daily_review_target\" min=\"1\" max=\"100\" value=\"") catch return mer.internalError("module import render failed");
+    w.print("{d}", .{preferences.daily_review_target}) catch return mer.internalError("module import render failed");
+    w.writeAll("\" required><small>A review goal from 1 to 100, not a due-card calculation.</small></label></div>") catch return mer.internalError("module import render failed");
+    if (!demo and scopes_loaded) w.writeAll("<input type=\"hidden\" name=\"scope_loaded\" value=\"1\">") catch return mer.internalError("module import render failed");
+    w.writeAll("</fieldset>") catch return mer.internalError("module import render failed");
+    if (demo) w.writeAll("<p class=\"cp-settings-readonly\">Synthetic preview · study defaults are read-only.</p>") catch return mer.internalError("module import render failed") else w.writeAll("<button class=\"cp-btn cp-btn-primary\" type=\"submit\">Save study defaults</button><p class=\"cp-form-status\" role=\"status\" tabindex=\"-1\"></p>") catch return mer.internalError("module import render failed");
+    w.writeAll("</form></section></div><script src=\"/settings.js?v=20260728-1\" defer></script><script src=\"/curriculum.js?v=20260728-3\" defer></script>") catch return mer.internalError("module import render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
+}
+
+fn demoPreferences() lib.types.UserPreferenceResponse {
+    return .{ .theme = "system", .motion_preference = "system", .default_module_id = null, .default_enrollment_id = null, .daily_review_target = 10, .reminder_daily_review = true, .reminder_processing_attention = true, .reminder_paper_review = true, .reminder_health_attention = true, .updated_at = "" };
 }
