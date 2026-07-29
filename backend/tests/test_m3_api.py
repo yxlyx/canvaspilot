@@ -1303,6 +1303,10 @@ async def test_codegraff_device_connection_catalog_model_test_and_isolation(m3_c
     assert started.status_code == 201
     public = started.json()
     assert public["user_code"] == "ABCD-EFGH"
+    assert public["verification_uri"] == settings.codegraff_verification_url
+    assert public["verification_uri_complete"] == (
+        f"{settings.codegraff_verification_url}?code=ABCD-EFGH"
+    )
     assert "device_code" not in public
     assert "private-device-code" not in started.text
     assert start_route.called
@@ -1310,6 +1314,9 @@ async def test_codegraff_device_connection_catalog_model_test_and_isolation(m3_c
     stored_session = await session.get(ProviderAuthorizationSession, uuid.UUID(session_id))
     assert stored_session.encrypted_device_code is not None
     assert b"private-device-code" not in stored_session.encrypted_device_code
+    assert stored_session.verification_uri_complete == (
+        f"{settings.codegraff_verification_url}?code=ABCD-EFGH"
+    )
 
     with respx.mock:
         pending_route = respx.post(f"{settings.codegraff_gateway_url}/v1/device/poll").mock(
@@ -1319,6 +1326,15 @@ async def test_codegraff_device_connection_catalog_model_test_and_isolation(m3_c
     assert pending.status_code == 200
     assert pending.json()["status"] == "pending"
     assert pending_route.called
+    assert (
+        await session.scalar(
+            select(ProviderSetting).where(
+                ProviderSetting.user_id == owner.id,
+                ProviderSetting.provider == "codegraff",
+            )
+        )
+        is None
+    )
 
     await session.refresh(stored_session)
     stored_session.next_poll_at = datetime.now(UTC) - timedelta(seconds=1)

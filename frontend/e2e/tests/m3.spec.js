@@ -265,10 +265,20 @@ test("provider form contracts preserve direct keys and the Codegraff device flow
   expect(providerPage).toContain("Use for answers");
   expect(providerPage).toContain("model catalog is temporarily unavailable");
   expect(providerPage).toContain("data-session-expires");
+  expect(providerPage).toContain("data-codegraff-auth-start");
+  expect(providerPage).toContain("Authorized, not tested");
+  expect(providerPage).toContain("Tested, not active");
+  expect(providerPage).toContain("Active for cited answers");
+  expect(providerPage).toContain('data-approval-bootstrap=\\"/settings/providers?opening=codegraff\\"');
+  expect(providerPage).toContain("session.verification_uri_complete orelse session.verification_uri orelse");
   const script = fs.readFileSync(path.join(__dirname, "../../public/m3.js"), "utf8");
   expect(script).toContain('action: "provider.activate"');
   expect(script).toContain('response.status === 401');
   expect(script).toContain("transientFailures > 5");
+  expect(script).toContain('approvalWindow = window.open(form.dataset.approvalBootstrap, "wikibase-codegraff-" + Date.now())');
+  expect(script).toContain("approvalWindow.location.href = approvalUrl");
+  expect(script).toContain("result.verification_uri_complete || result.verification_uri");
+  expect(script).toContain("if (!result.active_for_generation)");
   const styles = fs.readFileSync(path.join(__dirname, "../../app/_styles.css"), "utf8");
   expect(styles).toContain(".cp-provider-page{width:min(100%,880px)");
   expect(styles).toContain(".cp-device-steps>li");
@@ -516,6 +526,45 @@ test("provider save omits fixed endpoints and preserves custom and Azure endpoin
   expect(requests[1].payload.endpoint).toBe("https://course.openai.azure.com");
 });
 
+test("Codegraff test and use waits for explicit activation", async ({ page }) => {
+  await page.goto("/login");
+  const requests = [];
+  await page.route("**/api/m3", async (route) => {
+    const body = route.request().postDataJSON();
+    requests.push(body);
+    if (body.action === "provider.test") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "connected", active_for_generation: false }) });
+    }
+    if (body.action === "provider.activate") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "connected", active_for_generation: true }) });
+    }
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "configured", active_for_generation: false }) });
+  });
+  await page.setContent(`<main><form data-m3-form data-provider-save data-provider-activate><input name="action" value="provider.save"><input name="provider" value="codegraff"><input name="model" value="deepseek-v4-pro"><button>Test and use</button><p class="cp-form-status"></p></form><script src="/m3.js"></script></main>`);
+  await page.getByRole("button", { name: "Test and use" }).click();
+  await expect.poll(() => requests.map((request) => request.action)).toEqual(["provider.save", "provider.test", "provider.activate"]);
+  await expect(page.locator(".cp-form-status")).toHaveText("Codegraff is ready for cited answers.");
+});
+
+test("provider test and activation report the returned state", async ({ page }) => {
+  await page.goto("/login");
+  await page.route("**/api/m3", async (route) => {
+    const body = route.request().postDataJSON();
+    if (body.action === "provider.test") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "invalid", active_for_generation: false, last_error: "The selected model is unavailable." }) });
+    }
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "connected", active_for_generation: false }) });
+  });
+  await page.setContent(`<main>
+    <form data-m3-form><input name="action" value="provider.test"><input name="id" value="codegraff"><button>Test connection</button><p class="cp-form-status"></p></form>
+    <form data-m3-form><input name="action" value="provider.activate"><input name="id" value="codegraff"><button>Use for answers</button><p class="cp-form-status"></p></form>
+    <script src="/m3.js"></script></main>`);
+  await page.getByRole("button", { name: "Test connection" }).click();
+  await expect(page.locator("form").first().locator(".cp-form-status")).toHaveText("The selected model is unavailable.");
+  await page.getByRole("button", { name: "Use for answers" }).click();
+  await expect(page.locator("form").nth(1).locator(".cp-form-status")).toHaveText("The provider is connected but was not selected for answers.");
+});
+
 test("marked-paper upload and destructive confirmations are guarded", async ({ page }) => {
   await page.goto("/login");
   const requests = [];
@@ -523,7 +572,10 @@ test("marked-paper upload and destructive confirmations are guarded", async ({ p
   await page.setContent(`<main><form data-paper-upload><input type="file" name="paper"><button>Upload</button><p class="cp-form-status"></p></form>
     <form data-m3-form data-confirm="Delete this paper?"><input name="action" value="paper.delete"><input name="id" value="paper-1"><button>Delete paper</button><p class="cp-form-status"></p></form><script src="/m3.js"></script></main>`);
   await page.locator('input[type="file"]').setInputFiles({ name: "paper.md", mimeType: "text/markdown", buffer: Buffer.from("Q1: Explain\n\nFeedback: Good") });
-  await page.getByRole("button", { name: "Upload" }).click();
+  await Promise.all([
+    page.waitForNavigation(),
+    page.getByRole("button", { name: "Upload" }).click(),
+  ]);
   await expect.poll(() => requests.length).toBe(1);
   expect(requests[0]).toMatchObject({ action: "paper.upload", payload: { filename: "paper.md", content_type: "text/markdown" } });
   await page.goto("/login");

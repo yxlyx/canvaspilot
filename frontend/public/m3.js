@@ -5,7 +5,7 @@
   const endpoint = "/api/m3";
   const numeric = new Set(["question_number", "awarded_marks", "available_marks", "confidence"]);
   function status(form, message, error) {
-    const node = form.querySelector(".cp-form-status") || form.closest("article")?.querySelector(".cp-form-status");
+    const node = form.querySelector(".cp-form-status") || form.closest(".cp-provider-action-stack")?.querySelector(".cp-form-status") || form.closest("article")?.querySelector(".cp-form-status");
     if (node) {
       node.textContent = message;
       node.classList.toggle("cp-error", !!error);
@@ -101,20 +101,42 @@
     if (!valid(form, body)) return;
     const release = lock(form); if (!release) return;
     if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) { release(); return; }
+    let approvalWindow = null;
+    if (body.action === "provider.auth.start" && body.id === "codegraff" && form.hasAttribute("data-codegraff-auth-start")) {
+      approvalWindow = window.open(form.dataset.approvalBootstrap, "wikibase-codegraff-" + Date.now());
+    }
     status(form, "Working…", false);
+    let completionMessage = "Saved.";
     try {
       const response = await request(form, body, release);
       if (!response.ok) { let message = "Request failed (" + response.status + ")."; try { message = errorMessage(await response.json(), message); } catch (_) {} throw new Error(message); }
       if (body.action === "provider.auth.start") {
         const result = await response.json();
         if (result.provider === "codegraff" && result.id) {
-          status(form, "One-time code created. Opening approval steps…", false);
+          const approvalUrl = result.verification_uri_complete || result.verification_uri;
+          if (!approvalUrl) throw new Error("Codegraff did not return an approval page.");
+          if (approvalWindow && !approvalWindow.closed) approvalWindow.location.href = approvalUrl;
+          else window.open(approvalUrl, "_blank", "noopener,noreferrer");
+          status(form, "Approval page opened. Authorize the matching device on Codegraff…", false);
           window.location.assign("/settings/providers?provider=codegraff&session=" + encodeURIComponent(result.id));
           return;
         }
         if (!result.authorization_url) throw new Error("The provider did not return a sign-in URL.");
         status(form, "Opening secure browser sign-in…", false);
         window.location.assign(result.authorization_url);
+        return;
+      }
+      if (body.action === "provider.auth.poll") {
+        const result = await response.json();
+        if (result.status === "pending") {
+          status(form, "Still waiting for Codegraff authorization.", false);
+          release();
+          return;
+        }
+        if (result.status !== "completed") throw new Error(result.error_message || "Codegraff authorization was not completed.");
+        status(form, "Codegraff authorized. Loading model choices…", false);
+        release();
+        window.location.assign("/settings/providers?provider=codegraff#choose-model");
         return;
       }
       if (body.action === "provider.save" && form.hasAttribute("data-provider-save")) {
@@ -127,12 +149,31 @@
           status(form, "Connection tested. Making it the answer provider…", false);
           const activated = await request(form, { action: "provider.activate", id: body.payload.provider, idempotency_key: idempotencyKey() }, release);
           if (!activated.ok) { let message = "The provider could not be selected (" + activated.status + ")."; try { message = errorMessage(await activated.json(), message); } catch (_) {} throw new Error(message); }
+          const activeResult = await activated.json();
+          if (!activeResult.active_for_generation) throw new Error("The connection tested successfully but was not selected. Use the separate ‘Use for answers’ action to retry.");
+          completionMessage = "Codegraff is ready for cited answers.";
+        } else {
+          completionMessage = "Connection test passed.";
         }
       }
-      status(form, "Saved.", false);
+      if (body.action === "provider.test") {
+        const result = await response.json();
+        if (result.status !== "connected") throw new Error(result.last_error || "The connection test failed.");
+        completionMessage = "Connection test passed.";
+      }
+      if (body.action === "provider.activate") {
+        const result = await response.json();
+        if (!result.active_for_generation) throw new Error("The provider is connected but was not selected for answers.");
+        completionMessage = "This provider is now used for answers.";
+      }
+      status(form, completionMessage, false);
       const target = form.dataset.success;
       if (target !== undefined) { release(); window.location.assign(target || window.location.href); } else release();
-    } catch (error) { status(form, error.message || "Request failed.", true); release(); }
+    } catch (error) {
+      if (approvalWindow && !approvalWindow.closed) approvalWindow.close();
+      status(form, error.message || "Request failed.", true);
+      release();
+    }
   }
   document.querySelectorAll("[data-m3-form]").forEach((form) => {
     const scope = form.querySelector("[data-scope-select]");
