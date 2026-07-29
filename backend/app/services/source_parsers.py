@@ -4,7 +4,6 @@ import json
 import re
 import subprocess
 import sys
-import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
 from io import BytesIO
@@ -15,6 +14,7 @@ from pytesseract import TesseractError, TesseractNotFoundError
 
 from app.models.source import Source, SourceKind
 from app.schemas.source_imports import SourceImportItem, SourceImportSection, SourceParseItem
+from app.services.resource_admission import RESOURCE_INTENSIVE_PARSER_SLOT
 
 MAX_PDF_BYTES = 10 * 1024 * 1024
 MAX_PDF_PAGES = 200
@@ -23,11 +23,11 @@ MAX_PDF_EXPANDED_STREAM_BYTES = 8 * 1024 * 1024
 MAX_PDF_PARSE_SECONDS = 15
 MAX_PDF_PARSER_MEMORY_BYTES = 256 * 1024 * 1024
 MAX_PDF_WORKER_OUTPUT_BYTES = MAX_PDF_TEXT_CHARS * 4 + 64 * 1024
-_RESOURCE_INTENSIVE_PARSER_SLOT = threading.BoundedSemaphore()
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_PIXELS = 25_000_000
 MAX_OCR_TEXT_CHARS = 2_000_000
 OCR_TIMEOUT_SECONDS = 20
+_RESOURCE_INTENSIVE_PARSER_SLOT = RESOURCE_INTENSIVE_PARSER_SLOT
 
 
 class SourceParseError(ValueError):
@@ -136,7 +136,7 @@ def _parse_pdf_bytes(pdf_bytes: bytes) -> list[SourceImportSection]:
 
 def _parse_pdf_isolated(pdf_bytes: bytes) -> list[SourceImportSection]:
     try:
-        with _RESOURCE_INTENSIVE_PARSER_SLOT:
+        with RESOURCE_INTENSIVE_PARSER_SLOT:
             result = subprocess.run(
                 [sys.executable, "-m", "app.services.pdf_parser_worker"],
                 input=pdf_bytes,
@@ -186,7 +186,7 @@ def parse_image(
     content_base64: str | None,
     filename: str | None,
 ) -> list[SourceImportSection]:
-    with _RESOURCE_INTENSIVE_PARSER_SLOT:
+    with RESOURCE_INTENSIVE_PARSER_SLOT:
         return _parse_image(content_base64, filename)
 
 
