@@ -1,6 +1,6 @@
 const { expect, test } = require("@playwright/test");
 
-async function loadChat(page, selectedValue) {
+async function loadChat(page, selectedValue, providerReady = true) {
   await page.goto("/login");
   await page.setContent(`
     <main>
@@ -12,7 +12,7 @@ async function loadChat(page, selectedValue) {
       <span id="cp-chat-composer-code"></span>
       <div id="cp-chat-log"><div id="cp-chat-welcome"></div></div>
       <button id="cp-chat-clear" disabled>Clear conversation</button>
-      <form id="cp-chat-form" data-endpoint="/api/chat">
+      <form id="cp-chat-form" data-endpoint="/api/chat" data-provider-ready="${providerReady}">
         <textarea id="cp-chat-input"></textarea>
         <button id="cp-chat-send" type="submit" disabled>Send</button>
       </form>
@@ -20,6 +20,13 @@ async function loadChat(page, selectedValue) {
   `);
   await page.addScriptTag({ url: "/app.js" });
 }
+
+test("chat keeps scope available while provider-gated controls stay disabled", async ({ page }) => {
+  await loadChat(page, true, false);
+  await expect(page.locator("#cp-chat-module")).toBeEnabled();
+  await expect(page.locator("#cp-chat-input")).toBeDisabled();
+  await expect(page.locator("#cp-chat-send")).toBeDisabled();
+});
 
 test("chat sends the selected local enrollment and opens the exact source record", async ({ page }) => {
   const requests = [];

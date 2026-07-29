@@ -5,7 +5,7 @@ const lib = @import("lib");
 pub const meta: mer.Meta = .{
     .title = "Ask",
     .description = "Ask source-grounded questions and inspect the supporting evidence.",
-    .extra_head = "<script defer src=\"/app.js?v=wikibase-3\"></script>",
+    .extra_head = "<script defer src=\"/app.js?v=wikibase-18\"></script>",
 };
 
 const ICON_FILE = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z\"/><path d=\"M14 2v6h6M8 13h8M8 17h6\"/></svg>";
@@ -25,9 +25,12 @@ pub fn render(req: mer.Request) mer.Response {
 
     const modules_slice: []const lib.types.Module = if (use_mock) lib.mock.modules else &.{};
     var enrollments: []const lib.types.EnrollmentResponse = &.{};
+    var provider_state: lib.provider_ui.State = if (use_mock) .active else .unavailable;
     if (!use_mock) {
         const result = lib.backend.listEnrollments(req.allocator, session.token);
         if (result.value) |items| enrollments = items.value else return lib.m3.liveError(req, "Ask", result.status);
+        const provider_result = lib.backend.providerSettings(req.allocator, session.token);
+        if (provider_result.value) |items| provider_state = lib.provider_ui.classify(items.value) else if (provider_result.status == 401) return lib.m3.liveError(req, "Ask", 401);
     }
 
     var buf = lib.ui.buildHtml(req.allocator);
@@ -91,9 +94,9 @@ pub fn render(req: mer.Request) mer.Response {
         \\  </aside>
         \\  <section class="chat-thread surface" aria-label="Question and answer conversation">
         \\    <header><div><span class="status-pill status-good">Sources ready</span><span id="cp-chat-module-code"></span></div><button id="cp-chat-clear" type="button" disabled>Clear conversation</button></header>
-        \\    <div class="turns" id="cp-chat-log" role="log" aria-live="polite">
-        \\      <div class="chat-welcome" id="cp-chat-welcome"><span class="ask-orb">
     ) catch return mer.internalError("ask render failed");
+    lib.provider_ui.renderBoundary(w, provider_state, "Your module selection and source evidence remain available.") catch return mer.internalError("ask render failed");
+    w.writeAll("<div class=\"turns\" id=\"cp-chat-log\" role=\"log\" aria-live=\"polite\"><div class=\"chat-welcome\" id=\"cp-chat-welcome\"><span class=\"ask-orb\">") catch return mer.internalError("ask render failed");
     w.writeAll(ICON_ASK) catch return mer.internalError("ask render failed");
 
     const welcome_copy: []const u8 = if (use_mock) "Ask a question about a sample module. WikiBase will answer from fixture sources and show where each claim came from." else "Ask a question about a local enrollment. WikiBase will answer from current indexed sources and show where each claim came from.";
@@ -103,27 +106,27 @@ pub fn render(req: mer.Request) mer.Response {
     w.print(
         \\      </span><p class="eyebrow">Start from the evidence</p><h2>What would you like to make clearer?</h2><p>{s}</p>
         \\      <div class="suggestion-list">
-        \\        <button type="button" data-prompt="{s}"><span>{s}</span><b>
-    , .{ welcome_copy, prompt_one, prompt_one }) catch return mer.internalError("ask render failed");
+        \\        <button type="button" data-prompt="{s}"{s}><span>{s}</span><b>
+    , .{ welcome_copy, prompt_one, if (provider_state == .active) "" else " disabled", prompt_one }) catch return mer.internalError("ask render failed");
     w.writeAll(ICON_ARROW) catch return mer.internalError("ask render failed");
     w.print(
         \\        </b></button>
-        \\        <button type="button" data-prompt="{s}"><span>{s}</span><b>
-    , .{ prompt_two, prompt_two }) catch return mer.internalError("ask render failed");
+        \\        <button type="button" data-prompt="{s}"{s}><span>{s}</span><b>
+    , .{ prompt_two, if (provider_state == .active) "" else " disabled", prompt_two }) catch return mer.internalError("ask render failed");
     w.writeAll(ICON_ARROW) catch return mer.internalError("ask render failed");
     w.print(
         \\        </b></button>
-        \\        <button type="button" data-prompt="{s}"><span>{s}</span><b>
-    , .{ prompt_three, prompt_three }) catch return mer.internalError("ask render failed");
+        \\        <button type="button" data-prompt="{s}"{s}><span>{s}</span><b>
+    , .{ prompt_three, if (provider_state == .active) "" else " disabled", prompt_three }) catch return mer.internalError("ask render failed");
     w.writeAll(ICON_ARROW) catch return mer.internalError("ask render failed");
     w.print(
         \\        </b></button>
         \\      </div></div>
         \\    </div>
-        \\    <form class="chat-composer" id="cp-chat-form" autocomplete="off" data-endpoint="{s}">
+        \\    <form class="chat-composer" id="cp-chat-form" autocomplete="off" data-endpoint="{s}" data-provider-ready="{s}">
         \\      <label for="cp-chat-input">Ask from <span id="cp-chat-composer-code"></span></label>
         \\      <div><textarea id="cp-chat-input" name="message" rows="2" placeholder="Ask a question about your sources…" aria-label="Ask from selected sources" required></textarea><button id="cp-chat-send" type="submit" aria-label="Send question" disabled>
-    , .{chat_endpoint}) catch return mer.internalError("ask render failed");
+    , .{ chat_endpoint, if (provider_state == .active) "true" else "false" }) catch return mer.internalError("ask render failed");
     w.writeAll(ICON_SEND) catch return mer.internalError("ask render failed");
     w.writeAll(
         \\      </button></div><small>Answers may be incomplete. Verify important claims in the cited source.</small>

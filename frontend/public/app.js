@@ -1045,6 +1045,8 @@
     const welcome = document.getElementById("cp-chat-welcome");
     const clearButton = document.getElementById("cp-chat-clear");
     if (!form || !log || !input || !sendButton) return;
+    const providerReady = form.dataset.providerReady !== "false";
+    if (!providerReady) input.disabled = true;
 
     const history = [];
     let loading = false;
@@ -1065,7 +1067,7 @@
     }
 
     function syncSend() {
-      sendButton.disabled = loading || input.value.trim().length === 0;
+      sendButton.disabled = !providerReady || loading || input.value.trim().length === 0;
       log.querySelectorAll(".answer-error button").forEach(function (button) {
         button.disabled = loading;
       });
@@ -1269,7 +1271,7 @@
       } finally {
         if (generation === requestGeneration) {
           loading = false;
-          input.disabled = false;
+          input.disabled = !providerReady;
           syncSend();
           input.focus();
           log.scrollTop = log.scrollHeight;
@@ -1293,7 +1295,7 @@
       log.querySelectorAll(".chat-dynamic").forEach(function (turn) { turn.remove(); });
       history.length = 0;
       input.value = "";
-      input.disabled = false;
+      input.disabled = !providerReady;
       syncModule();
       syncSend();
       if (welcome) welcome.hidden = false;
@@ -1318,7 +1320,7 @@
         log.querySelectorAll(".chat-dynamic").forEach(function (turn) { turn.remove(); });
         history.length = 0;
         input.value = "";
-        input.disabled = false;
+        input.disabled = !providerReady;
         syncSend();
         if (welcome) welcome.hidden = false;
         clearButton.disabled = true;

@@ -1703,6 +1703,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 .chat-composer button:disabled { opacity: .3; }
 .chat-composer button svg { width: 16px; height: 16px; }
 .chat-composer > small { display: block; margin-top: 7px; color: var(--cp-muted); font-size: 8px; text-align: center; }
+.cp-provider-boundary{margin:18px clamp(18px,4vw,56px) 0;padding:14px 16px;display:grid;grid-template-columns:32px minmax(0,1fr) auto;align-items:center;gap:13px;border:1px solid var(--cp-border);border-left:3px solid var(--cp-warning);border-radius:10px;background:var(--cp-warning-soft)}.cp-provider-boundary.is-neutral{border-left-color:var(--cp-border-strong);background:var(--cp-surface-2)}.cp-provider-boundary-icon{width:30px;height:30px;display:grid;place-items:center;border:1px solid currentColor;border-radius:50%;color:var(--cp-heading)}.cp-provider-boundary-icon svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round}.cp-provider-boundary strong{display:block;font-size:11px}.cp-provider-boundary p{margin:3px 0 0;color:var(--cp-muted);font-size:10px;line-height:1.45}.cp-provider-boundary .cp-btn{white-space:nowrap}.suggestion-list button:disabled{cursor:not-allowed;opacity:.42}
 
 .flash-page { min-height: calc(100vh - 210px); display: grid; grid-template-columns: 230px minmax(440px, 1fr) 180px; gap: 16px; }
 .deck-sidebar { padding: 20px 13px; display: flex; flex-direction: column; }
