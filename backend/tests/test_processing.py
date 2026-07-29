@@ -37,6 +37,7 @@ from app.services.processing import (
     execute_claimed_stage,
     get_run,
     heartbeat_stage,
+    list_runs,
     retry_run,
 )
 from app.services.retrieval import retrieve
@@ -236,6 +237,26 @@ async def test_concurrent_distinct_keys_coalesce_one_source_version_run(processi
     assert run_count == version_count == 1
     assert stage_count == 5
     assert request_count == 2
+
+
+@pytest.mark.asyncio
+async def test_latest_run_list_keeps_one_run_for_every_owned_source(processing_session):
+    session, user, other = processing_session
+    first_source = await _source(session, user, "First source")
+    second_source = await _source(session, user, "Second source")
+    other_source = await _source(session, other, "Other user's source")
+    first_old = await _enqueue(session, user, first_source, "Original first-source content.")
+    first_latest = await _enqueue(session, user, first_source, "Updated first-source content.")
+    second_latest = await _enqueue(session, user, second_source, "Second-source content.")
+    await _enqueue(session, other, other_source, "Private content.")
+    first_old.created_at = datetime.now(UTC) + timedelta(days=1)
+    await session.commit()
+
+    runs = await list_runs(user, session, latest_per_source=True)
+
+    assert {run.source_id for run in runs} == {first_source.id, second_source.id}
+    assert {run.id for run in runs} == {first_latest.id, second_latest.id}
+    assert first_old.id not in {run.id for run in runs}
 
 
 @pytest.mark.asyncio

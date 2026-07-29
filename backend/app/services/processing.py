@@ -370,17 +370,47 @@ async def get_run(user: User, run_id: uuid.UUID, db: AsyncSession) -> Processing
 
 
 async def list_runs(
-    user: User, db: AsyncSession, *, source_id: uuid.UUID | None = None, limit: int = 100
+    user: User,
+    db: AsyncSession,
+    *,
+    source_id: uuid.UUID | None = None,
+    latest_per_source: bool = False,
+    limit: int = 100,
 ) -> list[ProcessingRun]:
+    ownership = [ProcessingRun.user_id == user.id]
+    if source_id is not None:
+        ownership.append(ProcessingRun.source_id == source_id)
+    if latest_per_source:
+        ranked = (
+            select(
+                ProcessingRun.id.label("run_id"),
+                func.row_number()
+                .over(
+                    partition_by=ProcessingRun.source_id,
+                    order_by=(
+                        SourceVersion.version_number.desc(),
+                        ProcessingRun.created_at.desc(),
+                        ProcessingRun.id.desc(),
+                    ),
+                )
+                .label("source_rank"),
+            )
+            .join(SourceVersion, SourceVersion.id == ProcessingRun.source_version_id)
+            .where(*ownership)
+            .subquery()
+        )
+        statement = (
+            select(ProcessingRun)
+            .join(ranked, ranked.c.run_id == ProcessingRun.id)
+            .where(ranked.c.source_rank == 1)
+        )
+    else:
+        statement = select(ProcessingRun).where(*ownership)
     statement = (
-        select(ProcessingRun)
-        .options(selectinload(ProcessingRun.stages), selectinload(ProcessingRun.events))
-        .where(ProcessingRun.user_id == user.id)
-        .order_by(ProcessingRun.created_at.desc())
+        statement.options(selectinload(ProcessingRun.stages), selectinload(ProcessingRun.events))
+        .order_by(ProcessingRun.created_at.desc(), ProcessingRun.id.desc())
         .limit(limit)
     )
-    if source_id is not None:
-        statement = statement.where(ProcessingRun.source_id == source_id)
     return list((await db.execute(statement)).scalars().unique())
 
 
