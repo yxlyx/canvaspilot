@@ -64,7 +64,7 @@ pub fn wrap(allocator: std.mem.Allocator, path: []const u8, body: []const u8, me
             w.writeAll("\n") catch {};
         }
     }
-    w.writeAll("<script defer src=\"/app.js?v=wikibase-16\"></script></head><body><a class=\"cp-skip\" href=\"#main\">Skip to content</a>\n") catch return body;
+    w.writeAll("<script defer src=\"/app.js?v=wikibase-17\"></script></head><body><a class=\"cp-skip\" href=\"#main\">Skip to content</a>\n") catch return body;
 
     if (standalone) {
         if (!std.mem.eql(u8, path, "/") and !reader_page) {

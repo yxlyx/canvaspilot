@@ -94,13 +94,13 @@ test("polling advances queued to running without wiping the timeline on failure"
     if (calls === 1) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(run("running", [stage("running")])) });
     return route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"offline"}' });
   });
-  await page.setContent(`<main><article data-source-id="${run().source_id}" data-latest-run-id="${run().id}"><p data-source-processing><span data-source-stage>Parse and index</span><span data-source-run-status>queued</span><span data-source-run-updated>1m ago</span></p></article><section data-processing-panel><p data-processing-error role="alert" hidden></p><article data-processing-run="${run().id}" data-run-status="queued"><header><span class="status-pill">queued</span></header><ol><li data-stage="parse_index" data-status="queued"><strong>Parse and index</strong><span data-stage-explanation>Waiting for an available local processing worker.</span><span data-stage-meta>time</span></li></ol></article></section><script src="/app.js"></script></main>`);
+  await page.setContent(`<main><article data-source-id="${run().source_id}" data-latest-run-id="${run().id}"><p data-source-processing data-status="queued"><span data-source-stage>Reading document</span><span data-source-run-status>Waiting</span><span data-source-run-updated>1m ago</span></p></article><section data-processing-panel><p data-processing-error role="alert" hidden></p><article data-processing-run="${run().id}" data-run-status="queued"><header><span data-current-stage>Reading document</span><span class="status-pill">Waiting</span></header><ol><li data-stage="parse_index" data-status="queued"><strong>Reading document</strong><span data-stage-state>Waiting</span></li></ol></article></section><script src="/app.js"></script></main>`);
   await expect(page.locator("[data-processing-run]")).toHaveAttribute("data-run-status", "running");
-  await expect(page.locator("[data-stage='parse_index'] [data-stage-explanation]")).toContainText("timeline updates automatically");
-  await expect(page.locator("[data-source-run-status]")).toHaveText("running");
+  await expect(page.locator("[data-stage='parse_index'] [data-stage-state]")).toHaveText("In progress");
+  await expect(page.locator("[data-source-run-status]")).toHaveText("In progress");
   await expect(page.locator("[data-source-run-updated]")).toHaveText("just now");
-  await expect(page.locator("[data-processing-error]")).toContainText("preserved", { timeout: 7000 });
-  await expect(page.locator("[data-stage='parse_index'] strong")).toHaveText("Parse and index");
+  await expect(page.locator("[data-processing-error]")).toContainText("unchanged", { timeout: 7000 });
+  await expect(page.locator("[data-stage='parse_index'] strong")).toHaveText("Reading document");
 });
 
 test("a selected historical run never overwrites the latest source-card state", async ({ page }) => {
@@ -113,8 +113,8 @@ test("a selected historical run never overwrites the latest source-card state", 
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(value) });
   });
   await page.setContent(`<main><article data-source-id="${latest.source_id}" data-latest-run-id="${latest.id}"><span data-source-stage>Queued</span><span data-source-run-status>queued</span><span data-source-run-updated>1m ago</span></article><section data-processing-panel><p data-processing-error hidden></p><article data-processing-run="${latest.id}" data-run-status="queued"><header><span class="status-pill">queued</span></header></article><article data-processing-run="${historical.id}" data-run-status="queued"><header><span class="status-pill">queued</span></header></article></section><script src="/app.js"></script></main>`);
-  await expect(page.locator("[data-source-stage]")).toHaveText("Parse and index");
-  await expect(page.locator("[data-source-run-status]")).toHaveText("running");
+  await expect(page.locator("[data-source-stage]")).toHaveText("Reading document");
+  await expect(page.locator("[data-source-run-status]")).toHaveText("In progress");
 });
 
 test("paused provider runs expose guidance and retry remains explicit", async ({ page }) => {
@@ -136,7 +136,7 @@ test("Wiki content remains visible when status polling fails", async ({ page }) 
   await page.route("**/api/processing", (route) => route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"offline"}' }));
   await page.setContent(`<main><article><h1>Prior valid Wiki</h1><p>Cited content remains readable.</p></article><section data-processing-panel><p data-processing-error role="alert" hidden></p><article data-processing-run="${run().id}" data-run-status="running"><header><span class="status-pill">running</span></header></article></section><script src="/app.js"></script></main>`);
   await expect(page.getByRole("heading", { name: "Prior valid Wiki" })).toBeVisible();
-  await expect(page.locator("[data-processing-error]")).toContainText("preserved");
+  await expect(page.locator("[data-processing-error]")).toContainText("unchanged");
   await expect(page.getByText("Cited content remains readable.")).toBeVisible();
 });
 

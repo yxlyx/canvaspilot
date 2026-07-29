@@ -51,7 +51,7 @@ test("settings pages share the current immutable script version", async () => {
     expect(source).toContain("/settings.js?v=20260728-1");
   }
   const layout = fs.readFileSync(path.join(__dirname, "../../app/layout.zig"), "utf8");
-  expect(layout).toContain("/app.js?v=wikibase-16");
+  expect(layout).toContain("/app.js?v=wikibase-17");
 });
 
 test("explicit demo renders grounded and insufficient study-guide states", async ({ page }) => {
@@ -439,9 +439,11 @@ test("saved account motion preference remains reduced after reload", async ({ pa
   await expect.poll(() => page.locator(".wb-marketing-nav").evaluate((node) => Number.parseFloat(getComputedStyle(node).transitionDuration))).toBeLessThanOrEqual(0.00001);
 });
 
-test("live source preview stays metadata-only and source intake reports its saved indexing state", async ({ page }) => {
+test("live source preview loads the real first page and source intake reports its saved state", async ({ page }) => {
   await page.goto("/login");
   let sourceRequest; let sourceIdempotencyKey;
+  const previewPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+  await page.route("**/api/sources/preview?id=223e4567-e89b-12d3-a456-426614174000", (route) => route.fulfill({ status: 200, contentType: "image/png", body: previewPng }));
   await page.route("**/api/sources/import", (route) => {
     sourceRequest = route.request().postDataJSON();
     sourceIdempotencyKey = route.request().headers()["idempotency-key"];
@@ -454,21 +456,27 @@ test("live source preview stays metadata-only and source intake reports its save
   await page.setContent(`<main>
     <input id="cp-source-search"><select id="cp-source-format"><option value="">All formats</option></select>
     <span id="cp-source-count"></span><h2 id="cp-source-heading"></h2><div id="cp-source-empty" hidden></div>
-    <section id="cp-document-grid"><article class="document-card" data-title="Lecture notes" data-module="CS2040S" data-format="URL" data-status="pending" data-tags="Trees">
-      <button type="button" data-source-preview>Preview</button></article></section>
+    <section id="cp-document-grid"><article class="document-card" data-title="Lecture notes" data-module="CS2040S" data-format="PDF" data-status="pending" data-tags="Trees" data-preview-src="/api/sources/preview?id=223e4567-e89b-12d3-a456-426614174000" data-source-href="/chat">
+      <button class="document-preview-button" type="button" data-source-preview aria-label="Loading preview for Lecture notes"><span class="document-preview-loading">Loading first page</span><img data-document-preview-image src="/api/sources/preview?id=223e4567-e89b-12d3-a456-426614174000" alt="First page of Lecture notes"><span class="document-preview-fallback" hidden>Unavailable</span></button></article></section>
     <div id="cp-source-preview-modal" hidden><section><button type="button" data-close-source-modal>Close</button>
-      <h3 id="cp-preview-paper-title">Source</h3><h2 id="cp-preview-title">Source</h2><p id="cp-preview-detail"></p>
-      <span id="cp-preview-status"></span><dl><dd id="cp-preview-context"></dd><dd id="cp-preview-format"></dd><dd id="cp-preview-topics"></dd></dl>
+      <h2 id="cp-preview-title">Source</h2><p id="cp-preview-detail"></p><span id="cp-preview-loading" hidden>Loading</span><img id="cp-preview-image" alt="" hidden><div id="cp-preview-fallback" hidden>Unavailable</div>
+      <span id="cp-preview-status"></span><dl><dd id="cp-preview-context"></dd><dd id="cp-preview-format"></dd><dd id="cp-preview-topics"></dd></dl><a id="cp-preview-open" href="/sources">Open source</a>
     </section></div>
     <button id="cp-add-source" type="button">Add source</button><div id="cp-add-source-modal"><section>
       <button type="button" data-source-mode="upload">Upload files</button><button type="button" data-source-mode="link">Add link</button><button type="button" data-source-mode="paste">Paste text</button>
       <form id="cp-add-source-form" action="/api/sources/import"><input name="mode" value="upload"><div data-source-panel="upload"></div><div data-source-panel="link" hidden></div><div data-source-panel="paste" hidden></div><input id="cp-new-source-title" value="New source"><input id="cp-new-source-url" value="https://example.test/notes"><input id="cp-new-source-module" value="CS2040S"><button type="submit">Import source</button><p class="cp-form-status"></p></form>
-    </section></div><script src="/app.js"></script></main>`);
+    </section></div><script src="/app.js?preview-test=1"></script></main>`);
 
-  await page.getByRole("button", { name: "Preview" }).click();
+  await expect(page.locator("[data-source-preview]")).toHaveAttribute("aria-label", "Preview first page of Lecture notes");
+  await expect(page.locator("[data-document-preview-image]")).toBeVisible();
+  await expect(page.locator(".document-preview-loading")).toBeHidden();
+  await page.getByRole("button", { name: "Preview first page of Lecture notes" }).click();
   await expect(page.locator("#cp-preview-context")).toHaveText("CS2040S");
-  await expect(page.locator("#cp-preview-format")).toHaveText("URL");
+  await expect(page.locator("#cp-preview-format")).toHaveText("PDF");
   await expect(page.locator("#cp-preview-topics")).toHaveText("Trees");
+  await expect(page.locator("#cp-preview-image")).toHaveAttribute("src", "/api/sources/preview?id=223e4567-e89b-12d3-a456-426614174000");
+  await expect(page.locator("#cp-preview-image")).toBeVisible();
+  await expect(page.locator("#cp-preview-open")).toHaveAttribute("href", "/chat");
   await expect(page.locator("#cp-source-preview-modal")).not.toContainText("linked wiki claims");
   await expect(page.locator("#cp-source-preview-modal")).not.toContainText("Traceability preserved");
 

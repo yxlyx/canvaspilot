@@ -59,13 +59,34 @@ fn renderEditorialFixture(req: mer.Request, slug: []const u8) mer.Response {
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
+fn runsForSources(allocator: std.mem.Allocator, runs: []const lib.types.ProcessingRunResponse, source_ids: []const []const u8) ![]const lib.types.ProcessingRunResponse {
+    const selected = try allocator.alloc(lib.types.ProcessingRunResponse, runs.len);
+    var count: usize = 0;
+    for (runs) |run| {
+        var connected = false;
+        for (source_ids) |source_id| if (std.mem.eql(u8, run.source_id, source_id)) {
+            connected = true;
+            break;
+        };
+        if (!connected) continue;
+        selected[count] = run;
+        count += 1;
+    }
+    return selected[0..count];
+}
+
 fn renderLiveReader(req: mer.Request, page: lib.types.WikiPageResponse, now_secs: i64) mer.Response {
     const token = lib.session.fromRequest(req).token;
     var runs: []const lib.types.ProcessingRunResponse = &.{};
+    var activity_sources: []const lib.types.SourceResponse = &.{};
     var runs_loaded = true;
     if (page.source_ids.len > 0) {
-        const result = lib.backend.listProcessingRuns(req.allocator, token, page.source_ids[0], 5);
-        if (result.value) |parsed| runs = parsed.value else runs_loaded = false;
+        const result = lib.backend.latestProcessingRuns(req.allocator, token);
+        if (result.value) |parsed| {
+            runs = runsForSources(req.allocator, parsed.value, page.source_ids) catch return mer.internalError("wiki activity failed");
+        } else runs_loaded = false;
+        const source_result = lib.backend.listSources(req.allocator, token);
+        if (source_result.value) |parsed| activity_sources = parsed.value;
     }
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
@@ -96,7 +117,7 @@ fn renderLiveReader(req: mer.Request, page: lib.types.WikiPageResponse, now_secs
     }
     w.print("<div class=\"backlinks\"><small>Evidence</small><strong>{d} citations</strong><span>{d} source records · created {s}</span></div></aside></div>", .{ page.citation_count, page.source_ids.len, created }) catch return mer.internalError("wiki render failed");
     if (page.source_ids.len > 0) w.print("<div class=\"cp-wiki-rebuild\"><button class=\"cp-btn cp-btn-primary\" type=\"button\" data-manual-processing-trigger data-source-id=\"{s}\">Rebuild Wiki from current source</button><span class=\"cp-form-status\" role=\"status\" tabindex=\"-1\"></span><p>The request only queues durable work. This prior valid Wiki remains open if refresh fails.</p></div>", .{lib.ui.escapeSafe(req.allocator, page.source_ids[0])}) catch return mer.internalError("wiki render failed");
-    if (runs_loaded) lib.processing_ui.render(req.allocator, w, runs, "", false) catch return mer.internalError("wiki render failed") else w.writeAll("<section class=\"cp-processing-panel surface\"><h2>Wiki compilation</h2><p role=\"alert\">Refresh status is unavailable. The prior valid Wiki above is preserved.</p></section>") catch return mer.internalError("wiki render failed");
+    if (runs_loaded) lib.processing_ui.render(req.allocator, w, runs, activity_sources, "", false) catch return mer.internalError("wiki render failed") else w.writeAll("<section class=\"cp-processing-panel surface\"><h2>Wiki compilation</h2><p role=\"alert\">Refresh status is unavailable. The prior valid Wiki above is preserved.</p></section>") catch return mer.internalError("wiki render failed");
     w.writeAll("</main>") catch return mer.internalError("wiki render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }

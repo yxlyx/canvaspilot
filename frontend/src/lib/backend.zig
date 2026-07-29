@@ -388,7 +388,7 @@ pub fn proxy(allocator: std.mem.Allocator, token: []const u8, idempotency_key: [
     const bearer = authHeader(allocator, token) catch return .{ .status = 0, .err = "could not build authorization" };
     var headers_buf: [4]std.http.Header = undefined;
     headers_buf[0] = .{ .name = "Authorization", .value = bearer };
-    headers_buf[1] = .{ .name = "Accept", .value = "application/json, text/markdown, application/zip" };
+    headers_buf[1] = .{ .name = "Accept", .value = "application/json, text/markdown, application/zip, image/png" };
     var n: usize = 2;
     if (idempotency_key.len > 0) {
         headers_buf[n] = .{ .name = "Idempotency-Key", .value = idempotency_key };

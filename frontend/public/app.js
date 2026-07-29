@@ -380,6 +380,43 @@
       search.focus();
     });
 
+    grid.querySelectorAll("[data-document-preview-image]").forEach(function (image) {
+      const button = image.closest(".document-preview-button");
+      const loading = button && button.querySelector(".document-preview-loading");
+      const fallback = button && button.querySelector(".document-preview-fallback");
+      function ready() {
+        if (loading) loading.hidden = true;
+        if (fallback) fallback.hidden = true;
+        image.hidden = false;
+        if (button) {
+          button.classList.add("is-ready");
+          const card = button.closest(".document-card");
+          button.setAttribute("aria-label", "Preview first page of " + ((card && card.dataset.title) || "source"));
+        }
+      }
+      function unavailable() {
+        if (loading) loading.hidden = true;
+        image.hidden = true;
+        if (fallback) fallback.hidden = false;
+        if (button) button.classList.remove("is-ready");
+        const card = image.closest(".document-card");
+        if (card) card.dataset.previewFailed = "true";
+        if (button) button.setAttribute("aria-label", "Preview unavailable for " + ((card && card.dataset.title) || "source") + ". Select to retry");
+      }
+      image.addEventListener("load", ready);
+      image.addEventListener("error", unavailable);
+      let previewChecks = 0;
+      function checkPreview() {
+        if (image.complete) {
+          if (image.naturalWidth > 0) ready(); else unavailable();
+          return;
+        }
+        previewChecks += 1;
+        if (previewChecks < 100) window.setTimeout(checkPreview, 100);
+      }
+      checkPreview();
+    });
+
     grid.addEventListener("click", function (event) {
       const trigger = event.target.closest("[data-source-preview]");
       if (!trigger) return;
@@ -387,14 +424,16 @@
       if (!card) return;
       const title = card.dataset.title || "Source";
       const titleElement = document.getElementById("cp-preview-title");
-      const paperTitle = document.getElementById("cp-preview-paper-title");
       const detail = document.getElementById("cp-preview-detail");
       const previewStatus = document.getElementById("cp-preview-status");
       const previewContext = document.getElementById("cp-preview-context");
       const previewFormat = document.getElementById("cp-preview-format");
       const previewTopics = document.getElementById("cp-preview-topics");
+      const previewImage = document.getElementById("cp-preview-image");
+      const previewLoading = document.getElementById("cp-preview-loading");
+      const previewFallback = document.getElementById("cp-preview-fallback");
+      const previewOpen = document.getElementById("cp-preview-open");
       if (titleElement) titleElement.textContent = title;
-      if (paperTitle) paperTitle.textContent = title.replace(/^.*?—\s*/, "");
       if (detail) detail.textContent = [card.dataset.module, card.dataset.format, card.dataset.tags].filter(Boolean).join(" · ");
       if (previewContext) previewContext.textContent = card.dataset.module || "Workspace";
       if (previewFormat) previewFormat.textContent = card.dataset.format || "Source";
@@ -403,6 +442,35 @@
         const displayStatus = card.dataset.displayStatus || normalizeStatus(card.dataset.status) || "Ready";
         previewStatus.textContent = displayStatus;
         previewStatus.className = "status-pill status-" + (displayStatus === "Ready" ? "good" : displayStatus === "Pending" || displayStatus === "Importing" ? "info" : "warn");
+      }
+      const previewSrc = card.dataset.previewSrc || "";
+      const retrySrc = previewSrc && card.dataset.previewFailed === "true" ? previewSrc + "&retry=" + Date.now() : previewSrc;
+      if (previewOpen) {
+        const sourceHref = card.dataset.sourceHref || "";
+        previewOpen.href = sourceHref || "/sources";
+        previewOpen.textContent = sourceHref.startsWith("/chat") ? "Ask about source" : "Open source";
+        previewOpen.hidden = !sourceHref;
+      }
+      if (previewImage && previewLoading && previewFallback) {
+        previewImage.onload = function () {
+          previewLoading.hidden = true;
+          previewFallback.hidden = true;
+          previewImage.hidden = false;
+          card.dataset.previewFailed = "false";
+          const cardImage = card.querySelector("[data-document-preview-image]");
+          if (cardImage && cardImage.hidden && retrySrc) cardImage.src = retrySrc;
+        };
+        previewImage.onerror = function () {
+          previewLoading.hidden = true;
+          previewImage.hidden = true;
+          previewFallback.hidden = false;
+        };
+        previewImage.hidden = true;
+        previewFallback.hidden = Boolean(previewSrc);
+        previewLoading.hidden = !previewSrc;
+        previewImage.alt = previewSrc ? "First page of " + title : "";
+        if (retrySrc) previewImage.src = retrySrc;
+        else previewImage.removeAttribute("src");
       }
       openModal(previewModal, trigger);
     });
@@ -745,6 +813,7 @@
     let delay = 1500;
     let timer = 0;
     let stopped = false;
+    let pollingFailed = false;
 
     function key() {
       return "processing-" + (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : Date.now() + "-" + Math.random().toString(16).slice(2));
@@ -768,51 +837,55 @@
         return run.dataset.runStatus === "queued" || run.dataset.runStatus === "running";
       });
     }
-    function stageExplanation(status) {
-      if (status === "queued") return "Waiting for an available local processing worker.";
-      if (status === "running") return "Work is in progress; this timeline updates automatically.";
-      if (status === "blocked") return "Starts automatically after the previous stage succeeds.";
-      if (status === "succeeded") return "Finished and saved.";
-      if (status === "skipped") return "Not required for this source; the workflow continued safely.";
-      if (status === "failed") return "Needs attention; retry resumes this run without duplicating the source.";
-      if (status === "paused") return "Paused safely until its requirement is available.";
-      if (status === "cancelled") return "Stopped; saved completed work is retained.";
-      return "Persisted processing state.";
+    function stageState(status) {
+      return ({ succeeded: "Done", skipped: "Not needed", running: "In progress", queued: "Waiting", blocked: "Next", failed: "Needs attention", paused: "Paused", cancelled: "Stopped" })[status] || "Saved";
+    }
+    function runState(status) {
+      return ({ ready: "Completed", queued: "Waiting", running: "In progress", failed: "Needs attention", paused: "Paused", cancelled: "Stopped" })[status] || status;
     }
     function stageLabel(name) {
-      return ({ parse_index: "Parse and index", topic_proposals: "Deterministic topic mapping", coverage: "Coverage snapshot", wiki: "Wiki compilation", flashcards: "Flashcard draft generation", ready: "Completed processing" })[name] || name;
+      return ({ parse_index: "Reading document", topic_proposals: "Organising topics", coverage: "Updating coverage", wiki: "Refreshing Wiki", flashcards: "Preparing flashcards", ready: "Source ready" })[name] || name;
     }
     function apply(run) {
       const node = panel.querySelector('[data-processing-run="' + CSS.escape(run.id) + '"]');
       if (!node) return;
       const previous = node.dataset.runStatus;
+      const previousStage = node.dataset.runStage;
       node.dataset.runStatus = run.status;
+      node.dataset.runStage = run.current_stage || "";
       const pill = node.querySelector("header .status-pill");
       if (pill) {
-        pill.textContent = run.status === "ready" ? "completed" : run.status;
-        pill.className = "status-pill status-" + (run.status === "ready" ? "good" : run.status === "failed" || run.status === "cancelled" ? "warn" : "info");
+        pill.textContent = runState(run.status);
+        pill.className = "status-pill status-" + (run.status === "ready" ? "good" : run.status === "failed" || run.status === "cancelled" || run.status === "paused" ? "warn" : "info");
+      }
+      const currentStage = node.querySelector("[data-current-stage]");
+      if (currentStage) currentStage.textContent = run.status === "ready" ? "All selected steps finished" : stageLabel(run.current_stage);
+      const live = node.querySelector("[data-run-live]");
+      if (live && (previous !== run.status || previousStage !== run.current_stage)) {
+        const sourceName = node.querySelector(".cp-processing-source strong");
+        live.textContent = ((sourceName && sourceName.textContent) || "Source") + ": " + runState(run.status) + ". " + (run.status === "ready" ? "All selected steps finished" : stageLabel(run.current_stage)) + ".";
       }
       (run.stages || []).forEach(function (stage) {
         const item = node.querySelector('[data-stage="' + CSS.escape(stage.name) + '"]');
         if (!item) return;
         item.dataset.status = stage.status;
-        const explanation = item.querySelector("[data-stage-explanation]");
-        const meta = item.querySelector("[data-stage-meta]");
-        if (explanation) explanation.textContent = stageExplanation(stage.status);
-        if (meta) meta.textContent = (stage.completed_at || stage.started_at || stage.available_at) + " · attempt " + stage.attempt_count + " of " + stage.max_attempts;
+        const state = item.querySelector("[data-stage-state]");
+        if (state) state.textContent = stageState(stage.status);
       });
       const sourceCard = document.querySelector('[data-source-id="' + CSS.escape(run.source_id) + '"]');
       if (sourceCard && sourceCard.dataset.latestRunId === run.id) {
         const stageNode = sourceCard.querySelector("[data-source-stage]");
         const statusNode = sourceCard.querySelector("[data-source-run-status]");
         const updatedNode = sourceCard.querySelector("[data-source-run-updated]");
-        if (stageNode) stageNode.textContent = stageLabel(run.current_stage);
-        if (statusNode) statusNode.textContent = run.status === "ready" ? "completed" : run.status;
+        const summary = sourceCard.querySelector("[data-source-processing]");
+        if (summary) summary.dataset.status = run.status;
+        if (stageNode) stageNode.textContent = run.status === "ready" ? "Source ready" : stageLabel(run.current_stage);
+        if (statusNode) statusNode.textContent = runState(run.status);
         if (updatedNode) updatedNode.textContent = "just now";
       }
       if ((run.status === "ready" || run.status === "failed" || run.status === "cancelled" || run.status === "paused") && previous !== run.status) {
         stopped = true;
-        window.location.reload();
+        window.setTimeout(function () { window.location.reload(); }, 1200);
       }
     }
     async function poll() {
@@ -820,17 +893,21 @@
       if (stopped || document.hidden) return;
       const runs = activeRuns();
       if (!runs.length) return;
-      try {
-        const values = await Promise.all(runs.map(function (node) { return request({ action: "run.status", id: node.dataset.processingRun }); }));
-        values.forEach(apply);
+      const results = await Promise.allSettled(runs.map(function (node) { return request({ action: "run.status", id: node.dataset.processingRun }); }));
+      results.forEach(function (result) { if (result.status === "fulfilled") apply(result.value); });
+      const failed = results.find(function (result) { return result.status === "rejected"; });
+      if (!failed) {
         delay = Math.min(Math.round(delay * 1.5), 15000);
+        pollingFailed = false;
         if (errorNode) errorNode.hidden = true;
-      } catch (error) {
+      } else {
         delay = Math.min(delay * 2, 30000);
-        if (errorNode) {
-          errorNode.textContent = (error && error.message ? error.message : "Processing status could not be refreshed.") + " Existing timeline and source content are preserved.";
+        if (errorNode && !pollingFailed) {
+          const error = failed.reason;
+          errorNode.textContent = (error && error.message ? error.message : "Source activity could not be refreshed.") + " Your documents are unchanged.";
           errorNode.hidden = false;
         }
+        pollingFailed = true;
       }
       timer = window.setTimeout(poll, delay);
     }
@@ -861,8 +938,8 @@
         button.disabled = true;
         if (status) status.textContent = "Queueing rebuild…";
         try {
-          const run = await request({ action: "manual.trigger", idempotency_key: key(), payload: { source_id: button.dataset.sourceId } });
-          if (status) status.textContent = "Rebuild queued. Run " + run.id + ". The current Wiki remains available.";
+          await request({ action: "manual.trigger", idempotency_key: key(), payload: { source_id: button.dataset.sourceId } });
+          if (status) status.textContent = "Rebuild queued. The current Wiki remains available while it refreshes.";
           window.setTimeout(function () { window.location.reload(); }, 500);
         } catch (error) {
           if (status) {
