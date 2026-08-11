@@ -53,7 +53,7 @@ test("settings pages share the current immutable script version", async () => {
   expect(learning).toContain("/settings.js?v=20260728-1");
   expect(learning).toContain("/curriculum.js?v=20260728-3");
   const layout = fs.readFileSync(path.join(__dirname, "../../app/layout.zig"), "utf8");
-  expect(layout).toContain("/app.js?v=wikibase-18");
+  expect(layout).toContain("/app.js?v=wikibase-22");
 });
 
 test("explicit demo renders grounded and insufficient study-guide states", async ({ page }) => {
@@ -588,7 +588,7 @@ test("demo settings and wiki expose no mutation controls", async ({ page }) => {
   await page.goto("/settings/providers?mock=1");
   await expect(page.locator('input[type="password"]')).toHaveCount(0);
   await expect(page.locator("form[data-m3-form]")).toHaveCount(0);
-  await expect(page.getByText(/Read-only preview/).first()).toBeVisible();
+  await expect(page.getByText(/read-only preview/i).first()).toBeVisible();
   await expect(page.locator("html")).not.toContainText(/sk-[A-Za-z0-9]/);
   await page.goto("/settings/data?mock=1");
   await expect(page.locator("form[data-wiki-export]")).toHaveCount(0);

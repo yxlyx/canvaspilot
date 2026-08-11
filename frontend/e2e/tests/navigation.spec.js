@@ -35,7 +35,7 @@ test("clearing chat invalidates an in-flight answer without unlocking a newer re
     if (requestCount === 1) {
       markFirstStarted();
       await lateResponseHeld;
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ message: "SENTINEL LATE ANSWER", citations: [] }) });
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ message: "SENTINEL LATE ANSWER", citations: [] }) }).catch(() => {});
       return;
     }
     markSecondStarted();
@@ -49,7 +49,10 @@ test("clearing chat invalidates an in-flight answer without unlocking a newer re
   await page.locator("#cp-chat-send").click();
   await firstStarted;
 
+  const firstCancelled = page.waitForEvent("requestfailed", (request) => request.postData()?.includes("First question"));
   await page.locator("#cp-chat-clear").click();
+  await firstCancelled;
+  releaseLateResponse();
   await expect(page.locator("#cp-chat-log .chat-dynamic")).toHaveCount(0);
   await expect(page.locator("#cp-chat-welcome")).toBeVisible();
 
@@ -57,9 +60,6 @@ test("clearing chat invalidates an in-flight answer without unlocking a newer re
   await page.locator("#cp-chat-send").click();
   await secondStarted;
 
-  const lateResponse = page.waitForResponse((response) => response.url().includes("/api/chat"));
-  releaseLateResponse();
-  await (await lateResponse).finished();
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await expect(page.locator("#cp-chat-log")).not.toContainText("SENTINEL LATE ANSWER");
   await expect(input).toBeDisabled();
@@ -123,7 +123,7 @@ test("changing chat scope invalidates a delayed response without unlocking a new
     if (requestCount === 1) {
       markOldStarted();
       await oldResponseHeld;
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ message: "SENTINEL OLD-SCOPE ANSWER", citations: [] }) });
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ message: "SENTINEL OLD-SCOPE ANSWER", citations: [] }) }).catch(() => {});
       return;
     }
     markNewStarted();
@@ -137,7 +137,10 @@ test("changing chat scope invalidates a delayed response without unlocking a new
   await page.locator("#cp-chat-send").click();
   await oldStarted;
 
+  const oldCancelled = page.waitForEvent("requestfailed", (request) => request.postData()?.includes("Old-scope question"));
   await page.locator("#cp-chat-module").selectOption("11111111-1111-1111-1111-111111111111");
+  await oldCancelled;
+  releaseOldResponse();
   await expect(page.locator("#cp-chat-log .chat-dynamic")).toHaveCount(0);
   await expect(page.locator("#cp-chat-welcome")).toBeVisible();
   await expect(input).toBeEnabled();
@@ -146,9 +149,6 @@ test("changing chat scope invalidates a delayed response without unlocking a new
   await page.locator("#cp-chat-send").click();
   await newStarted;
 
-  const oldResponse = page.waitForResponse((response) => response.request().postData().includes("Old-scope question"));
-  releaseOldResponse();
-  await (await oldResponse).finished();
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await expect(page.locator("#cp-chat-log")).not.toContainText("SENTINEL OLD-SCOPE ANSWER");
   await expect(input).toBeDisabled();

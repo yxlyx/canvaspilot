@@ -19,6 +19,8 @@ const ICON_SCOPE = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><circle cx=\
 const ICON_TOPIC = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><circle cx=\"6\" cy=\"6\" r=\"2\"/><circle cx=\"18\" cy=\"7\" r=\"2\"/><circle cx=\"12\" cy=\"18\" r=\"2\"/><path d=\"m8 7 8 1M7 8l4 8M17 9l-4 7\"/></svg>";
 const ICON_FILE = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z\"/><path d=\"M14 2v6h6M8 13h8M8 17h6\"/></svg>";
 const ICON_WIKI = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M12 7v14\"/><path d=\"M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3Z\"/><path d=\"M21 18a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1h-5a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3Z\"/></svg>";
+const ICON_CLOCK = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M12 7v5l3 2\"/></svg>";
+const ICON_TRASH = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 10v6M14 10v6\"/></svg>";
 
 fn safeUuid(value: []const u8) bool {
     if (value.len != 36) return false;
@@ -168,7 +170,7 @@ fn renderCreateArea(req: mer.Request, w: *std.Io.Writer, demo: bool, provider_st
     try w.writeAll("</div></div><p class=\"cp-scope-effective\" data-scope-effective role=\"status\">Enrollment · 0 selected</p></div></section><section class=\"cp-flash-step\"><header><span>3</span><div><h3>Create draft</h3><p>Name the draft if useful and choose a concise review size.</p></div></header><label class=\"cp-field\"><span>Draft title <small>Optional</small></span><input name=\"deck_title\" maxlength=\"1000\"></label><fieldset class=\"cp-count-choices\"><legend>Number of cards</legend>");
     const limits = [_]usize{ 5, 10, 15, 20 };
     for (limits) |limit| try w.print("<label><input type=\"radio\" name=\"limit_choice\" value=\"{d}\"{s}><span>{d}</span></label>", .{ limit, if (limit == 10) " checked" else "", limit });
-    try w.writeAll("<label><input type=\"radio\" name=\"limit_choice\" value=\"custom\"><span>Custom</span></label><label class=\"cp-custom-count\" hidden><span class=\"sr-only\">Custom card count</span><input name=\"custom_limit\" type=\"number\" min=\"1\" max=\"20\" value=\"10\"></label></fieldset><details class=\"cp-flash-advanced\"><summary>Advanced</summary><label class=\"cp-check-row\"><input type=\"checkbox\" name=\"regenerate\"><span>Create a linked successor draft<small>Use this only when you intentionally want to supersede a matching draft. The earlier draft remains in history.</small></span></label></details><button class=\"cp-btn cp-btn-primary\" type=\"submit\">Create review draft</button><p>Practice begins only after you review and publish the draft.</p></section></fieldset></form><p data-flash-create-status aria-live=\"polite\"></p>");
+    try w.writeAll("<label><input type=\"radio\" name=\"limit_choice\" value=\"custom\"><span>Custom</span></label><label class=\"cp-custom-count\" hidden><span class=\"sr-only\">Custom card count</span><input name=\"custom_limit\" type=\"number\" min=\"1\" max=\"20\" value=\"10\"></label></fieldset><details class=\"cp-flash-advanced\"><summary>Advanced</summary><label class=\"cp-check-row\"><input type=\"checkbox\" name=\"regenerate\"><span>Create a linked successor draft<small>Use this only when you intentionally want to supersede a matching draft. The earlier draft remains in history.</small></span></label></details><div class=\"cp-flash-submit\"><button class=\"cp-btn cp-btn-primary\" type=\"submit\">Generate flashcards</button><p>Review the generated cards before adding them to practice.</p></div><div class=\"cp-flash-generation\" data-flash-generation hidden role=\"status\" aria-live=\"polite\"><span class=\"cp-spinner\" aria-hidden=\"true\"></span><div><strong>Generating flashcards</strong><span>Reading the selected evidence and preparing your review draft.</span></div><span class=\"cp-generation-track\" aria-hidden=\"true\"><i></i></span></div></section></fieldset></form><p data-flash-create-status aria-live=\"polite\"></p>");
     if (demo) try w.writeAll("<p class=\"cp-demo-rating-note\">Synthetic demo fixture · configure the request freely. Previewing it does not create or save a draft.</p>");
     try w.writeAll("</section>");
 }
@@ -229,15 +231,15 @@ fn renderLivePage(req: mer.Request, w: *std.Io.Writer, decks: []const lib.types.
         if ((selected_id.len == 0 and active == null) or std.mem.eql(u8, deck.id, selected_id)) active = deck;
     }
     const active_id = if (active) |deck| deck.id else "";
-    try w.writeAll("<section class=\"cp-draft-decks surface\" aria-labelledby=\"draft-decks-title\"><header><div><p class=\"eyebrow\">Pipeline stage · Flashcard draft generation</p><h2 id=\"draft-decks-title\">Draft decks awaiting review</h2><p>Draft cards never enter the practice queue until you approve and publish the deck.</p></div></header><div class=\"cp-draft-list\">");
+    try w.print("<section class=\"cp-draft-decks surface\" aria-labelledby=\"draft-decks-title\" data-draft-queue><header class=\"cp-review-queue-head\"><span class=\"cp-review-pending-icon\">{s}</span><div><p class=\"eyebrow\">Pending review</p><h2 id=\"draft-decks-title\">Review generated flashcards</h2><p>Check each draft, then publish the cards you want to practise.</p></div></header><div class=\"cp-draft-list\" data-draft-list>", .{ICON_CLOCK});
     var draft_count: usize = 0;
     for (decks) |deck| if (std.mem.eql(u8, deck.lifecycle, "draft")) {
         draft_count += 1;
         const updated = lib.time.formatRelative(req.allocator, deck.updated_at, lib.time.nowSecs()) catch "—";
-        try w.print("<article><div><strong>{s}</strong><span>{d} draft cards · revision {d} · updated {s}</span></div><a class=\"cp-btn cp-btn-ghost\" href=\"/flashcards/drafts/{s}\">Review draft</a></article>", .{ lib.ui.escapeSafe(req.allocator, deck.title), deck.card_count, deck.revision, lib.ui.escapeSafe(req.allocator, updated), lib.ui.escapeSafe(req.allocator, deck.id) });
+        try w.print("<article data-draft-id=\"{s}\" data-draft-revision=\"{d}\"><span class=\"cp-review-pending-icon cp-review-pending-icon-small\">{s}</span><div><strong>{s}</strong><span>{d} cards · updated {s}</span></div><div class=\"cp-draft-actions\"><a class=\"cp-btn cp-btn-ghost\" href=\"/flashcards/drafts/{s}\">Review cards</a><button class=\"cp-icon-button cp-draft-delete\" type=\"button\" data-delete-draft aria-label=\"Delete {s} from the review queue\">{s}</button></div></article>", .{ lib.ui.escapeSafe(req.allocator, deck.id), deck.revision, ICON_CLOCK, lib.ui.escapeSafe(req.allocator, deck.title), deck.card_count, lib.ui.escapeSafe(req.allocator, updated), lib.ui.escapeSafe(req.allocator, deck.id), lib.ui.escapeSafe(req.allocator, deck.title), ICON_TRASH });
     };
-    if (draft_count == 0) try w.writeAll("<p class=\"cp-empty-copy\">No draft decks are awaiting review.</p>");
-    try w.writeAll("</div><p id=\"draft-review\" class=\"cp-inline-status\">Draft review surface reserved for the review workflow. Publishing remains an explicit action.</p></section>");
+    if (draft_count == 0) try w.writeAll("<p class=\"cp-empty-copy\" data-draft-empty>No flashcards are waiting for review.</p>");
+    try w.writeAll("</div><p class=\"cp-draft-queue-status\" data-draft-queue-status aria-live=\"polite\"></p></section>");
     try renderPageStart(w);
     for (decks) |deck| {
         if (!std.mem.eql(u8, deck.lifecycle, "approved")) continue;

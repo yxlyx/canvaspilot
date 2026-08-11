@@ -123,14 +123,14 @@ fn renderReview(req: mer.Request, deck: lib.types.FlashcardDeckResponse, history
     for (deck.cards) |card| renderCard(req, w, card, deck.scope_snapshot, editable) catch return mer.internalError("draft render failed");
     w.writeAll("</ol></section>") catch return mer.internalError("draft render failed");
     if (editable) {
-        w.print("<section class=\"cp-publish-panel surface\"><div><p class=\"eyebrow\">3 · Publish</p><h2>Approve and publish</h2><p>{d} active · {d} approved · {d} need attention</p>", .{ active, approved, unsupported + low_signal }) catch return mer.internalError("draft render failed");
+        w.print("<section class=\"cp-publish-panel surface\"><div><p class=\"eyebrow\">3 · Finish review</p><h2>Prepare this deck for study</h2><p>{d} cards · {d} ready · {d} need attention</p>", .{ active, approved, unsupported + low_signal }) catch return mer.internalError("draft render failed");
         if (active == 0) w.writeAll("<p role=\"alert\">Publish is disabled because the deck has no active cards.</p>") catch return mer.internalError("draft render failed");
         if (approved != active) w.writeAll("<p role=\"alert\">Publish is disabled until every active card is approved.</p>") catch return mer.internalError("draft render failed");
         if (unsupported > 0) w.writeAll("<p role=\"alert\">Publish is disabled while a card lacks evidence or a personal-note label.</p>") catch return mer.internalError("draft render failed");
         if (low_signal > 0) w.writeAll("<p role=\"alert\">Publish is disabled until low-signal document metadata is rewritten or discarded.</p>") catch return mer.internalError("draft render failed");
-        w.writeAll("</div><div class=\"cp-action-row\"><button class=\"cp-btn cp-btn-ghost\" type=\"button\" data-approve-selected>Approve selected</button><button class=\"cp-btn cp-btn-ghost\" type=\"button\" data-approve-all>Approve all supported</button><button class=\"cp-btn cp-btn-primary\" type=\"button\" data-publish") catch return mer.internalError("draft render failed");
+        w.writeAll("</div><div class=\"cp-action-row\"><button class=\"cp-btn cp-btn-ghost\" type=\"button\" data-approve-selected>Mark selected as ready</button><button class=\"cp-btn cp-btn-ghost\" type=\"button\" data-approve-all>Mark all cards as ready</button><button class=\"cp-btn cp-btn-primary\" type=\"button\" data-publish") catch return mer.internalError("draft render failed");
         if (!publishable) w.writeAll(" disabled") catch return mer.internalError("draft render failed");
-        w.writeAll(">Publish approved snapshot</button><button class=\"cp-btn cp-btn-danger\" type=\"button\" data-archive>Archive draft</button></div></section>") catch return mer.internalError("draft render failed");
+        w.writeAll(">Publish deck for study</button><button class=\"cp-btn cp-btn-danger\" type=\"button\" data-archive>Delete draft</button></div></section>") catch return mer.internalError("draft render failed");
     } else if (immutable) w.writeAll("<section class=\"cp-publish-panel surface\"><p>Retiring removes this immutable approved deck from study without rewriting it.</p><button class=\"cp-btn cp-btn-danger\" type=\"button\" data-retire>Retire approved deck</button></section>") catch return mer.internalError("draft render failed");
     w.writeAll("<details class=\"cp-draft-history surface\"><summary>Revision history and discarded-card audit</summary><ol>") catch return mer.internalError("draft render failed");
     for (history) |item| {

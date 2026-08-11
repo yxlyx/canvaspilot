@@ -150,10 +150,10 @@ test("discard requires and submits a card quality reason", async ({ page }) => {
   expect(requestBody.payload.card_ids).toEqual(["223e4567-e89b-12d3-a456-426614174000"]);
 });
 
-test("generation links to provider settings when no answer provider is available", async ({ page }) => {
+test("generation preserves provider failure detail and links to settings", async ({ page }) => {
   await page.route("**/api/flashcards", async (route) => {
     const body = route.request().postDataJSON();
-    if (body.action === "generate") return route.fulfill({ status: 409, json: { error: "provider_not_configured", detail: "Connect a provider" } });
+    if (body.action === "generate") return route.fulfill({ status: 502, json: { error: "provider_request_rejected", detail: "The answer provider rejected the generation request" } });
     return route.fulfill({ status: 200, json: [] });
   });
   await loadScript(page, generationFixture());
@@ -161,6 +161,7 @@ test("generation links to provider settings when no answer provider is available
   await page.getByRole("button", { name: "Generate review draft" }).click();
 
   await expect(page.getByRole("link", { name: "Open provider settings" })).toHaveAttribute("href", "/settings/providers");
+  await expect(page.locator("[data-flash-create-status]")).toContainText("rejected the generation request");
   await expect(page.locator("[data-flash-create-status]")).toContainText("scope selection is preserved");
 });
 

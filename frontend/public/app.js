@@ -276,6 +276,50 @@
         }, 700);
       });
     }
+
+    const palette = ["#f2747d", "#fb8c5a", "#ffca63", "#9aca99", "#62c4c7", "#6799cc", "#bd8dc1", "#d77c52"];
+    document.querySelectorAll("[data-module-colour-key]").forEach(function (tile, index) {
+      const key = "wikibase-module-colour:" + tile.dataset.moduleColourKey;
+      const swatch = tile.querySelector(".module-colour-swatch");
+      const menu = tile.querySelector(".module-colour-menu");
+      if (!swatch || !menu) return;
+      let selected = palette[index % palette.length];
+      try { selected = localStorage.getItem(key) || selected; } catch (_) {}
+
+      function applyColour(colour) {
+        selected = palette.includes(colour) ? colour : palette[index % palette.length];
+        tile.style.setProperty("--module-colour", selected);
+        menu.querySelectorAll(".module-colour-option").forEach(function (option) {
+          option.setAttribute("aria-pressed", String(option.dataset.colour === selected));
+        });
+        try { localStorage.setItem(key, selected); } catch (_) {}
+      }
+
+      palette.forEach(function (colour) {
+        const option = document.createElement("button");
+        option.type = "button";
+        option.className = "module-colour-option";
+        option.dataset.colour = colour;
+        option.style.setProperty("--choice", colour);
+        option.setAttribute("aria-label", "Use this module colour");
+        option.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 4 5 5-9.5 9.5H5v-5.5L15 4Z"/><path d="m13 6 5 5"/></svg>';
+        option.addEventListener("click", function () {
+          applyColour(colour);
+          menu.hidden = true;
+          swatch.setAttribute("aria-expanded", "false");
+          swatch.focus();
+        });
+        menu.appendChild(option);
+      });
+      applyColour(selected);
+      swatch.addEventListener("click", function () {
+        const open = menu.hidden;
+        document.querySelectorAll(".module-colour-menu:not([hidden])").forEach(function (other) { other.hidden = true; });
+        document.querySelectorAll('.module-colour-swatch[aria-expanded="true"]').forEach(function (other) { other.setAttribute("aria-expanded", "false"); });
+        menu.hidden = !open;
+        swatch.setAttribute("aria-expanded", String(open));
+      });
+    });
   }
 
   function setupSources() {
@@ -1039,6 +1083,7 @@
     const log = document.getElementById("cp-chat-log");
     const input = document.getElementById("cp-chat-input");
     const sendButton = document.getElementById("cp-chat-send");
+    const inputLimit = document.getElementById("cp-chat-input-limit");
     const moduleSelect = document.getElementById("cp-chat-module");
     const moduleCode = document.getElementById("cp-chat-module-code");
     const composerCode = document.getElementById("cp-chat-composer-code");
@@ -1052,6 +1097,9 @@
     let loading = false;
     let lastFailedMessage = null;
     let requestGeneration = 0;
+    let activeRequest = null;
+    let composing = false;
+    let compositionJustEnded = false;
 
     function selectedCode() {
       if (!moduleSelect) return "CS2040S";
@@ -1067,10 +1115,50 @@
     }
 
     function syncSend() {
-      sendButton.disabled = !providerReady || loading || input.value.trim().length === 0;
+      const codepointLength = Array.from(input.value).length;
+      const tooLong = codepointLength > 8000;
+      input.setCustomValidity(tooLong ? "Keep your question to 8,000 characters or fewer." : "");
+      if (tooLong) input.setAttribute("aria-invalid", "true");
+      else input.removeAttribute("aria-invalid");
+      if (inputLimit) {
+        inputLimit.hidden = !tooLong;
+        inputLimit.textContent = tooLong ? codepointLength.toLocaleString() + " / 8,000 characters. Shorten the question to send. " : "";
+      }
+      sendButton.disabled = !providerReady || loading || input.value.trim().length === 0 || tooLong;
       log.querySelectorAll(".answer-error button").forEach(function (button) {
         button.disabled = loading;
       });
+    }
+
+    function resizeComposer() {
+      input.style.height = "auto";
+      const nextHeight = Math.min(Math.max(input.scrollHeight, 52), 180);
+      input.style.height = nextHeight + "px";
+      input.style.overflowY = input.scrollHeight > 180 ? "auto" : "hidden";
+    }
+
+    function cancelActiveRequest() {
+      if (activeRequest) activeRequest.abort();
+      activeRequest = null;
+    }
+
+    function historyContent(content) {
+      return Array.from(String(content || "")).slice(0, 8000).join("");
+    }
+
+    function recentConversationHistory() {
+      const selected = [];
+      const encoder = new TextEncoder();
+      let encodedBytes = 0;
+      for (let end = history.length; end >= 2 && selected.length < 10; end -= 2) {
+        const pair = history.slice(end - 2, end);
+        if (pair[0].role !== "user" || pair[1].role !== "assistant") break;
+        const pairBytes = encoder.encode(JSON.stringify(pair)).length;
+        if (encodedBytes + pairBytes > 64 * 1024) break;
+        selected.unshift(pair[0], pair[1]);
+        encodedBytes += pairBytes;
+      }
+      return selected;
     }
 
     function showConversation() {
@@ -1133,16 +1221,83 @@
       return "#";
     }
 
+    function configureAnswerLink(link, raw) {
+      const safeHref = safeCitationUrl(raw);
+      if (safeHref === "#") {
+        link.removeAttribute("href");
+        link.classList.add("chat-link-removed");
+        return false;
+      }
+      const url = new URL(safeHref, window.location.origin);
+      const external = url.origin !== window.location.origin;
+      if (external && window.location.protocol === "https:" && url.protocol !== "https:") {
+        link.removeAttribute("href");
+        link.classList.add("chat-link-removed");
+        return false;
+      }
+      link.href = safeHref;
+      if (external) {
+        link.dataset.externalHost = url.hostname;
+        link.title = "Opens " + url.hostname + " in a new tab";
+        link.target = "_blank";
+        link.rel = "nofollow noopener noreferrer";
+      }
+      return true;
+    }
+
+    function plainAnswer(message) {
+      const paragraph = document.createElement("p");
+      paragraph.className = "chat-answer-plain";
+      paragraph.textContent = message;
+      return paragraph;
+    }
+
+    function renderAnswerMarkdown(message) {
+      if (!window.marked || typeof window.marked.parse !== "function" || !window.DOMPurify) {
+        return plainAnswer(message);
+      }
+
+      const markdown = document.createElement("div");
+      markdown.className = "chat-markdown";
+      try {
+        const rendered = window.marked.parse(String(message || ""), {
+          async: false,
+          breaks: true,
+          gfm: true,
+        });
+        markdown.innerHTML = window.DOMPurify.sanitize(rendered, {
+          ALLOWED_TAGS: ["a", "blockquote", "br", "code", "del", "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "li", "ol", "p", "pre", "strong", "table", "tbody", "td", "th", "thead", "tr", "ul"],
+          ALLOWED_ATTR: ["href", "start", "title"],
+          ALLOW_ARIA_ATTR: false,
+          ALLOW_DATA_ATTR: false,
+        });
+      } catch (_) {
+        return plainAnswer(message);
+      }
+
+      markdown.querySelectorAll("h1, h2, h3, h4, h5, h6").forEach(function (heading) {
+        const level = Number(heading.tagName.slice(1));
+        const replacement = document.createElement(level <= 2 ? "h3" : "h4");
+        while (heading.firstChild) replacement.appendChild(heading.firstChild);
+        heading.replaceWith(replacement);
+      });
+      markdown.querySelectorAll("a[href]").forEach(function (link) {
+        configureAnswerLink(link, link.getAttribute("href"));
+      });
+      markdown.querySelectorAll("pre").forEach(function (codeBlock) {
+        codeBlock.tabIndex = 0;
+      });
+      return markdown;
+    }
+
     function appendAnswer(message, citations, outcome, grounded) {
       const article = document.createElement("article");
       article.className = "answer-turn chat-dynamic";
       article.appendChild(makeMark("answer"));
       const content = document.createElement("div");
       const label = document.createElement("small");
-      label.textContent = outcome === "no_evidence" ? "No matching evidence" : grounded === false ? "Answer lacks cited support" : "Grounded answer";
-      const text = document.createElement("p");
-      text.textContent = message;
-      content.append(label, text);
+      label.textContent = outcome === "no_evidence" ? "No matching evidence" : grounded === false ? "General answer" : "Grounded answer";
+      content.append(label, renderAnswerMarkdown(message));
 
       const citationList = Array.isArray(citations) ? citations : [];
       if (citationList.length) {
@@ -1155,9 +1310,10 @@
             ? "/sources?source=" + encodeURIComponent(citation.source_id)
               + (moduleSelect && moduleSelect.value ? "&enrollment_id=" + encodeURIComponent(moduleSelect.value) : "")
             : citation.url || "";
-          link.href = safeCitationUrl(citationUrl);
-          link.target = "_blank";
-          link.rel = "noopener noreferrer";
+          if (configureAnswerLink(link, citationUrl)) {
+            link.target = "_blank";
+            if (!link.rel) link.rel = "noopener noreferrer";
+          }
           const number = document.createElement("span");
           const referenceNumber = Number.isInteger(citation.reference_number) && citation.reference_number > 0
             ? citation.reference_number
@@ -1170,19 +1326,6 @@
         content.appendChild(citationRow);
       }
 
-      const footer = document.createElement("footer");
-      const prompt = document.createElement("span");
-      prompt.textContent = "Was this grounded enough?";
-      const useful = document.createElement("button");
-      useful.type = "button";
-      useful.textContent = "Yes";
-      useful.setAttribute("aria-label", "Answer was useful");
-      const needsWork = document.createElement("button");
-      needsWork.type = "button";
-      needsWork.textContent = "Needs work";
-      needsWork.setAttribute("aria-label", "Answer needs work");
-      footer.append(prompt, useful, needsWork);
-      content.appendChild(footer);
       article.appendChild(content);
       log.appendChild(article);
     }
@@ -1226,14 +1369,19 @@
 
     async function sendMessage(message, addStudent) {
       if (loading) return;
+      cancelActiveRequest();
+      const controller = new AbortController();
+      activeRequest = controller;
       const generation = requestGeneration += 1;
       loading = true;
       lastFailedMessage = null;
       input.disabled = true;
       syncSend();
-      const priorHistory = history.slice();
+      const priorHistory = recentConversationHistory();
       if (addStudent !== false) appendStudent(message);
-      history.push({ role: "user", content: message });
+      history.push({ role: "user", content: historyContent(message) });
+      input.value = "";
+      resizeComposer();
       const pending = appendLoading();
       log.scrollTop = log.scrollHeight;
 
@@ -1242,6 +1390,7 @@
         const response = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
           body: JSON.stringify({
             message: message,
             enrollment_id: moduleSelect && moduleSelect.value ? moduleSelect.value : null,
@@ -1258,8 +1407,7 @@
         pending.remove();
         const reply = data.message || "No matching evidence was found in the selected source scope.";
         appendAnswer(reply, data.citations, data.outcome, data.grounded);
-        history.push({ role: "assistant", content: reply });
-        input.value = "";
+        history.push({ role: "assistant", content: historyContent(reply) });
       } catch (error) {
         if (generation !== requestGeneration) return;
         pending.remove();
@@ -1268,8 +1416,10 @@
         appendError(error.code || "retrieval_unavailable", error.message || "The retrieval step could not complete. Your question is still here, so you can retry safely.", message);
         lastFailedMessage = message;
         input.value = message;
+        resizeComposer();
       } finally {
         if (generation === requestGeneration) {
+          activeRequest = null;
           loading = false;
           input.disabled = !providerReady;
           syncSend();
@@ -1282,19 +1432,41 @@
     document.querySelectorAll(".suggestion-list [data-prompt]").forEach(function (button) {
       button.addEventListener("click", function () {
         input.value = button.dataset.prompt || "";
+        resizeComposer();
         syncSend();
         input.focus();
       });
     });
 
-    input.addEventListener("input", syncSend);
+    input.addEventListener("input", function () {
+      resizeComposer();
+      syncSend();
+    });
+    input.addEventListener("compositionstart", function () {
+      composing = true;
+      compositionJustEnded = false;
+    });
+    input.addEventListener("compositionend", function () {
+      composing = false;
+      compositionJustEnded = true;
+      window.setTimeout(function () { compositionJustEnded = false; }, 0);
+    });
+    input.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter" || event.shiftKey || composing || compositionJustEnded || event.isComposing || event.keyCode === 229) return;
+      event.preventDefault();
+      if (sendButton.disabled) return;
+      if (typeof form.requestSubmit === "function") form.requestSubmit(sendButton);
+      else sendButton.click();
+    });
     if (moduleSelect) moduleSelect.addEventListener("change", function () {
       requestGeneration += 1;
+      cancelActiveRequest();
       loading = false;
       lastFailedMessage = null;
       log.querySelectorAll(".chat-dynamic").forEach(function (turn) { turn.remove(); });
       history.length = 0;
       input.value = "";
+      resizeComposer();
       input.disabled = !providerReady;
       syncModule();
       syncSend();
@@ -1303,6 +1475,12 @@
     });
     form.addEventListener("submit", function (event) {
       event.preventDefault();
+      syncSend();
+      if (!input.checkValidity()) {
+        input.reportValidity();
+        input.focus();
+        return;
+      }
       const message = input.value.trim();
       if (!message || loading) return;
       const retryingFailedQuestion = lastFailedMessage === message;
@@ -1315,11 +1493,13 @@
     if (clearButton) {
       clearButton.addEventListener("click", function () {
         requestGeneration += 1;
+        cancelActiveRequest();
         loading = false;
         lastFailedMessage = null;
         log.querySelectorAll(".chat-dynamic").forEach(function (turn) { turn.remove(); });
         history.length = 0;
         input.value = "";
+        resizeComposer();
         input.disabled = !providerReady;
         syncSend();
         if (welcome) welcome.hidden = false;
@@ -1328,6 +1508,7 @@
     }
 
     syncModule();
+    resizeComposer();
     syncSend();
   }
 
@@ -1368,8 +1549,48 @@
     const form = area.querySelector("form");
     const status = area.querySelector("[data-flash-create-status]");
     const effective = area.querySelector("[data-scope-effective]");
+    const queue = document.querySelector("[data-draft-queue]");
+
+    if (queue) {
+      const queueStatus = queue.querySelector("[data-draft-queue-status]");
+      queue.addEventListener("click", async function (event) {
+        const button = event.target.closest("[data-delete-draft]");
+        if (!button) return;
+        const row = button.closest("[data-draft-id]");
+        if (!row || !window.confirm("Delete this draft from the review queue?")) return;
+        button.disabled = true;
+        queueStatus.textContent = "Deleting draft…";
+        try {
+          await flashRequest("archive", { deckId: row.dataset.draftId, revision: Number(row.dataset.draftRevision) });
+          row.remove();
+          queueStatus.textContent = "Draft deleted from the review queue.";
+          const list = queue.querySelector("[data-draft-list]");
+          if (list && !list.querySelector("[data-draft-id]")) {
+            const empty = document.createElement("p");
+            empty.className = "cp-empty-copy";
+            empty.dataset.draftEmpty = "";
+            empty.textContent = "No flashcards are waiting for review.";
+            list.appendChild(empty);
+          }
+        } catch (_) {
+          button.disabled = false;
+          queueStatus.textContent = "The draft could not be deleted. Try again.";
+        }
+      });
+    }
     if (!form || form.querySelector("fieldset:disabled")) return;
     const demo = form.hasAttribute("data-demo");
+    const generation = area.querySelector("[data-flash-generation]");
+    const submitButton = form.querySelector('button[type="submit"]');
+
+    function setGenerating(active) {
+      form.setAttribute("aria-busy", active ? "true" : "false");
+      if (generation) generation.hidden = !active;
+      if (submitButton) {
+        submitButton.disabled = active;
+        submitButton.textContent = active ? "Generating…" : "Generate flashcards";
+      }
+    }
 
     function checkedValues(name) {
       return Array.from(form.querySelectorAll('[name="' + CSS.escape(name) + '"]:checked')).map(function (input) { return input.value; });
@@ -1501,21 +1722,25 @@
       if (form.elements.deck_title.value.trim()) payload.deck_title = form.elements.deck_title.value.trim();
       payload[scope] = scope === "enrollment_id" || scope === "wiki_page_id" ? values[0] : values;
       if (demo) {
+        setGenerating(true);
+        await new Promise(function (resolve) { window.setTimeout(resolve, 1800); });
+        setGenerating(false);
         status.className = "cp-status-banner cp-status-info";
         status.textContent = "Demo request ready: " + limit + " cards from " + values.length + " selected " + (values.length === 1 ? "item" : "items") + ". Nothing was saved.";
         return;
       }
-      form.querySelector('button[type="submit"]').disabled = true;
-      status.textContent = "Creating or replaying the review draft…";
+      setGenerating(true);
+      status.textContent = "";
       try {
         const result = await flashRequest("generate", { payload: payload });
         if (!result.deck) throw new Error("request-failed");
         window.location.href = "/flashcards/drafts/" + encodeURIComponent(result.deck.id);
       } catch (error) {
         const code = error.body && error.body.error;
-        const providerIssue = ["provider_not_configured", "credential_unavailable", "reauth_required", "provider_authentication_failed", "provider_unavailable", "local_codex_unavailable", "local_codex_login_required"].includes(code);
+        const providerIssue = (typeof code === "string" && code.startsWith("provider_")) || ["credential_unavailable", "reauth_required", "local_codex_unavailable", "local_codex_login_required"].includes(code);
+        const providerDetail = error.body && typeof error.body.detail === "string" ? error.body.detail : "The selected answer provider could not generate this draft.";
         status.textContent = providerIssue
-          ? "Connect or reconnect an answer provider before generating this draft. Your scope selection is preserved. "
+          ? providerDetail + " Your scope selection is preserved. "
           : "The draft could not be created. Your scope selection is preserved; try again.";
         if (providerIssue) {
           const settingsLink = document.createElement("a");
@@ -1523,7 +1748,7 @@
           settingsLink.textContent = "Open provider settings";
           status.appendChild(settingsLink);
         }
-        form.querySelector('button[type="submit"]').disabled = false;
+        setGenerating(false);
       }
     });
   }

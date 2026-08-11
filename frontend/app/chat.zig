@@ -5,7 +5,7 @@ const lib = @import("lib");
 pub const meta: mer.Meta = .{
     .title = "Ask",
     .description = "Ask source-grounded questions and inspect the supporting evidence.",
-    .extra_head = "<script defer src=\"/app.js?v=wikibase-18\"></script>",
+    .extra_head = "<script defer src=\"/vendor/marked.umd.js?v=15.0.12\"></script><script defer src=\"/vendor/purify.min.js?v=3.2.6\"></script>",
 };
 
 const ICON_FILE = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z\"/><path d=\"M14 2v6h6M8 13h8M8 17h6\"/></svg>";
@@ -125,11 +125,11 @@ pub fn render(req: mer.Request) mer.Response {
         \\    </div>
         \\    <form class="chat-composer" id="cp-chat-form" autocomplete="off" data-endpoint="{s}" data-provider-ready="{s}">
         \\      <label for="cp-chat-input">Ask from <span id="cp-chat-composer-code"></span></label>
-        \\      <div><textarea id="cp-chat-input" name="message" rows="2" placeholder="Ask a question about your sources…" aria-label="Ask from selected sources" required></textarea><button id="cp-chat-send" type="submit" aria-label="Send question" disabled>
+        \\      <div><textarea id="cp-chat-input" name="message" rows="2" placeholder="Ask a question about your sources…" aria-label="Ask from selected sources" aria-describedby="cp-chat-input-help" required></textarea><button id="cp-chat-send" type="submit" aria-label="Send question" disabled>
     , .{ chat_endpoint, if (provider_state == .active) "true" else "false" }) catch return mer.internalError("ask render failed");
     w.writeAll(ICON_SEND) catch return mer.internalError("ask render failed");
     w.writeAll(
-        \\      </button></div><small>Answers may be incomplete. Verify important claims in the cited source.</small>
+        \\      </button></div><small id="cp-chat-input-help"><span id="cp-chat-input-limit" role="status" aria-live="polite" hidden></span><kbd>Enter</kbd> to send · <kbd>Shift</kbd> + <kbd>Enter</kbd> for a new line. Verify important claims in the cited source.</small>
         \\    </form>
         \\    <noscript><div class="cp-status-banner cp-status-warn">Ask requires JavaScript. You can still browse the source library.</div></noscript>
         \\  </section>

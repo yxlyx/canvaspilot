@@ -22,6 +22,8 @@ const mer = @import("mer");
 const lib = @import("lib");
 
 const log = std.log.scoped(.chat_api);
+const MAX_CHAT_TEXT_CODEPOINTS = 8_000;
+const MAX_CHAT_TEXT_BYTES = MAX_CHAT_TEXT_CODEPOINTS * 4;
 
 const ChatBody = struct {
     message: []const u8 = "",
@@ -31,6 +33,12 @@ const ChatBody = struct {
 };
 
 const ChatReply = lib.chat.Reply;
+
+fn chatTextAllowed(text: []const u8) bool {
+    if (text.len > MAX_CHAT_TEXT_BYTES) return false;
+    const codepoints = std.unicode.utf8CountCodepoints(text) catch return false;
+    return codepoints <= MAX_CHAT_TEXT_CODEPOINTS;
+}
 
 pub fn render(req: mer.Request) mer.Response {
     if (req.method != .POST) {
@@ -61,7 +69,7 @@ pub fn render(req: mer.Request) mer.Response {
     if (body.message.len == 0) {
         return mer.badRequest("empty message");
     }
-    if (body.message.len > 8000 or body.history.len > 40 or
+    if (!chatTextAllowed(body.message) or body.history.len > 40 or
         (body.module_id != null and body.module_id.?.len > 256) or
         (body.enrollment_id != null and body.enrollment_id.?.len > 256))
     {
@@ -69,7 +77,7 @@ pub fn render(req: mer.Request) mer.Response {
     }
     if (body.module_id != null and body.enrollment_id != null) return mer.badRequest("choose one chat scope");
     for (body.history) |entry| {
-        if (entry.content.len > 8000) return mer.badRequest("chat history entry is too large");
+        if (!chatTextAllowed(entry.content)) return mer.badRequest("chat history entry is too large");
     }
 
     if (explicit_demo) {
@@ -136,11 +144,9 @@ fn isProviderError(allocator: std.mem.Allocator, body: []const u8) bool {
     }) catch return false;
     defer parsed.deinit();
     const code = parsed.value.@"error";
-    return std.mem.eql(u8, code, "provider_not_configured") or
+    return std.mem.startsWith(u8, code, "provider_") or
         std.mem.eql(u8, code, "credential_unavailable") or
         std.mem.eql(u8, code, "reauth_required") or
-        std.mem.eql(u8, code, "provider_authentication_failed") or
-        std.mem.eql(u8, code, "provider_unavailable") or
         std.mem.startsWith(u8, code, "local_codex_");
 }
 
@@ -199,6 +205,8 @@ test "provider error envelopes are distinguished from session and retrieval erro
     try std.testing.expect(isProviderError(allocator, "{\"error\":\"reauth_required\",\"detail\":\"Reconnect\"}"));
     try std.testing.expect(isProviderError(allocator, "{\"error\":\"provider_not_configured\"}"));
     try std.testing.expect(isProviderError(allocator, "{\"error\":\"provider_authentication_failed\"}"));
+    try std.testing.expect(isProviderError(allocator, "{\"error\":\"provider_request_rejected\"}"));
+    try std.testing.expect(isProviderError(allocator, "{\"error\":\"provider_rate_limited\"}"));
     try std.testing.expect(isProviderError(allocator, "{\"error\":\"local_codex_unavailable\"}"));
     try std.testing.expect(!isProviderError(allocator, "{\"error\":\"authentication_required\"}"));
     try std.testing.expect(!isProviderError(allocator, "{\"error\":\"retrieval_failed\"}"));
@@ -340,6 +348,12 @@ fn mockReply(allocator: std.mem.Allocator, question: []const u8, explicit_demo: 
 
 fn isBalancedSearchTreeQuestion(question: []const u8) bool {
     return containsAnyIgnoreCase(question, &.{ "avl", "balanced tree", "balanced-tree", "rotation", "search tree", "search-tree" });
+}
+
+test "chat text limits count Unicode code points" {
+    try std.testing.expect(chatTextAllowed("问"));
+    try std.testing.expect(chatTextAllowed("x" ** MAX_CHAT_TEXT_CODEPOINTS));
+    try std.testing.expect(!chatTextAllowed("x" ** (MAX_CHAT_TEXT_CODEPOINTS + 1)));
 }
 
 test "balanced search tree demo questions are recognized" {
