@@ -961,7 +961,16 @@ async def generate_flashcard_deck(
         if predecessor
         else base_fingerprint
     )
-    provider, card_fields = await _generate_card_fields(user, db, provider, candidates)
+    retry_generation = False
+    try:
+        provider, card_fields = await _generate_card_fields(user, db, provider, candidates)
+        retry_generation = not card_fields
+    except WikiBaseError as exc:
+        if exc.error != "provider_invalid_response":
+            raise
+        retry_generation = True
+    if retry_generation:
+        provider, card_fields = await _generate_card_fields(user, db, provider, candidates)
     if not card_fields:
         raise WikiBaseError(
             502,

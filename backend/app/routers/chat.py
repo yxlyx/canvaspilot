@@ -1,4 +1,3 @@
-import json
 from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter, Depends, Request
@@ -42,22 +41,6 @@ async def chat(
         module_id=chat_request.module_id,
         enrollment_id=chat_request.enrollment_id,
     )
-
-    if not chunks:
-
-        async def no_results() -> AsyncGenerator[dict[str, str], None]:
-            yield {
-                "event": "done",
-                "data": json.dumps(
-                    {
-                        "grounded": False,
-                        "confidence": 0,
-                        "message": "No relevant content found in your workspace sources.",
-                    }
-                ),
-            }
-
-        return _event_stream(no_results())
 
     provider = await resolve_generation_provider(
         user,

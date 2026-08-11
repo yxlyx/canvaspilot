@@ -1,7 +1,10 @@
 import json
 
 import pytest
+from httpx import Request, Response
+from openai import APIStatusError
 
+from app.exceptions import WikiBaseError
 from app.schemas.chat import ChatMessage
 from app.services import llm
 from app.services.providers import GenerationProvider
@@ -74,6 +77,95 @@ async def test_generate_json_text_requests_structured_chat_output(monkeypatch):
     }
     assert captured["temperature"] == 0.2
     assert captured["messages"][1]["content"] == "Evidence"
+
+
+@pytest.mark.asyncio
+async def test_generate_json_text_uses_json_object_for_codegraff(monkeypatch):
+    captured = None
+
+    class Message:
+        content = '{"cards":[]}'
+
+    class Choice:
+        message = Message()
+
+    class Response:
+        choices = [Choice()]
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            nonlocal captured
+            captured = kwargs
+            return Response()
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, api_key: str, **kwargs):
+            self.chat = FakeChat()
+
+    monkeypatch.setattr(llm, "AsyncOpenAI", FakeOpenAI)
+    provider = GenerationProvider(
+        "codegraff",
+        "deepseek-v4-pro",
+        "https://gateway.codegraff.com/v1",
+        "key",
+    )
+
+    selected, text = await llm.generate_json_text(
+        "Return JSON",
+        "Evidence",
+        None,
+        None,
+        provider,
+        {"type": "object", "properties": {"cards": {"type": "array"}}},
+    )
+
+    assert selected == provider
+    assert text == '{"cards":[]}'
+    assert captured["response_format"] == {"type": "json_object"}
+
+
+@pytest.mark.asyncio
+async def test_prepare_rag_stream_maps_rejected_provider_request(monkeypatch, caplog):
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            response = Response(
+                400,
+                request=Request("POST", "https://gateway.codegraff.com/v1/chat/completions"),
+                json={
+                    "error": {
+                        "type": "invalid_request_error",
+                        "code": "unsupported_parameter",
+                        "message": "Rejected credential sk-secretvalue1234",
+                    }
+                },
+            )
+            raise APIStatusError("Rejected", response=response, body=response.json())
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, api_key: str, **kwargs):
+            self.chat = FakeChat()
+
+    monkeypatch.setattr(llm, "AsyncOpenAI", FakeOpenAI)
+    provider = GenerationProvider(
+        "codegraff",
+        "deepseek-v4-pro",
+        "https://gateway.codegraff.com/v1",
+        "key",
+    )
+
+    with pytest.raises(WikiBaseError) as rejected:
+        await llm.prepare_rag_stream("Question", "Context", [], None, None, provider)
+
+    assert rejected.value.error == "provider_request_rejected"
+    assert rejected.value.status_code == 502
+    assert "unsupported_parameter" in caplog.text
+    assert "sk-secretvalue1234" not in caplog.text
 
 
 @pytest.mark.asyncio

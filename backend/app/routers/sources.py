@@ -29,7 +29,7 @@ from app.services.source_previews import (
 from app.services.sources import build_source_list_statement, create_or_update_source, update_source
 
 router = APIRouter(prefix="/sources", tags=["sources"])
-_preview_slot = asyncio.Semaphore(1)
+_preview_slot = asyncio.Semaphore(3)
 _preview_headers = {
     "Cache-Control": "private, no-store",
     "X-Content-Type-Options": "nosniff",

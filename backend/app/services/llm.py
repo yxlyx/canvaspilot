@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
@@ -26,16 +27,20 @@ from app.services.providers import (
 )
 from app.services.retrieval import RetrievedChunk
 
+logger = logging.getLogger(__name__)
+
 SYSTEM_PROMPT = (
     "You are WikiBase, an academic study helper for NUS students. "
-    "Answer questions using ONLY the provided workspace source context.\n\n"
+    "Answer the user conversationally and helpfully. Use the provided workspace "
+    "source context when it is relevant, and use general knowledge when the sources "
+    "do not contain enough information.\n\n"
     "Rules:\n"
-    "- Cite sources using [1], [2] etc. matching the context numbers\n"
-    "- If the context doesn't contain enough information, say "
-    "\"I don't have enough information from your workspace sources "
-    'to answer this"\n'
+    "- Cite workspace sources using [1], [2] etc. matching the context numbers\n"
+    "- Never attach a workspace citation to a claim that the source does not support\n"
+    "- If you combine source material with general knowledge, make the distinction clear\n"
+    "- If no relevant source context is provided, answer normally without citations\n"
     "- Be concise and accurate\n"
-    "- Never fabricate information not in the context\n\n"
+    "- Do not invent sources, quotations, or citations\n\n"
     "Context:\n{context}"
 )
 
@@ -46,14 +51,20 @@ class PreparedRagStream:
     stream: Any
 
 
-def _provider_client(provider):
+def _provider_client(provider, *, timeout: float | None = None):
+    client_options = {} if timeout is None else {"timeout": timeout}
     if provider.provider == "azure_openai":
         return AsyncAzureOpenAI(
             api_key=provider.api_key,
             azure_endpoint=provider.endpoint,
             api_version="2024-10-21",
+            **client_options,
         )
-    return AsyncOpenAI(api_key=provider.api_key, base_url=provider.endpoint)
+    return AsyncOpenAI(
+        api_key=provider.api_key,
+        base_url=provider.endpoint,
+        **client_options,
+    )
 
 
 def _response_text(response: Any) -> str:
@@ -66,6 +77,165 @@ def _response_text(response: Any) -> str:
         if isinstance(content, str):
             return content.strip()
     return ""
+
+
+def _chat_response_format(
+    provider: GenerationProvider,
+    json_schema: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if json_schema is None or provider.provider == "codegraff":
+        return {"type": "json_object"}
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "workspace_generation",
+            "strict": True,
+            "schema": json_schema,
+        },
+    }
+
+
+def _sanitized_upstream_error(exc: APIStatusError) -> str:
+    values: list[str] = []
+    try:
+        payload = exc.response.json()
+        error = payload.get("error", payload) if isinstance(payload, dict) else {}
+        if isinstance(error, dict):
+            for field in ("type", "code", "message"):
+                value = error.get(field)
+                if isinstance(value, (str, int)) and str(value).strip():
+                    values.append(f"{field}={value}")
+    except (AttributeError, TypeError, ValueError):
+        pass
+    summary = " ".join(values) or "no structured upstream detail"
+    summary = re.sub(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [redacted]", summary)
+    summary = re.sub(r"\bsk-[A-Za-z0-9_-]{8,}\b", "[redacted]", summary)
+    summary = re.sub(
+        r"(?i)\b(api[_ -]?key|access[_ -]?token|credential)\b(\s*[:=]?\s*)\S+",
+        r"\1\2[redacted]",
+        summary,
+    )
+    return re.sub(r"[\r\n\t]+", " ", summary)[:500]
+
+
+def _provider_error(
+    provider: GenerationProvider,
+    exc: Exception,
+    operation: str,
+) -> WikiBaseError:
+    status = getattr(exc, "status_code", None)
+    if isinstance(exc, APIStatusError):
+        logger.warning(
+            "Provider request failed provider=%s model=%s operation=%s status=%s upstream=%s",
+            provider.provider,
+            provider.model,
+            operation,
+            status,
+            _sanitized_upstream_error(exc),
+        )
+    else:
+        logger.warning(
+            "Provider request failed provider=%s model=%s operation=%s error=%s",
+            provider.provider,
+            provider.model,
+            operation,
+            type(exc).__name__,
+        )
+    if isinstance(exc, AuthenticationError) or status in {401, 403}:
+        return WikiBaseError(
+            409,
+            "provider_authentication_failed",
+            "Reconnect the selected answer provider before generating workspace content",
+        )
+    if isinstance(exc, RateLimitError) or status == 429:
+        return WikiBaseError(
+            429,
+            "provider_rate_limited",
+            "The answer provider is busy or has reached its usage limit",
+        )
+    if isinstance(exc, APITimeoutError):
+        return WikiBaseError(
+            504,
+            "provider_timeout",
+            "The answer provider took too long to respond",
+        )
+    if isinstance(exc, APIConnectionError):
+        return WikiBaseError(
+            502,
+            "provider_unavailable",
+            "The answer provider could not be reached",
+        )
+    if isinstance(status, int) and 400 <= status < 500:
+        return WikiBaseError(
+            502,
+            "provider_request_rejected",
+            "The answer provider rejected the generation request",
+        )
+    return WikiBaseError(
+        502,
+        "provider_unavailable",
+        "The answer provider could not complete the generation request",
+    )
+
+
+async def probe_generation_provider(provider: GenerationProvider) -> None:
+    client = _provider_client(provider, timeout=15)
+    try:
+        if provider.transport == "responses":
+            headers = {"originator": "canvaspilot"}
+            if provider.account_id:
+                headers["chatgpt-account-id"] = provider.account_id
+            response = await client.responses.create(
+                model=provider.model,
+                input="Reply with only OK.",
+                max_output_tokens=128,
+                extra_headers=headers,
+            )
+        else:
+            messages = [{"role": "user", "content": "Reply with only OK."}]
+            options: dict[str, Any] = {}
+            if provider.provider == "codegraff":
+                messages = [
+                    {"role": "system", "content": "Return only one JSON object."},
+                    {"role": "user", "content": 'Return {"ok":true}.'},
+                ]
+                options["response_format"] = {"type": "json_object"}
+            response = await client.chat.completions.create(
+                model=provider.model,
+                messages=messages,
+                max_tokens=128,
+                **options,
+            )
+    except (
+        AuthenticationError,
+        RateLimitError,
+        APITimeoutError,
+        APIConnectionError,
+        APIStatusError,
+    ) as exc:
+        raise _provider_error(provider, exc, "connection test") from exc
+    text = _response_text(response)
+    if not text:
+        raise WikiBaseError(
+            502,
+            "provider_invalid_response",
+            "The answer provider completed the test without returning text",
+        )
+    if provider.provider == "codegraff":
+        try:
+            payload = json.loads(text)
+        except (TypeError, ValueError) as exc:
+            raise WikiBaseError(
+                502,
+                "provider_invalid_response",
+                "Codegraff completed the test without returning valid JSON",
+            ) from exc
+        if not isinstance(payload, dict) or payload.get("ok") is not True:
+            raise WikiBaseError(
+                502,
+                "provider_invalid_response",
+                "Codegraff completed the test without returning the expected JSON",
+            )
 
 
 async def generate_json_text(
@@ -90,18 +260,7 @@ async def generate_json_text(
         if json_schema is not None
         else {"type": "json_object"}
     )
-    chat_format = (
-        {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "workspace_generation",
-                "strict": True,
-                "schema": json_schema,
-            },
-        }
-        if json_schema is not None
-        else structured_format
-    )
+    chat_format = _chat_response_format(provider, json_schema)
     try:
         if provider.transport == "codex_cli":
             from app.services.local_codex import generate_with_local_codex
@@ -154,43 +313,21 @@ async def generate_json_text(
                 temperature=0.2,
                 max_tokens=4096,
             )
-    except AuthenticationError as exc:
-        raise WikiBaseError(
-            409,
-            "provider_authentication_failed",
-            "Reconnect the selected answer provider before generating flashcards",
-        ) from exc
-    except RateLimitError as exc:
-        raise WikiBaseError(
-            429,
-            "provider_rate_limited",
-            "The answer provider is busy or has reached its usage limit",
-        ) from exc
-    except APITimeoutError as exc:
-        raise WikiBaseError(
-            504,
-            "provider_timeout",
-            "The answer provider took too long to generate flashcards",
-        ) from exc
-    except APIConnectionError as exc:
-        raise WikiBaseError(
-            502,
-            "provider_unavailable",
-            "The answer provider could not be reached",
-        ) from exc
-    except APIStatusError as exc:
-        raise WikiBaseError(
-            502,
-            "provider_unavailable",
-            "The answer provider could not generate flashcards",
-        ) from exc
+    except (
+        AuthenticationError,
+        RateLimitError,
+        APITimeoutError,
+        APIConnectionError,
+        APIStatusError,
+    ) as exc:
+        raise _provider_error(provider, exc, "structured generation") from exc
 
     text = _response_text(response)
     if not text:
         raise WikiBaseError(
             502,
             "provider_invalid_response",
-            "The answer provider returned no flashcards",
+            "The answer provider returned no generated content",
         )
     return provider, text
 
@@ -225,39 +362,48 @@ async def prepare_rag_stream(
             raise
         return PreparedRagStream(provider=provider, stream=answer)
     client = _provider_client(provider)
-    if provider.transport == "responses":
-        headers = {"originator": "canvaspilot"}
-        if provider.account_id:
-            headers["chatgpt-account-id"] = provider.account_id
-        try:
-            stream = await client.responses.create(
-                model=provider.model,
-                input=messages,
-                stream=True,
-                max_output_tokens=1024,
-                extra_headers=headers,
-            )
-        except AuthenticationError:
-            provider = await force_refresh_generation_provider(user, db)
-            client = _provider_client(provider)
+    try:
+        if provider.transport == "responses":
             headers = {"originator": "canvaspilot"}
             if provider.account_id:
                 headers["chatgpt-account-id"] = provider.account_id
-            stream = await client.responses.create(
+            try:
+                stream = await client.responses.create(
+                    model=provider.model,
+                    input=messages,
+                    stream=True,
+                    max_output_tokens=1024,
+                    extra_headers=headers,
+                )
+            except AuthenticationError:
+                provider = await force_refresh_generation_provider(user, db)
+                client = _provider_client(provider)
+                headers = {"originator": "canvaspilot"}
+                if provider.account_id:
+                    headers["chatgpt-account-id"] = provider.account_id
+                stream = await client.responses.create(
+                    model=provider.model,
+                    input=messages,
+                    stream=True,
+                    max_output_tokens=1024,
+                    extra_headers=headers,
+                )
+        else:
+            stream = await client.chat.completions.create(
                 model=provider.model,
-                input=messages,
+                messages=messages,
                 stream=True,
-                max_output_tokens=1024,
-                extra_headers=headers,
+                temperature=0.3,
+                max_tokens=1024,
             )
-    else:
-        stream = await client.chat.completions.create(
-            model=provider.model,
-            messages=messages,
-            stream=True,
-            temperature=0.3,
-            max_tokens=1024,
-        )
+    except (
+        AuthenticationError,
+        RateLimitError,
+        APITimeoutError,
+        APIConnectionError,
+        APIStatusError,
+    ) as exc:
+        raise _provider_error(provider, exc, "grounded answer") from exc
     return PreparedRagStream(provider=provider, stream=stream)
 
 

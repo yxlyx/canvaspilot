@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import json
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
@@ -42,6 +43,25 @@ from app.services import providers as provider_service
 from app.services.idempotency import execute_idempotent
 from app.services.retrieval import RetrievedChunk
 from app.services.sources import create_or_update_source
+
+
+def _chat_completion(model: str = "test-model", content: str = "OK") -> Response:
+    return Response(
+        200,
+        json={
+            "id": "chatcmpl-provider-test",
+            "object": "chat.completion",
+            "created": 1,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+    )
 
 
 async def _add_idempotency_key(request) -> None:
@@ -309,10 +329,10 @@ async def test_provider_test_serializes_configuration_and_disconnect(
     async def slow_probe(_request):
         probe_started.set()
         await release_probe.wait()
-        return Response(200, json={"data": [{"id": "gpt-4o-mini"}]})
+        return _chat_completion("gpt-4o-mini")
 
     with respx.mock:
-        respx.get("https://api.openai.com/v1/models").mock(side_effect=slow_probe)
+        respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=slow_probe)
         test_task = asyncio.create_task(owner_client.post("/api/providers/openai/test"))
         await probe_started.wait()
         configure_task = asyncio.create_task(
@@ -336,10 +356,12 @@ async def test_provider_test_serializes_configuration_and_disconnect(
     async def slow_replacement_probe(_request):
         probe_started.set()
         await release_probe.wait()
-        return Response(200, json={"data": [{"id": "gpt-4o"}]})
+        return _chat_completion("gpt-4o")
 
     with respx.mock:
-        respx.get("https://api.openai.com/v1/models").mock(side_effect=slow_replacement_probe)
+        respx.post("https://api.openai.com/v1/chat/completions").mock(
+            side_effect=slow_replacement_probe
+        )
         test_task = asyncio.create_task(owner_client.post("/api/providers/openai/test"))
         await probe_started.wait()
         disconnect_task = asyncio.create_task(parallel_owner_client.delete("/api/providers/openai"))
@@ -1205,12 +1227,23 @@ async def test_provider_lifecycle_fixed_target_and_two_user_isolation(m3_client,
     assert (await client.get("/api/providers/settings")).status_code == 200
     provider_test_key = str(uuid.uuid4())
     with respx.mock:
-        route = respx.get("https://api.openai.com/v1/models")
-        route.mock(return_value=Response(200, json={"data": [{"id": "other-model"}]}))
+        route = respx.post("https://api.openai.com/v1/chat/completions")
+        route.mock(
+            return_value=Response(
+                400,
+                json={
+                    "error": {
+                        "type": "invalid_request_error",
+                        "code": "unsupported_parameter",
+                        "message": "The selected model rejected this request.",
+                    }
+                },
+            )
+        )
         rejected_model = await client.post(
             "/api/providers/openai/test", headers={"Idempotency-Key": provider_test_key}
         )
-        route.mock(return_value=Response(200, json={"data": [{"id": "gpt-4o-mini"}]}))
+        route.mock(return_value=_chat_completion("gpt-4o-mini"))
         tested = await client.post(
             "/api/providers/openai/test", headers={"Idempotency-Key": str(uuid.uuid4())}
         )
@@ -1221,6 +1254,7 @@ async def test_provider_lifecycle_fixed_target_and_two_user_isolation(m3_client,
     assert rejected_model.status_code == 200
     assert rejected_model.json()["status"] == "invalid"
     assert rejected_model.json()["last_error"]
+    assert rejected_model.json()["last_error_code"] == "provider_request_rejected"
     assert tested.status_code == 200
     assert tested.json()["active_for_generation"] is True
     assert replayed_test.json() == tested.json()
@@ -1263,7 +1297,7 @@ async def test_provider_lifecycle_fixed_target_and_two_user_isolation(m3_client,
         "?api-version=2024-10-21"
     )
     with respx.mock:
-        azure_probe = respx.post(azure_url).mock(return_value=Response(200, json={}))
+        azure_probe = respx.post(azure_url).mock(return_value=_chat_completion("course-deployment"))
         tested_azure = await client.post("/api/providers/azure_openai/test")
     assert tested_azure.status_code == 200
     assert azure_probe.called
@@ -1389,11 +1423,18 @@ async def test_codegraff_device_connection_catalog_model_test_and_isolation(m3_c
     assert selected.json()["model"] == "claude-sonnet-4-6"
 
     with respx.mock:
-        respx.get(f"{settings.codegraff_gateway_url}/v1/models").mock(
-            return_value=Response(200, json=catalog)
+        generation_probe = respx.post(f"{settings.codegraff_gateway_url}/v1/chat/completions").mock(
+            return_value=_chat_completion("claude-sonnet-4-6", '{"ok":true}')
         )
         tested = await client.post("/api/providers/codegraff/test")
     assert tested.status_code == 200
+    assert generation_probe.called
+    probe_body = json.loads(generation_probe.calls.last.request.content)
+    assert probe_body["messages"] == [
+        {"role": "system", "content": "Return only one JSON object."},
+        {"role": "user", "content": 'Return {"ok":true}.'},
+    ]
+    assert probe_body["response_format"] == {"type": "json_object"}
     assert tested.json()["status"] == "connected"
     assert tested.json()["active_for_generation"] is True
     runtime = await provider_service.resolve_generation_provider(owner, session)
@@ -1971,8 +2012,8 @@ async def test_concurrent_browser_callbacks_serialize_provider_creation(
     )
     assert configured.status_code == 200
     with respx.mock:
-        respx.get("https://api.openai.com/v1/models").mock(
-            return_value=Response(200, json={"data": [{"id": "gpt-4o-mini"}]})
+        respx.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=_chat_completion("gpt-4o-mini")
         )
         assert (await owner_client.post("/api/providers/openai/test")).status_code == 200
     owner_id = uuid.UUID((await owner_client.get("/api/auth/me")).json()["id"])
