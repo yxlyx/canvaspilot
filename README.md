@@ -1,688 +1,280 @@
-# WikiBase (draft 1)
+<p align="center">
+  <img src="assets/wikibase-readme-hero.png" alt="WikiBase turns student sources into a connected, cited study workspace" width="1200">
+</p>
 
-WikiBase is a student-first knowledge-base workspace for NUS students. It helps
-students collect readings, notes, links, PDFs, repository references, and research
-outputs, then turn those sources into a structured Markdown wiki with citations,
-search, grounded Q&A, reusable study material, and topic-level learning visualizations.
+<h1 align="center">WikiBase</h1>
 
-Target level: **Artemis**
+<p align="center">
+  <strong>Turn scattered course material into a knowledge base you can study from.</strong>
+</p>
 
-Team:
+<p align="center">
+  Bring together PDFs, notes, images, links, and repositories; compile a cited Markdown wiki; ask grounded questions; and turn the same evidence into flashcards and learning signals.
+</p>
 
-- Lim Yu Xi (`@yxlyx`)
-- Pranav Pappu (`@pranavp311`)
+<p align="center">
+  <img alt="Status: working prototype" src="https://img.shields.io/badge/status-working%20prototype-58724f">
+  <img alt="Python 3.12 or newer" src="https://img.shields.io/badge/Python-3.12%2B-171915?logo=python&logoColor=white">
+  <img alt="Zig 0.16" src="https://img.shields.io/badge/Zig-0.16-f7a41d?logo=zig&logoColor=white">
+  <img alt="PostgreSQL 16 and pgvector" src="https://img.shields.io/badge/PostgreSQL%2016-pgvector-4169e1?logo=postgresql&logoColor=white">
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-d4a72c"></a>
+</p>
 
-## Overview
+<p align="center">
+  <a href="#why-wikibase">Why WikiBase</a> ·
+  <a href="#what-it-does">Features</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#verification">Verification</a>
+</p>
 
-WikiBase is a pivoted Orbital project that now focuses on a local, student-owned
-study workspace rather than a Canvas-integrated course dashboard. The product is built
-around source ingestion, citation-aware wiki generation, grounded Q&A, flashcards, and
-learning evidence visualisation.
+---
 
-The goal is to help students keep their study material in one place and keep it usable.
-Instead of scattering useful content across folders, bookmarks, PDFs, and separate apps,
-WikiBase compiles the material into a Markdown knowledge base that can be searched,
-exported, and revised from.
+## Why WikiBase
 
-## Current Status
+Students rarely learn from one clean source of truth. A module can span lecture slides, tutorial sheets, readings, personal notes, browser links, repositories, and marked work. Finding an explanation is slow; verifying where it came from is harder; turning it into revision material means rebuilding the context again.
 
-Milestone 1 is focused on a technical proof of concept for the pivot. The repo already
-contains more implemented work than the original Canvas-dashboard plan, and the current
-direction is now anchored around the student knowledge-base workflow.
+WikiBase keeps that context intact. Sources, citations, wiki pages, questions, flashcards, and learning evidence live in one account-scoped workspace, so each step can trace back to the material that supports it.
 
-| Area | Status | Evidence |
-| --- | --- | --- |
-| Backend scaffold | Done | FastAPI app, routers, schemas, tests, Alembic migrations |
-| Database | Done | PostgreSQL + pgvector schema and migration files |
-| Frontend scaffold | Done | PR #24 merged |
-| Workspace overview | Done | PR #25 merged |
-| Cited Q&A interface | Done | PR #26 merged |
-| Frontend deployment files | Done | PR #27 merged |
-| Milestone 1 tracker | Done | PR #28 merged |
-| Local auth flow | Implemented, awaiting review | PR #31 open |
-| Source ingestion foundation | Basic implementation | ingestion service and database-backed content records |
-| Retrieval pipeline | Basic implementation | chunking, embedding, vector lookup, chat route |
-| Local verification | Done | `./verify` runs backend, frontend, database, audit, browser, and smoke checks |
+> WikiBase is citation-first. Generated pages, answers, study outputs, and flashcards are designed to expose their evidence. Knowledge meters are evidence-based estimates, not claims of mastery.
 
-## What We Have Actually Built
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="frontend/public/media/product-dashboard-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="frontend/public/media/product-dashboard-light.png">
+  <img src="frontend/public/media/product-dashboard-light.png" alt="WikiBase workspace dashboard showing indexed sources, wiki topics, flashcards, cited questions, and learning evidence" width="1440">
+</picture>
 
-The Git history shows that the project has moved past the original starter scaffold.
-The main pieces already implemented are:
+<p align="center"><sub>The workspace connects source coverage, generated knowledge, cited questions, and review evidence.</sub></p>
 
-1. A reusable frontend scaffold with auth pages and shared UI plumbing.
-2. A workspace dashboard that can be repurposed for the knowledge-base view.
-3. A chat interface wired to the frontend API bridge for cited Q&A.
-4. Frontend deployment files and Docker support.
-5. Backend scaffold, database models, migration setup, and tests.
-6. A local auth flow with signup, signin, session handling, and backend auth routes.
-7. A README and milestone tracker that reflect the pivoted direction.
-8. GitHub issue tracking, PR history, local verification, and branch protection evidence.
+## What it does
 
-The important takeaway is that the project is no longer just a concept writeup. It has
-an actual working base for auth, source records, retrieval, frontend screens, and
-version-controlled delivery.
+| Capability | What you get |
+| --- | --- |
+| **Source library** | Import PDFs, images, Markdown, plain text, links, and repository references into an isolated workspace. Preview content and follow durable processing states instead of waiting on a single request. |
+| **Cited Markdown wiki** | Compile source material into readable pages with citations, connected topics, backlinks, revisions, and portable Markdown downloads. |
+| **Workspace search** | Search structured records and embedded source chunks from the same indexed knowledge base. |
+| **Grounded Q&A** | Ask questions over selected workspace evidence and keep citations visible beside the answer. |
+| **Study outputs** | Generate reusable summaries, guides, and cited outputs without detaching them from their source context. |
+| **Flashcards** | Draft, edit, approve, practise, archive, and restore cited cards while recording review evidence. |
+| **Learning evidence** | Combine source coverage, flashcard attempts, marked-paper feedback, and recency into explainable topic signals and next actions. |
+| **Workspace health** | Surface thin coverage, stale material, broken references, and other findings before they become silent gaps. |
+| **Portable export** | Download wiki pages or selected workspace material as Markdown and ZIP archives. |
 
-## Motivation
+## How it works
 
-Students rarely study from one clean source of truth. A single module can involve
-lecture slides, tutorial sheets, PDF readings, textbook chapters, personal notes,
-browser links, repository references, project documents, and outputs from separate tools.
-These materials build up quickly, but they do not automatically become a usable knowledge
-base.
+```mermaid
+flowchart LR
+    A["PDFs · notes · images · links · repositories"] --> B["Parse · preview · chunk"]
+    B --> C["PostgreSQL · pgvector"]
+    C --> D["Cited wiki · search · Q&A"]
+    D --> E["Study outputs · flashcards"]
+    E --> F["Learning evidence · health checks"]
+    F --> D
+```
 
-This creates recurring problems:
+1. **Collect sources.** Add course or project material to an account-bound library.
+2. **Process evidence.** WikiBase validates, parses, chunks, previews, and indexes each source through durable jobs.
+3. **Build knowledge.** The wiki compiler produces Markdown pages that retain citations and connections.
+4. **Study in context.** Search, Q&A, study outputs, and flashcards reuse the same evidence base.
+5. **Close the loop.** Review activity and confirmed marked-paper evidence help identify what needs attention next.
 
-- useful material is spread across folders, tabs, cloud drives, and repositories;
-- students waste time rediscovering where a concept was explained;
-- notes drift away from their original sources and become hard to verify;
-- saved links and PDFs are not organized into a coherent study structure;
-- study outputs can become disconnected from the source text they were based on;
-- students using Markdown or Obsidian-like workflows still need to maintain pages,
-  backlinks, indexes, citations, and revision material manually;
-- students often do not know which topics they understand well and which ones need more
-  practice until it is too late.
+## Product surfaces
 
-WikiBase addresses this by helping students turn scattered study and research sources
-into a maintained, citation-aware Markdown knowledge base.
-
-## Vision
-
-WikiBase is a student-first LLM knowledge-base workspace. It helps students collect
-raw sources, compile them into a Markdown wiki, ask cited questions over their own
-workspace, generate reusable study material, and visualize topic-level learning progress.
-
-The core aim is not just to answer isolated questions. WikiBase should help students
-maintain a source-grounded study workspace that remains readable, verifiable, searchable,
-and exportable.
-
-## Product Direction
-
-The current product direction is:
-
-1. Students add sources such as Markdown notes, PDFs, links, and repository references.
-2. The backend parses those sources, chunks them, and stores them in PostgreSQL with
-   embedding support.
-3. The wiki compiler turns the raw sources into Markdown pages with citations.
-4. Search and Q&A use the indexed source base to return grounded answers.
-5. Flashcards and practice evidence feed topic-level progress meters.
-6. The Markdown output remains portable for note-taking workflows outside the app.
-
-## Scope Of Project
-
-WikiBase is intentionally scoped as a local, student-owned workspace rather than a
-Canvas integration. That reduces dependency risk and keeps the focus on the product
-mechanics that matter for Orbital:
-
-- source organisation
-- citation-aware generation
-- retrieval and grounded answers
-- study output generation
-- learning evidence and visualisation
-- GitHub-based software engineering practice
-
-## Core Features
-
-### 1. Local Auth and Workspace
-
-Students sign up and sign in locally, and their sources and generated outputs are scoped
-to their own workspace.
-
-### 2. Source Library
-
-Students can collect study and research material in one place. The source library is
-planned to support uploaded documents, pasted notes, links, repository references, and
-metadata such as title, source type, topic, and last-reviewed status.
-
-### 3. Markdown Wiki Compiler
-
-WikiBase turns raw source material into a readable Markdown knowledge base. Pages
-include citations back to source records, while index pages and backlinks help students
-navigate related concepts.
-
-### 4. Cited Q&A and Search
-
-The retrieval flow answers questions using workspace sources and returns citations so
-students can verify claims. Search and Q&A share the same indexed source base.
-
-### 5. Exportable Study Workspace
-
-The Markdown output is intended to remain useful outside the app. Later milestones will
-focus on exportable Markdown, reusable summaries, cited flashcard decks, and revision
-history.
-
-### 6. Flashcards and Knowledge Meters
-
-WikiBase will generate cited flashcards from selected sources, wiki pages, or topics.
-Logged answers, confidence ratings, Q&A patterns, and marked question papers will feed
-topic-level knowledge completion meters. These meters are evidence-based estimates, not
-absolute mastery claims.
-
-### 7. Workspace Health Checks
-
-Later milestones add checks for missing citations, stale pages, duplicate sources,
-unsupported files, and topics that need more source coverage.
-
-## User Stories
-
-1. As a student with scattered readings and notes, I want to collect sources in one
-   workspace so that I can stop searching across disconnected folders and links.
-2. As a student preparing revision notes, I want sources to compile into Markdown pages
-   so that I can maintain a clean wiki faster.
-3. As a student checking accuracy, I want wiki pages and answers to include citations so
-   that I can trace claims back to their source.
-4. As a student using Markdown-first notes, I want to export my wiki so that I can keep
-   the output portable.
-5. As a student revising for exams, I want to ask questions over my saved sources so that
-   answers match the material I am studying.
-6. As a student managing a large topic, I want backlinks and index pages so that related
-   concepts are connected.
-7. As a student with outdated notes, I want health checks so that I know which pages,
-   citations, and topics need review.
-8. As a student preparing for class, I want summaries, outlines, and study guides so that
-   I can revise faster.
-9. As a student practising recall, I want cited flashcards generated from my sources so
-   that practice stays aligned with the knowledge base.
-10. As a student answering flashcards, I want attempts and confidence ratings to be
-    saved so that weak topics can be detected over time.
-11. As a student reviewing marked papers, I want marks and feedback to contribute to
-    topic progress so that mistakes become actionable.
-12. As a student viewing progress meters, I want to know what evidence each meter is based
-    on so that I do not mistake a low-evidence estimate for a final judgment.
-
-## Technical Proof Of Concept
-
-The proof of concept currently demonstrates the smallest useful version of WikiBase:
-
-1. Local signup and signin flow.
-2. Account-bound workspace shell.
-3. Import of a controlled source set such as Markdown, plain text, or fixture excerpts.
-4. Source parsing, chunking, embedding, and storage in PostgreSQL.
-5. A minimal Markdown wiki compiler that can produce cited pages from the source set.
-6. Cited Q&A against workspace sources.
-7. Mock or fixture data fallback so the demo remains stable.
-8. Automated checks on pull requests.
-9. Frontend and backend deployment preparation.
+<table>
+  <tr>
+    <td width="50%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="frontend/public/media/product-sources-dark.png">
+        <img src="frontend/public/media/product-sources-light.png" alt="WikiBase source library" width="720">
+      </picture>
+      <br><strong>Source library</strong><br><sub>Review what is indexed, processing, and connected.</sub>
+    </td>
+    <td width="50%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="frontend/public/media/product-wiki-dark.png">
+        <img src="frontend/public/media/product-wiki-light.png" alt="WikiBase cited wiki article" width="720">
+      </picture>
+      <br><strong>Cited wiki</strong><br><sub>Read connected pages without losing the source trail.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="frontend/public/media/product-chat-dark.png">
+        <img src="frontend/public/media/product-chat-light.png" alt="WikiBase grounded question and answer workspace" width="720">
+      </picture>
+      <br><strong>Grounded Q&amp;A</strong><br><sub>Ask against selected evidence and verify the citations.</sub>
+    </td>
+    <td width="50%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="frontend/public/media/product-flashcards-dark.png">
+        <img src="frontend/public/media/product-flashcards-light.png" alt="WikiBase evidence-backed flashcard review" width="720">
+      </picture>
+      <br><strong>Evidence-backed review</strong><br><sub>Practise cited cards and keep the outcome attached to its topic.</sub>
+    </td>
+  </tr>
+</table>
 
 ## Architecture
 
-WikiBase has three main layers:
+WikiBase separates the student-facing workspace, application services, and persistence layer so ingestion, retrieval, and study workflows can evolve independently.
 
-1. Frontend: merjs pages for auth, workspace overview, source review, wiki pages, and
-   cited Q&A.
-2. Backend: FastAPI API for auth, source ingestion, retrieval, wiki compilation, chat,
-   and workspace records.
-3. Data layer: PostgreSQL with pgvector for structured records and vector search.
-
-High-level flow:
-
-```text
-Student sources
-   |
-   v
-FastAPI backend
-   |
-   v
-parse, chunk, embed, index
-   |
-   v
-PostgreSQL + pgvector
-   |
-   +--> Markdown wiki pages with citations
-   |
-   +--> cited Q&A and search
-   |
-   v
-merjs frontend
-```
-
-## Tech Stack
-
-| Area | Technology | Reason |
+| Layer | Technology | Responsibility |
 | --- | --- | --- |
-| Frontend | merjs and Zig | Server-rendered frontend with compact deployment and reproducible builds. |
-| Backend | FastAPI and Python | Async API framework with typed schemas and OpenAPI support. |
-| Database | PostgreSQL + pgvector | Relational records plus vector search in one database. |
-| Retrieval | Embeddings and vector lookup | Grounded Q&A and search over workspace chunks. |
-| Document parsing | PyMuPDF, python-docx, BeautifulSoup, Markdown tooling | Support for PDFs, DOCX, links, and Markdown sources. |
-| Testing | pytest, Ruff, Zig format/build tests | Automated checks across backend and frontend. |
-| Verification | `./verify` local harness | Repeatable backend, frontend, database, audit, browser, and smoke checks. |
-| Local services | Docker Compose | Repeatable local PostgreSQL and pgvector setup. |
+| Frontend | Zig 0.16 + [merjs](https://github.com/justrach/merjs) | Server-rendered routes, shared UI, authenticated mutations, responsive light/dark workspace. |
+| Backend | Python 3.12 + FastAPI + Pydantic | Typed APIs for auth, sources, processing, search, wiki, Q&A, flashcards, evidence, health, and export. |
+| Persistence | PostgreSQL 16 + SQLAlchemy + Alembic | Account-scoped records, migrations, durable processing state, citations, revisions, and learning evidence. |
+| Retrieval | pgvector + configurable model providers | Embedding-backed search and source-grounded generation. |
+| Verification | pytest + Ruff + Zig tests + Playwright | Unit, API, database, browser-boundary, audit, and full-stack checks run locally. |
 
-## Software Engineering Practices
+The backend runs as two processes: the FastAPI application serves requests, while a worker claims durable processing stages. PostgreSQL remains the canonical store; generated Markdown is a portable output rather than the only source of truth.
 
-### Version Control
+## Quick start
 
-The repo uses feature branches, pull requests, branch protection, and local verification.
-Recent history includes frontend scaffold, dashboard, chat, deployment files, submission
-tracker, and the auth flow PR.
+### Preview the interface
 
-### GitHub Tracking
-
-The project uses issues, milestones, labels, and project-board style status tracking to
-make progress visible. The current issue set is split across Lift-off, Milestone 1,
-Milestone 2, and Milestone 3.
-
-### Code Review
-
-Code review is part of the workflow. The auth PR is currently open and waiting for
-review.
-
-### Testing
-
-Backend tests cover auth, schema validation, ingestion, retrieval, and exceptions.
-The local harness covers frontend formatting, builds, tests, HTTP checks, and browser smoke tests.
-
-### Documentation
-
-The README, submission tracker, architecture notes, testing strategy, and project log are
-used to keep the milestone narrative clear and auditable.
-
-## Non-Functional Requirements
-
-### Security and Privacy
-
-- Workspaces must be account-bound.
-- Session cookies should be HttpOnly.
-- Secrets and environment files must not be committed.
-- Private study material and marked papers must be handled as sensitive user data.
-- Access control should be tested for cross-user data isolation.
-
-### Reliability
-
-- The M1 demo should work with controlled fixture data.
-- Unsupported source types should fail with clear messages.
-- Database migrations should be reversible where practical and reviewed before merge.
-- Source processing failures should not corrupt existing workspace data.
-
-### Performance
-
-- Source ingestion should be moved to background jobs when files become large.
-- Search should use database indexes and vector indexes.
-- Compiled wiki pages and topic-meter calculations should be cached or stored when
-  recomputation becomes expensive.
-- Workspace overview should remain responsive for the test dataset.
-
-### Maintainability
-
-- Backend routers, services, schemas, and models should remain separated.
-- Frontend pages, API bridge handlers, shared types, and UI helpers should remain
-  organized by responsibility.
-- Tests should cover service behavior separately from route behavior where possible.
-- Design decisions and alternatives should be documented as the system evolves.
-
-### Traceability
-
-- Claims in wiki pages, answers, flashcards, and recommendations should trace back to
-  source chunks where possible.
-- Topic meters should expose the evidence used to compute them.
-- Change history should make regenerated pages auditable.
-
-## Milestone 1 Plan
-
-### What Milestone 1 Needs To Show
-
-The main evidence should be:
-
-- a clear product definition;
-- a working technical proof of concept;
-- a development plan by component and milestone;
-- GitHub issues, branches, PRs, and CI history;
-- a sensible testing strategy;
-- a README that explains the direction and progress clearly.
-
-### Milestone 1 Deliverables
-
-- README
-- Project log
-- Project poster
-- Project video
-
-### Milestone 1 Focus
-
-1. Local auth and workspace setup.
-2. One controlled source-to-wiki flow.
-3. Cited Q&A on the same source set.
-4. Clear evidence of development workflow and testing.
-5. Updated proposal and supporting submission materials.
-
-## Milestone 2 Plan
-
-Milestone 2 should expand the prototype into a usable study flow.
-
-1. Add richer source ingestion support.
-2. Improve the wiki compiler with citations, backlinks, and index pages.
-3. Build search and cited Q&A across a workspace.
-4. Add flashcard generation and answer logging.
-5. Run user testing and refine the UI and retrieval flow.
-
-## Milestone 3 Plan
-
-Milestone 3 should extend the prototype into a stronger study workspace.
-
-1. Add health checks for source quality and coverage.
-2. Add reusable output generation.
-3. Add knowledge completion meters and weak-topic recommendations.
-4. Add marked-paper evidence handling.
-5. Polish export and visualisation flows.
-
-## Testing Strategy
-
-Run the complete local verification harness from the repository root:
+The explicit fixture mode lets you explore the complete UI without a database or model provider.
 
 ```bash
+git clone https://github.com/yxlyx/canvaspilot.git
+cd canvaspilot/frontend
+WIKIBASE_MOCK_ENABLED=true zig build serve
+```
+
+Open [http://localhost:3001/dashboard?mock=1](http://localhost:3001/dashboard?mock=1).
+
+### Run the full local stack
+
+You will need:
+
+- Python 3.12 or newer
+- Zig 0.16.0
+- Docker with Compose
+- npm for browser verification
+
+Install the backend and start PostgreSQL:
+
+```bash
+python3.12 -m venv backend/.venv
+backend/.venv/bin/python -m pip install --require-hashes -r backend/requirements-dev.lock
+backend/.venv/bin/python -m pip install --no-deps -e backend
+cp backend/.env.example backend/.env
+docker compose up -d --wait db
+```
+
+Before starting the backend, update `backend/.env`:
+
+- Set `DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/canvaspilot` to match the local Compose database.
+- Replace `SESSION_SECRET` with a random token of at least 32 characters.
+- Replace `CANVAS_TOKEN_SECRET` and `PROVIDER_ENCRYPTION_SECRET` with two different Fernet keys.
+- Add a provider credential only if you want live generation; the source library, wiki reader, and existing study material do not require one.
+
+Generate suitable secret values with:
+
+```bash
+backend/.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(32))"
+backend/.venv/bin/python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Run the Fernet command twice so the two encryption settings do not share a key.
+
+Run migrations and start each process in its own terminal:
+
+```bash
+cd backend
+.venv/bin/alembic upgrade head
+.venv/bin/uvicorn app.main:app --reload --port 8000
+```
+
+```bash
+cd backend
+.venv/bin/python -m app.worker
+```
+
+```bash
+cd frontend
+zig build serve
+```
+
+Open [http://localhost:3001](http://localhost:3001). The API health endpoint is at [http://localhost:8000/api/health](http://localhost:8000/api/health), and FastAPI serves interactive API documentation at [http://localhost:8000/docs](http://localhost:8000/docs).
+
+## Configuration
+
+Backend configuration lives in `backend/.env`; frontend runtime settings are regular environment variables.
+
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | Async PostgreSQL connection used by the API and worker. |
+| `SESSION_SECRET` | Signs browser sessions; must be non-default and at least 32 characters. |
+| `PROVIDER_ENCRYPTION_SECRET` | Encrypts stored provider credentials. |
+| `OPENAI_API_KEY` | Optional provider credential for live embedding or generation workflows. |
+| `WIKIBASE_BACKEND_URL` | Frontend-to-backend base URL; defaults to `http://localhost:8000`. |
+| `WIKIBASE_PUBLIC_ORIGIN` | Canonical frontend origin used to validate authenticated mutations. |
+| `WIKIBASE_MOCK_ENABLED` | Allows fixture data only when the request also includes `?mock=1`. |
+
+See `backend/.env.example`, `backend/DEPLOY.md`, and `frontend/DEPLOY.md` for the complete deployment configuration.
+
+## Verification
+
+The repository uses a local verification harness rather than hosted workflows. A complete run checks shell safety, Ruff, Alembic migrations, backend coverage, dependency audits, Zig formatting/build/tests, HTTP boundaries, Playwright, and a database-backed full-stack smoke flow.
+
+```bash
+PYTHON=backend/.venv/bin/python \
+TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/wikibase_test \
 ./verify
 ```
 
-Database verification requires `TEST_DATABASE_URL` whose effective SQLAlchemy database
-name has a distinct `test` segment. PostgreSQL URLs with any query parameters are refused,
-so connection parameters cannot override the validated database; `DATABASE_URL` is never
-reused. For the local Compose service, set
-`TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/wikibase_test`.
-`./verify --no-db` blocks and deselects database tests, `./verify --no-e2e` omits browser
-and full-stack tests, and `./verify --no-audit` explicitly omits dependency auditing.
-Each option produces a clearly marked partial result. Use one Python 3.12+ interpreter
-and install the hash-locked development dependencies first:
+The harness creates and removes a uniquely named test database. It refuses to reuse `DATABASE_URL` or connect to a database whose name is not clearly test-scoped.
+
+For a deliberately partial local check:
 
 ```bash
-python -m pip install --require-hashes -r backend/requirements-dev.lock
-python -m pip install --no-deps -e backend
+PYTHON=backend/.venv/bin/python ./verify --no-db --no-e2e --no-audit
 ```
 
-The harness runs Ruff, Alembic migrations, backend coverage, Zig format/build/unit tests,
-HTTP smoke tests, mandatory Python and npm audits, and deterministic Chromium
-browser-boundary tests. Its database-backed full-stack smoke selects unused loopback ports,
-starts both services, registers and signs in through frontend routes with a cookie jar,
-checks frontend session and authenticated rendering, and creates and renders a source
-through the frontend API bridge. Explicit occupied ports are refused and either child
-exiting fails the test. Local verification passes dynamic frontend and backend URLs to both
-services, starts pgvector, validates Compose, audits locked dependencies, and fails if any
-backend test is skipped. Container builds and Trivy filesystem/image scans are run locally
-as release checks.
+Every omitted verification layer is reported in the final result.
 
-## Risks (generated)
+## Repository map
 
-| Risk | Impact | Mitigation |
-| --- | --- | --- |
-| Scope grows too large | M1 or M2 delivery may slip | Keep M1 to auth plus one source-to-wiki demo; move extensions to M3. |
-| Retrieval quality is inconsistent | Answers may miss relevant context | Use citations, thresholds, fixture evaluation sets, and user feedback. |
-| Wiki pages are hard to verify | Students may distrust output | Show citations and source links on pages and answers. |
-| Knowledge meters overstate understanding | Students may be misled | Label meters as estimates, show evidence confidence, and combine multiple signals. |
-| Marked-paper formats vary widely | Extraction may be noisy | Start with fixture-supported formats and expose uncertain extraction results. |
-| Sensitive data is mishandled | Privacy risk | Account-bound workspaces, no committed secrets, access-control tests, and careful file handling. |
-| Deployment takes longer than expected | Demo may depend on local setup | Keep Docker/local demo path stable and deploy incrementally. |
+```text
+backend/
+  app/routers/       HTTP contracts
+  app/services/      ingestion, retrieval, wiki, study, and evidence logic
+  app/models/        SQLAlchemy records
+  app/db/migrations/ Alembic history
+  tests/             service, API, database, and isolation coverage
+frontend/
+  app/               server-rendered pages
+  api/               same-origin backend bridges
+  src/lib/           shared types, rendering, session, and API helpers
+  public/media/      product and editorial assets
+  e2e/               browser tests
+scripts/             verification and full-stack smoke tooling
+verify               complete local verification entrypoint
+```
 
+## Project status
 
+WikiBase is a working research prototype built for NUS Orbital at the Artemis level. The complete source-to-study loop is implemented, including account isolation, durable ingestion, cited wiki/search/Q&A, flashcards, learning evidence, health findings, marked-paper review, history, and export.
 
-------------------------------------------------------------------------------------------------------------------------------------------
-draft 2 For diagram and HTML gen
-# WikiBase
+It is still a prototype. Do not treat it as a hosted production service for sensitive academic material without completing a deployment-specific security, privacy, backup, and retention review.
 
-**Milestone 1 Submission**
+## Contributing
 
-WikiBase is a student-first knowledge-base workspace for source-grounded notes, cited Q&A, flashcards, and learning progress.
+Focused issues and pull requests are welcome.
 
-**Target Level:** Artemis
+1. Create a narrowly scoped branch.
+2. Keep frontend, backend, database, and migration responsibilities separated.
+3. Add tests for behavioral changes and user-isolation boundaries.
+4. Run the relevant local checks, preferably the full `./verify` harness.
+5. Open a pull request that explains the user-visible change and records the exact verification command and result.
 
 ## Team
 
-| Member | Primary focus |
-| --- | --- |
-| Lim Yu Xi | Frontend flows, workspace UI, Q&A UI, deployment files, frontend CI. |
-| Pranav Pappu | Backend APIs, database, retrieval, local auth, ingestion foundations, backend CI. |
+WikiBase is built by [Lim Yu Xi](https://github.com/yxlyx) and [Pranav Pappu](https://github.com/pranavp311).
 
-## Milestone 1 Focus
+The project began as CanvasPilot; the repository URL retains that history, while the product is now focused on a student-owned knowledge base rather than an LMS integration.
 
-Problem definition, proof of concept, design direction, GitHub evidence, testing strategy, and roadmap.
+## License
 
-## Product Flow
-
-```text
-Collect Sources -> Parse & Chunk -> Embed & Index -> Compile Wiki -> Revise with Evidence
-```
-
-## Motivation
-
-Students rarely study from one clean source of truth. A single module can involve lecture slides, tutorial sheets, PDF readings, textbook chapters, personal notes, browser links, repository references, project documents, and separate study outputs.
-
-WikiBase exists because study material is not only hard to find. It is also hard to verify, connect, revise, and keep up to date.
-
-| Current Pain | Product Response |
-| --- | --- |
-| Sources are scattered across tools. | Collect sources in one workspace. |
-| Notes drift away from original references. | Compile cited Markdown wiki pages. |
-| Students waste time rediscovering explanations. | Search and ask source-grounded questions. |
-| Generated study material can lose source context. | Turn practice evidence into revision guidance. |
-
-## Vision And Aim
-
-WikiBase is a student-first LLM knowledge-base workspace. It helps students collect raw sources, compile them into a Markdown wiki, ask cited questions over their own workspace, generate reusable study material, and visualize topic-level learning progress.
-
-### 1. Source Base
-
-Readings, notes, PDFs, links, and repositories live in one account-bound workspace.
-
-### 2. Cited Wiki
-
-Raw material becomes Markdown pages with citations, indexes, and backlinks.
-
-### 3. Revision Loop
-
-Q&A, flashcards, marked papers, and confidence ratings feed weak-topic guidance.
-
-The product is designed to be useful even outside the app. Markdown output can later be exported to Obsidian-like workflows or Git-backed notes.
-
-## Scope Of Project
-
-The project originally explored a Canvas-style course dashboard, but the current scope is a student-owned knowledge-base workspace. This avoids institutional integration risk while preserving meaningful technical complexity.
-
-| Included | Deferred / Avoided |
-| --- | --- |
-| Local signup/signin and account workspace | Dependence on external LMS permissions |
-| Source ingestion, parsing, chunks, embeddings | Large-scale production file processing in M1 |
-| Markdown wiki pages with citations | Fully editable public publishing platform |
-| Cited Q&A, flashcards, learning meters | Unsupported mastery claims without evidence |
-
-This scope keeps Milestone 1 realistic while leaving enough complexity for Artemis-level Milestone 2 and Milestone 3 work.
-
-## User Stories
-
-1. As a student with scattered readings and notes, I want to collect sources in one workspace.
-2. As a student preparing revision notes, I want sources to compile into Markdown pages.
-3. As a student checking accuracy, I want wiki pages and answers to include citations.
-4. As a student using Markdown-first notes, I want to export my wiki.
-5. As a student revising for exams, I want to ask questions over my saved sources.
-6. As a student managing a large topic, I want backlinks and index pages.
-7. As a student with outdated notes, I want health checks.
-8. As a student preparing for class, I want summaries, outlines, and study guides.
-9. As a student practising recall, I want cited flashcards.
-10. As a student answering flashcards, I want attempts and confidence ratings saved.
-11. As a student reviewing marked papers, I want marks and feedback to contribute to progress.
-12. As a student viewing progress meters, I want to know what evidence each meter is based on.
-
-## Core Features
-
-| Feature | Milestone Role | Description |
-| --- | --- | --- |
-| Local auth and workspace | M1 core | Signup, signin, session handling, account-bound workspace. |
-| Source library | M2 core | Store documents, notes, links, repository references, and metadata. |
-| Wiki compiler | M1-M2 core | Compile raw source material into cited Markdown pages. |
-| Cited Q&A and search | M1-M2 core | Ask questions over workspace sources with citations. |
-| Flashcards | M2 extension | Generate cited recall cards and log practice attempts. |
-| Knowledge meters | M3 extension | Estimate topic understanding using evidence from practice and sources. |
-| Export and health checks | M3 extension | Export Markdown and flag weak citations, stale pages, and duplicate sources. |
-
-## Technical Proof Of Concept
-
-The proof of concept demonstrates that the project has a working base, not just a written plan.
-
-### Implemented Foundation
-
-- FastAPI backend scaffold
-- PostgreSQL and pgvector migrations
-- Frontend scaffold and workspace UI
-- Chat interface and API bridge
-- Local backend and frontend verification harness
-
-### Auth PR In Review
-
-- Signup and signin endpoints
-- Password hashing and auth schemas
-- Frontend signin/register handlers
-- Session cookie handling
-- Backend tests for auth behavior
-
-PR #31 contains the original local auth flow and its historical verification evidence.
-
-## Architecture
-
-WikiBase uses a three-layer architecture: a merjs frontend, a FastAPI backend, and PostgreSQL with pgvector for structured records and vector search.
-
-```text
-Study Sources
-    |
-    v
-FastAPI Backend
-    | parse
-    | chunk
-    | embed
-    | retrieve
-    v
-PostgreSQL + pgvector
-    |
-    +--> Wiki Pages
-    |
-    +--> Cited Q&A
-```
-
-The architecture keeps source records, chunks, citations, flashcards, and learning evidence in our own database. Markdown output is generated from canonical records rather than being treated as the only source of truth.
-
-## Source-To-Wiki Flow
-
-The key product workflow is source-to-wiki-to-revision. This is the central path that Milestone 2 will expand into a usable prototype.
-
-```text
-Collect Sources -> Parse & Chunk -> Embed & Index -> Compile Wiki -> Revise with Evidence
-```
-
-| Step | Responsibility |
-| --- | --- |
-| Collect | Source library stores documents, pasted notes, links, and repository references. |
-| Parse and chunk | Backend normalizes text while preserving citation locations. |
-| Embed and index | Chunks are stored for search and retrieval. |
-| Compile | Wiki pages are generated with citations, backlinks, and indexes. |
-| Revise | Q&A, flashcards, and meters help students act on the knowledge base. |
-
-## Knowledge Meters
-
-Knowledge completion meters are evidence-based estimates, not absolute mastery scores. They combine multiple signals and show confidence when evidence is sparse.
-
-Signals:
-
-- Source coverage
-- Q&A evidence
-- Flashcard attempts
-- Marked papers
-
-Topic meter inputs:
-
-- Source coverage: number and quality of chunks mapped to a topic.
-- Q&A evidence: questions asked, citation coverage, and repeated gaps.
-- Flashcard evidence: correctness, confidence, retries, and review recency.
-- Marked-paper evidence: extracted marks, feedback, and weak-topic signals.
-
-## Tech Stack
-
-### Frontend
-
-**Zig, merjs**
-
-Server-rendered frontend with route generation, shared types, auth pages, dashboard, and chat UI.
-
-### Backend
-
-**FastAPI, Python, OpenAPI**
-
-Typed API routes, schemas, services, and tests for auth, ingestion, retrieval, and chat.
-
-### Data
-
-**PostgreSQL, pgvector, Alembic**
-
-Relational records plus vector similarity search in one database.
-
-### Quality
-
-**Local verification, pytest, Ruff**
-
-`./verify` runs formatting, linting, tests, builds, audits, and smoke checks locally.
-
-## GitHub Evidence
-
-Historical workflow runs remain part of the Milestone 1 evidence. The project also has merged PRs, visible issues, milestones, labels, and branch protection.
-
-| PR | Status | Evidence |
-| --- | --- | --- |
-| #24 | Merged | merjs scaffold, auth UI, shared library, frontend CI workflow. |
-| #25 | Merged | workspace/dashboard foundation with mock/backend data path. |
-| #26 | Merged | chat UI and frontend API bridge for cited Q&A. |
-| #27 | Merged | frontend Dockerfile and deployment files. |
-| #28 | Merged | Milestone 1 submission tracker. |
-| #31 | Open | local auth flow with backend and frontend changes, awaiting review. |
-
-## Testing Strategy
-
-Testing is split by layer so failures are easier to diagnose and explain during milestone evaluation.
-
-### Backend Checks
-
-- Ruff format check
-- Ruff lint check
-- pytest test suite
-- PostgreSQL + pgvector local Compose service
-
-### Frontend Checks
-
-- Zig format check
-- Zig build
-- Zig tests
-- Boot smoke test for the compiled app
-
-Planned M2 and M3 tests include parser fixtures, wiki compiler output, flashcard evidence logging, knowledge meter fixtures, and user testing.
-
-## Project Plan
-
-### M1
-
-Ideation and proof of concept. Define product, show local auth, source-to-wiki direction, cited Q&A foundation, GitHub evidence, testing plan, poster, video, and project log.
-
-### M2
-
-Prototype. Implement richer source ingestion, wiki compiler, search, cited Q&A, flashcards, practice evidence logging, and user testing.
-
-### M3
-
-Extensions. Add health checks, output generation, knowledge completion meters, marked-paper evidence, export, and UI refinements.
-
-### Splashdown
-
-Refinement. Polish workflows, fix outstanding issues, strengthen tests, and prepare final showcase materials.
-
-## Roles And Contributions
-
-| Member | Primary Work | Current Log Estimate |
-| --- | --- | --- |
-| Lim Yu Xi | Frontend scaffold, workspace overview, chat UI, frontend deployment files, frontend CI, UI flows. | 31 hours drafted; to be confirmed by member. |
-| Pranav Pappu | Backend scaffold, database, retrieval, ingestion, auth flow, tests, project documentation and tracking. | 37 hours drafted; to be confirmed by member. |
-
-Both members share responsibility for project tracking, milestone materials, code review, testing evidence, and demo preparation.
-
-## Risks And Mitigations
-
-| Risk | Impact | Mitigation |
-| --- | --- | --- |
-| Scope grows too large | M1 or M2 delivery slips | Keep M1 to auth plus one source-to-wiki demo; move extensions to M3. |
-| Retrieval quality is inconsistent | Answers may miss context | Use citations, thresholds, fixture evaluation sets, and user feedback. |
-| Wiki pages are hard to verify | Students may distrust output | Show citations and source links on pages and answers. |
-| Knowledge meters overstate understanding | Students may be misled | Label meters as estimates and show evidence confidence. |
-| Marked-paper formats vary | Extraction may be noisy | Start with fixture-supported formats and expose uncertain results. |
-| Sensitive data is mishandled | Privacy risk | Account-bound workspaces, no committed secrets, access-control tests. |
+WikiBase is available under the [Apache License 2.0](LICENSE).
