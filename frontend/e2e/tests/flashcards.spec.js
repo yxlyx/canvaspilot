@@ -3,9 +3,21 @@ const path = require("node:path");
 const { expect, test } = require("@playwright/test");
 
 async function loadScript(page, body) {
-  await page.goto("/login");
+  await page.goto("/login", { waitUntil: "commit" });
   await page.setContent(body);
   await page.addScriptTag({ url: "/app.js" });
+}
+
+function generationFixture() {
+  return `<section data-flash-create><form><fieldset>
+    <input type="radio" name="scope_type" value="enrollment_id" checked>
+    <div data-scope="enrollment_id"><div data-choice-list="enrollment_id"><label><input type="radio" name="enrollment_id" value="123e4567-e89b-12d3-a456-426614174000" checked>Module</label></div></div>
+    <div data-scope="topic_ids" hidden><div data-choice-list="topic_ids"></div></div>
+    <div data-scope="source_ids" hidden><div data-choice-list="source_ids"></div></div>
+    <div data-scope="source_chunk_ids" hidden><select name="chunk_topic_id"></select><select name="chunk_source_id"></select><div data-choice-list="source_chunk_ids"></div></div>
+    <div data-scope="wiki_page_id" hidden><div data-choice-list="wiki_page_id"></div></div>
+    <input name="deck_title"><input type="radio" name="limit_choice" value="10" checked><input name="custom_limit" value="10"><input type="checkbox" name="regenerate"><span data-scope-effective></span><button type="submit">Generate review draft</button>
+  </fieldset></form><p data-flash-create-status></p></section>`;
 }
 
 test("draft review summarizes generation details instead of printing snapshot JSON", async () => {
@@ -100,16 +112,25 @@ test("approve, publish, and retire remain explicit draft lifecycle actions", asy
     await route.fulfill({ status: 200, json: { revision: 6 } });
   });
   await loadScript(page, `<main data-draft-review data-deck-id="123e4567-e89b-12d3-a456-426614174000" data-revision="5" data-lifecycle="draft"><div data-draft-status></div><ol data-card-list><li data-card-id="223e4567-e89b-12d3-a456-426614174000" data-discarded="false"></li></ol><button data-approve-all>Approve all supported</button></main>`);
-  await page.getByRole("button", { name: "Approve all supported" }).click();
+  await Promise.all([
+    page.waitForNavigation(),
+    page.getByRole("button", { name: "Approve all supported" }).click(),
+  ]);
   await expect.poll(() => requests.some((item) => item.action === "approve")).toBe(true);
 
   await loadScript(page, `<main data-draft-review data-deck-id="123e4567-e89b-12d3-a456-426614174000" data-revision="6" data-lifecycle="draft"><div data-draft-status></div><ol data-card-list></ol><button data-publish>Publish approved snapshot</button></main>`);
-  await page.getByRole("button", { name: "Publish approved snapshot" }).click();
+  await Promise.all([
+    page.waitForNavigation(),
+    page.getByRole("button", { name: "Publish approved snapshot" }).click(),
+  ]);
   await expect.poll(() => requests.some((item) => item.action === "publish")).toBe(true);
 
   page.on("dialog", (dialog) => dialog.accept());
   await loadScript(page, `<main data-draft-review data-deck-id="123e4567-e89b-12d3-a456-426614174000" data-revision="7" data-lifecycle="approved"><div data-draft-status></div><ol data-card-list></ol><button data-retire>Retire approved deck</button></main>`);
-  await page.getByRole("button", { name: "Retire approved deck" }).click();
+  await Promise.all([
+    page.waitForNavigation(),
+    page.getByRole("button", { name: "Retire approved deck" }).click(),
+  ]);
   await expect.poll(() => requests.some((item) => item.action === "retire")).toBe(true);
 });
 
@@ -129,17 +150,18 @@ test("discard requires and submits a card quality reason", async ({ page }) => {
   expect(requestBody.payload.card_ids).toEqual(["223e4567-e89b-12d3-a456-426614174000"]);
 });
 
-test("generation links to provider settings when no answer provider is available", async ({ page }) => {
+test("generation preserves provider failure detail and links to settings", async ({ page }) => {
   await page.route("**/api/flashcards", async (route) => {
     const body = route.request().postDataJSON();
-    if (body.action === "generate") return route.fulfill({ status: 409, json: { error: "provider_not_configured", detail: "Connect a provider" } });
+    if (body.action === "generate") return route.fulfill({ status: 502, json: { error: "provider_request_rejected", detail: "The answer provider rejected the generation request" } });
     return route.fulfill({ status: 200, json: [] });
   });
-  await loadScript(page, `<section data-flash-create><form><fieldset><input type="radio" name="scope_type" value="enrollment_id" checked><label data-scope="enrollment_id"><select name="enrollment_id"><option value="123e4567-e89b-12d3-a456-426614174000">Module</option></select></label><label data-scope="topic_ids"><select name="topic_ids" multiple></select></label><label data-scope="source_ids"><select name="source_ids" multiple></select></label><div data-scope="source_chunk_ids"><select name="chunk_topic_id"></select><select name="chunk_source_id"></select><select name="source_chunk_ids" multiple></select></div><label data-scope="wiki_page_id"><select name="wiki_page_id"></select></label><input name="deck_title"><input name="limit" value="10"><input type="checkbox" name="regenerate"><span data-scope-effective></span><button type="submit">Generate review draft</button></fieldset></form><p data-flash-create-status></p></section>`);
+  await loadScript(page, generationFixture());
 
   await page.getByRole("button", { name: "Generate review draft" }).click();
 
   await expect(page.getByRole("link", { name: "Open provider settings" })).toHaveAttribute("href", "/settings/providers");
+  await expect(page.locator("[data-flash-create-status]")).toContainText("rejected the generation request");
   await expect(page.locator("[data-flash-create-status]")).toContainText("scope selection is preserved");
 });
 
@@ -153,7 +175,7 @@ test("generation sends exactly one stable scope and opens review rather than stu
     if (body.action === "generate") return route.fulfill({ status: 200, json: { deck: { id: "323e4567-e89b-12d3-a456-426614174000" } } });
     return route.fulfill({ status: 200, json: [] });
   });
-  await loadScript(page, `<section data-flash-create><form><fieldset><input type="radio" name="scope_type" value="enrollment_id" checked><label data-scope="enrollment_id"><select name="enrollment_id"><option value="123e4567-e89b-12d3-a456-426614174000">Module</option></select></label><label data-scope="topic_ids"><select name="topic_ids" multiple></select></label><label data-scope="source_ids"><select name="source_ids" multiple></select></label><div data-scope="source_chunk_ids"><select name="chunk_topic_id"></select><select name="chunk_source_id"></select><select name="source_chunk_ids" multiple></select></div><label data-scope="wiki_page_id"><select name="wiki_page_id"></select></label><input name="deck_title"><input name="limit" value="10"><input type="checkbox" name="regenerate"><span data-scope-effective></span><button type="submit">Generate review draft</button></fieldset></form><p data-flash-create-status></p></section>`);
+  await loadScript(page, generationFixture());
   await page.getByRole("button", { name: "Generate review draft" }).click();
   await expect.poll(() => requests.some((item) => item.action === "generate")).toBe(true);
   const generate = requests.find((item) => item.action === "generate");

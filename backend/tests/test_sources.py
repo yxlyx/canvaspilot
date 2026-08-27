@@ -1,9 +1,12 @@
 import asyncio
+import base64
 import uuid
 from collections.abc import AsyncGenerator
+from io import BytesIO
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from PIL import Image
 from sqlalchemy import delete, func, inspect, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.database import async_session_factory, engine, get_db
 from app.dependencies import get_current_user
 from app.main import app
+from app.models.processing import SourceVersion
 from app.models.source import Source
 from app.models.user import User
 from app.schemas.sources import SourceCreate, SourceUpdate
@@ -376,6 +380,116 @@ async def test_reimport_updates_metadata_fields_not_edited_by_user(source_sessio
     assert imported.topic_tags == ["imported"]
     assert imported.course_context == "Imported Course"
     assert imported.project_context == "Imported Project"
+
+
+@pytest.mark.asyncio
+async def test_source_preview_returns_sanitized_first_page_for_owner(source_client):
+    client, session, user, other_user = source_client
+    source = await create_or_update_source(
+        user,
+        SourceCreate(
+            source_type="image",
+            origin="upload",
+            external_id="preview-image",
+            title="Preview image",
+        ),
+        session,
+    )
+    image = Image.new("RGB", (80, 120), "#2f6f45")
+    raw = BytesIO()
+    image.save(raw, format="PNG")
+    version = SourceVersion(
+        source_id=source.id,
+        version_number=1,
+        fingerprint="a" * 64,
+        filename="preview.png",
+        payload={
+            "filename": "preview.png",
+            "content_base64": base64.b64encode(raw.getvalue()).decode(),
+        },
+        status="pending",
+    )
+    session.add(version)
+    await session.commit()
+
+    response = await client.get(f"/api/sources/{source.id}/preview")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.content.startswith(b"\x89PNG\r\n\x1a\n")
+    with Image.open(BytesIO(response.content)) as preview:
+        assert preview.size == (900, 1160)
+
+    private_source = await create_or_update_source(
+        other_user,
+        SourceCreate(
+            source_type="image",
+            origin="upload",
+            external_id="private-preview",
+            title="Private preview",
+        ),
+        session,
+    )
+    private_version = SourceVersion(
+        source_id=private_source.id,
+        version_number=1,
+        fingerprint="c" * 64,
+        filename="private.png",
+        payload={"content_base64": base64.b64encode(raw.getvalue()).decode()},
+        status="ready",
+    )
+    session.add(private_version)
+    await session.flush()
+    private_source.current_version_id = private_version.id
+    await session.commit()
+    private_response = await client.get(f"/api/sources/{private_source.id}/preview")
+    assert private_response.status_code == 404
+    assert private_response.headers["cache-control"] == "private, no-store"
+
+
+@pytest.mark.asyncio
+async def test_source_preview_rejects_malformed_identifier_without_caching(source_client):
+    client, _, _, _ = source_client
+
+    response = await client.get("/api/sources/not-a-uuid/preview")
+
+    assert response.status_code == 404
+    assert response.headers["cache-control"] == "private, no-store"
+
+
+@pytest.mark.asyncio
+async def test_source_preview_rejects_non_document_sources(source_client):
+    client, session, user, _ = source_client
+    source = await create_or_update_source(
+        user,
+        SourceCreate(
+            source_type="link",
+            origin="web",
+            external_id="https://example.com/preview",
+            title="Web bookmark",
+            source_url="https://example.com/preview",
+        ),
+        session,
+    )
+    version = SourceVersion(
+        source_id=source.id,
+        version_number=1,
+        fingerprint="b" * 64,
+        payload={"source_url": "https://example.com/preview"},
+        status="ready",
+    )
+    session.add(version)
+    await session.flush()
+    source.current_version_id = version.id
+    await session.commit()
+
+    response = await client.get(f"/api/sources/{source.id}/preview")
+
+    assert response.status_code == 415
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.json()["detail"] == "This source format does not have a document preview"
 
 
 @pytest.mark.asyncio

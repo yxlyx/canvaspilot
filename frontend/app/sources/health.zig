@@ -4,10 +4,39 @@ const lib = @import("lib");
 
 pub const meta: mer.Meta = .{ .title = "Source health", .description = "Review source coverage, freshness, and processing findings." };
 
+fn renderProcessingPolicy(w: *std.Io.Writer, policy: ?lib.types.ProcessingPolicyResponse, demo: bool) !void {
+    try w.writeAll("<section class=\"cp-health-policy\" id=\"processing-policy\" aria-labelledby=\"processing-policy-title\"><header><div><p class=\"eyebrow\">Processing controls</p><h2 id=\"processing-policy-title\">Source processing defaults</h2><p>Choose which evidence-building stages run after source intake. Paused work remains saved.</p></div></header>");
+    const value = policy orelse {
+        try w.writeAll("<div class=\"cp-inline-error\" role=\"alert\"><strong>Processing controls could not be loaded.</strong> Existing settings are unchanged. Reload before editing them.</div></section>");
+        return;
+    };
+    try w.writeAll("<form data-processing-policy-form><fieldset class=\"cp-settings-fieldset\"");
+    if (demo) try w.writeAll(" disabled");
+    try w.writeAll("><legend class=\"sr-only\">Source processing defaults</legend><div class=\"cp-policy-grid\"><label class=\"cp-check-row\"><input type=\"checkbox\" name=\"process_sources\"");
+    if (value.process_sources) try w.writeAll(" checked");
+    try w.writeAll("> <span><strong>Process source content</strong><small>Parse and index uploads or pasted notes. Links remain bookmark metadata.</small></span></label><label class=\"cp-check-row\"><input type=\"checkbox\" name=\"map_topics\"");
+    if (value.map_topics) try w.writeAll(" checked");
+    try w.writeAll("> <span><strong>Propose topic mapping</strong><small>Suggest curriculum associations only for module-scoped sources.</small></span></label><label class=\"cp-check-row\"><input type=\"checkbox\" name=\"compile_wiki\"");
+    if (value.compile_wiki) try w.writeAll(" checked");
+    try w.print("> <span><strong>Refresh the Wiki</strong><small>Keep the last valid Wiki if a refresh fails.</small></span></label><label class=\"cp-field\"><span>Flashcard generation</span><select name=\"flashcard_mode\"><option value=\"off\"{s}>Off</option><option value=\"suggest\"{s}>Suggest only</option><option value=\"draft\"{s}>Create draft decks</option></select><small>Generated decks always require review before practice.</small></label></div></fieldset>", .{ if (std.mem.eql(u8, value.flashcard_mode, "off")) " selected" else "", if (std.mem.eql(u8, value.flashcard_mode, "suggest")) " selected" else "", if (std.mem.eql(u8, value.flashcard_mode, "draft")) " selected" else "" });
+    if (demo) {
+        try w.writeAll("<p class=\"cp-settings-readonly\">Synthetic preview · processing controls are disabled.</p>");
+    } else {
+        try w.writeAll("<button class=\"cp-btn cp-btn-primary\" type=\"submit\">Save processing defaults</button><p class=\"cp-form-status\" role=\"status\" tabindex=\"-1\"></p>");
+    }
+    try w.writeAll("</form></section>");
+}
+
+fn demoPolicy() lib.types.ProcessingPolicyResponse {
+    return .{ .process_sources = true, .map_topics = true, .compile_wiki = true, .flashcard_mode = "suggest", .require_deck_review = true, .updated_at = "" };
+}
+
 pub fn render(req: mer.Request) mer.Response {
     if (lib.m3.gate(req, "Source health")) |response| return response;
     const demo = lib.m3.isExplicitDemo(req);
     const selected = req.queryParam("severity") orelse "all";
+    const policy_result = if (demo) null else lib.backend.processingPolicy(req.allocator, lib.session.fromRequest(req).token);
+    const policy: ?lib.types.ProcessingPolicyResponse = if (demo) demoPolicy() else if (policy_result.?.value) |parsed| parsed.value else null;
     var buf = lib.ui.buildHtml(req.allocator);
     const w = &buf.writer;
     lib.m3.demoMarker(req, w) catch return mer.internalError("health render failed");
@@ -21,6 +50,7 @@ pub fn render(req: mer.Request) mer.Response {
     } else {
         w.writeAll("<section class=\"cp-attention-summary\" aria-label=\"Health summary\"><p><strong>Health findings</strong><span>Resolve failed processing first, then improve thin or stale coverage.</span></p></section>") catch return mer.internalError("health render failed");
     }
+    renderProcessingPolicy(w, policy, demo) catch return mer.internalError("health render failed");
     w.writeAll("<nav class=\"cp-filter-row\" aria-label=\"Health status\">") catch return mer.internalError("health render failed");
     filter(req, w, "All", "all", selected, demo) catch return mer.internalError("health render failed");
     filter(req, w, "Healthy", "info", selected, demo) catch return mer.internalError("health render failed");
@@ -47,7 +77,7 @@ pub fn render(req: mer.Request) mer.Response {
         }
     }
     if (shown == 0) w.writeAll("<div class=\"cp-empty\"><div><h2>No findings here</h2><p>There are no source findings for this status.</p></div></div>") catch return mer.internalError("health render failed");
-    w.writeAll("</section><script src=\"/m3.js?v=20260722\" defer></script>") catch return mer.internalError("health render failed");
+    w.writeAll("</section><script src=\"/m3.js?v=20260722\" defer></script><script src=\"/settings.js?v=20260728-1\" defer></script>") catch return mer.internalError("health render failed");
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 

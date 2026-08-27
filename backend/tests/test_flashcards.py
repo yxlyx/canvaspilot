@@ -703,6 +703,35 @@ async def test_low_context_generation_returns_clear_fallback(flashcard_client):
 
 
 @pytest.mark.asyncio
+async def test_generation_retries_one_invalid_provider_response(flashcard_client, monkeypatch):
+    client, session, user, _ = flashcard_client
+    source, _ = await _create_ready_source(session, user)
+    calls = 0
+
+    async def retry_generation(_system, _prompt, _user, _db, provider, _schema):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return provider, '{"cards":[]}'
+        return provider, (
+            '{"cards":[{"evidence_key":"E1","question":"What do limits describe?",'
+            '"answer":"function behavior near a point",'
+            '"support_quote":"Limits describe function behavior near a point",'
+            '"card_type":"definition"}]}'
+        )
+
+    monkeypatch.setattr(flashcard_service, "generate_json_text", retry_generation)
+    response = await client.post(
+        "/api/flashcards/decks/generate",
+        json={"source_ids": [str(source.id)], "limit": 1},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["generated_count"] == 1
+    assert calls == 2
+
+
+@pytest.mark.asyncio
 async def test_generation_rejects_provider_output_outside_evidence_scope(
     flashcard_client, monkeypatch
 ):

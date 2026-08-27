@@ -1,14 +1,55 @@
 const std = @import("std");
 const types = @import("types.zig");
+const time = @import("time.zig");
 const ui = @import("ui.zig");
 
-fn stageLabel(name: []const u8) []const u8 {
-    if (std.mem.eql(u8, name, "parse_index")) return "Parse and index";
-    if (std.mem.eql(u8, name, "topic_proposals")) return "Deterministic topic mapping";
-    if (std.mem.eql(u8, name, "coverage")) return "Coverage snapshot";
-    if (std.mem.eql(u8, name, "wiki")) return "Wiki compilation";
-    if (std.mem.eql(u8, name, "flashcards")) return "Flashcard draft generation";
+const STATUS_ICON = "<span class=\"cp-state-icon cp-run-indicator\" aria-hidden=\"true\"><svg class=\"cp-state-icon-success\" viewBox=\"0 0 24 24\"><path d=\"m5 12.5 4.5 4.5L19 7.5\"/></svg><svg class=\"cp-state-icon-progress\" viewBox=\"0 0 24 24\"><circle cx=\"12\" cy=\"12\" r=\"8\"/></svg><svg class=\"cp-state-icon-failure\" viewBox=\"0 0 24 24\"><path d=\"m7 7 10 10M17 7 7 17\"/></svg><svg class=\"cp-state-icon-skipped\" viewBox=\"0 0 24 24\"><path d=\"M7 12h10\"/></svg></span>";
+const STAGE_ICON = "<span class=\"cp-state-icon cp-stage-indicator\" aria-hidden=\"true\"><svg class=\"cp-state-icon-success\" viewBox=\"0 0 24 24\"><path d=\"m5 12.5 4.5 4.5L19 7.5\"/></svg><svg class=\"cp-state-icon-progress\" viewBox=\"0 0 24 24\"><circle cx=\"12\" cy=\"12\" r=\"8\"/></svg><svg class=\"cp-state-icon-failure\" viewBox=\"0 0 24 24\"><path d=\"m7 7 10 10M17 7 7 17\"/></svg><svg class=\"cp-state-icon-skipped\" viewBox=\"0 0 24 24\"><path d=\"M7 12h10\"/></svg></span>";
+
+pub fn stageLabel(name: []const u8) []const u8 {
+    if (std.mem.eql(u8, name, "parse_index")) return "Reading document";
+    if (std.mem.eql(u8, name, "topic_proposals")) return "Organising topics";
+    if (std.mem.eql(u8, name, "coverage")) return "Updating coverage";
+    if (std.mem.eql(u8, name, "wiki")) return "Refreshing Wiki";
+    if (std.mem.eql(u8, name, "flashcards")) return "Preparing flashcards";
+    if (std.mem.eql(u8, name, "ready")) return "Source ready";
     return name;
+}
+
+fn completedStageLabel(name: []const u8) []const u8 {
+    if (std.mem.eql(u8, name, "parse_index")) return "Document read";
+    if (std.mem.eql(u8, name, "topic_proposals")) return "Topics organised";
+    if (std.mem.eql(u8, name, "coverage")) return "Coverage updated";
+    if (std.mem.eql(u8, name, "wiki")) return "Wiki refreshed";
+    if (std.mem.eql(u8, name, "flashcards")) return "Flashcards prepared";
+    return stageLabel(name);
+}
+
+fn stageState(status: []const u8) []const u8 {
+    if (std.mem.eql(u8, status, "succeeded")) return "Done";
+    if (std.mem.eql(u8, status, "skipped")) return "Not needed";
+    if (std.mem.eql(u8, status, "running")) return "In progress";
+    if (std.mem.eql(u8, status, "queued")) return "Waiting";
+    if (std.mem.eql(u8, status, "blocked")) return "Next";
+    if (std.mem.eql(u8, status, "failed")) return "Needs attention";
+    if (std.mem.eql(u8, status, "paused")) return "Paused";
+    if (std.mem.eql(u8, status, "cancelled")) return "Stopped";
+    return "Saved";
+}
+
+fn runState(status: []const u8) []const u8 {
+    if (std.mem.eql(u8, status, "ready")) return "Completed";
+    if (std.mem.eql(u8, status, "queued")) return "Waiting";
+    if (std.mem.eql(u8, status, "running")) return "In progress";
+    if (std.mem.eql(u8, status, "failed")) return "Needs attention";
+    if (std.mem.eql(u8, status, "paused")) return "Paused";
+    if (std.mem.eql(u8, status, "cancelled")) return "Stopped";
+    return status;
+}
+
+fn sourceTitle(sources: []const types.SourceResponse, source_id: []const u8) []const u8 {
+    for (sources) |source| if (std.mem.eql(u8, source.id, source_id)) return source.title;
+    return "Imported source";
 }
 
 fn safeUuid(value: []const u8) bool {
@@ -50,12 +91,20 @@ fn publicError(message: ?[]const u8) []const u8 {
     return value;
 }
 
-pub fn render(allocator: std.mem.Allocator, w: *std.Io.Writer, runs: []const types.ProcessingRunResponse, selected_id: []const u8, demo: bool) !void {
+pub fn render(allocator: std.mem.Allocator, w: *std.Io.Writer, runs: []const types.ProcessingRunResponse, sources: []const types.SourceResponse, selected_id: []const u8, demo: bool) !void {
     try w.writeAll("<section class=\"cp-processing-panel surface\" id=\"processing\" aria-labelledby=\"processing-title\"");
     if (!demo) try w.writeAll(" data-processing-panel");
-    try w.writeAll("><header><div><p class=\"eyebrow\">Durable processing</p><h2 id=\"processing-title\">Current and recent runs</h2><p>Indexing, optional Wiki compilation, and draft creation report their persisted state independently.</p></div></header>");
+    try w.writeAll("><header><div><p class=\"eyebrow\">Source activity</p><h2 id=\"processing-title\">What happened to your sources</h2><p>A simple record of what is ready, still running, or needs your attention.</p></div></header>");
     if (demo) {
-        try w.writeAll("<p class=\"cp-settings-readonly\">Synthetic fixture timeline. Retry and cancel are disabled.</p><article class=\"cp-processing-run\"><header><strong>Synthetic source run</strong><span class=\"status-pill status-info\">running</span></header><ol class=\"cp-stage-list\"><li data-status=\"succeeded\"><strong>Parse and index</strong><span>Status: succeeded</span></li><li data-status=\"running\"><strong>Wiki compilation</strong><span>Status: running</span></li><li data-status=\"blocked\"><strong>Flashcard draft generation</strong><span>Status: blocked</span></li></ol></article></section>");
+        try w.writeAll("<p class=\"cp-settings-readonly\">Illustrative activity. Actions are unavailable in the demo.</p><article class=\"cp-processing-run\" data-run-status=\"running\"><header><div class=\"cp-processing-source\">");
+        try w.writeAll(STATUS_ICON);
+        try w.writeAll("<div><strong>Synthetic lecture notes</strong><span>Refreshing Wiki</span></div></div><span class=\"status-pill status-info\">In progress</span></header><ol class=\"cp-stage-list\"><li data-status=\"succeeded\">");
+        try w.writeAll(STAGE_ICON);
+        try w.writeAll("<div><strong>Document read</strong><span>Done</span></div></li><li data-status=\"running\">");
+        try w.writeAll(STAGE_ICON);
+        try w.writeAll("<div><strong>Wiki refresh</strong><span>In progress</span></div></li><li data-status=\"blocked\">");
+        try w.writeAll(STAGE_ICON);
+        try w.writeAll("<div><strong>Flashcards</strong><span>Next</span></div></li></ol></article></section>");
         return;
     }
     try w.writeAll("<p class=\"cp-processing-poll-error\" role=\"alert\" tabindex=\"-1\" hidden data-processing-error></p><div data-processing-runs>");
@@ -63,16 +112,32 @@ pub fn render(allocator: std.mem.Allocator, w: *std.Io.Writer, runs: []const typ
     for (runs) |run| {
         const selected = selected_id.len == 0 or std.mem.eql(u8, selected_id, run.id);
         const active = std.mem.eql(u8, run.status, "queued") or std.mem.eql(u8, run.status, "running");
-        try w.print("<article class=\"cp-processing-run{s}\" data-processing-run=\"{s}\" data-run-status=\"{s}\"><header><div><strong>Source version <code>{s}</code></strong><span>Created <time datetime=\"{s}\">{s}</time> · run attempt {d}</span></div><span class=\"status-pill status-{s}\">{s}</span></header>", .{ if (selected) " is-current" else "", ui.escapeSafe(allocator, run.id), ui.escapeSafe(allocator, run.status), ui.escapeSafe(allocator, run.source_version_id), ui.escapeSafe(allocator, run.created_at), ui.escapeSafe(allocator, run.created_at), run.attempt_count + 1, if (std.mem.eql(u8, run.status, "ready")) "good" else if (std.mem.eql(u8, run.status, "failed") or std.mem.eql(u8, run.status, "cancelled")) "warn" else "info", if (std.mem.eql(u8, run.status, "ready")) "completed" else ui.escapeSafe(allocator, run.status) });
+        const updated = time.formatRelative(allocator, run.updated_at, time.nowSecs()) catch "recently";
+        const current_stage = if (std.mem.eql(u8, run.status, "ready")) "All selected steps finished" else stageLabel(run.current_stage);
+        try w.print("<article class=\"cp-processing-run{s}\" data-processing-run=\"{s}\" data-run-status=\"{s}\" data-run-stage=\"{s}\"><header><div class=\"cp-processing-source\">", .{ if (selected) " is-current" else "", ui.escapeSafe(allocator, run.id), ui.escapeSafe(allocator, run.status), ui.escapeSafe(allocator, run.current_stage) });
+        try w.writeAll(STATUS_ICON);
+        try w.print("<div><strong>{s}</strong><span><span data-current-stage>{s}</span> · updated {s}</span></div></div><span class=\"status-pill status-{s}\">{s}</span><span class=\"sr-only\" data-run-live role=\"status\" aria-live=\"polite\" aria-atomic=\"true\"></span></header>", .{ ui.escapeSafe(allocator, sourceTitle(sources, run.source_id)), ui.escapeSafe(allocator, current_stage), ui.escapeSafe(allocator, updated), if (std.mem.eql(u8, run.status, "ready")) "good" else if (std.mem.eql(u8, run.status, "failed") or std.mem.eql(u8, run.status, "cancelled") or std.mem.eql(u8, run.status, "paused")) "warn" else "info", ui.escapeSafe(allocator, runState(run.status)) });
         try w.writeAll("<ol class=\"cp-stage-list\">");
         for (run.stages) |stage| {
-            const timestamp = stage.completed_at orelse stage.started_at orelse stage.available_at;
-            try w.print("<li data-stage=\"{s}\" data-status=\"{s}\"><strong>{s}</strong><span>Status / current outcome: {s}</span><span><time datetime=\"{s}\">{s}</time> · attempt {d} of {d}</span>", .{ ui.escapeSafe(allocator, stage.name), ui.escapeSafe(allocator, stage.status), stageLabel(stage.name), ui.escapeSafe(allocator, stage.status), ui.escapeSafe(allocator, timestamp), ui.escapeSafe(allocator, timestamp), stage.attempt_count, stage.max_attempts });
+            const label = if (std.mem.eql(u8, stage.status, "succeeded")) completedStageLabel(stage.name) else stageLabel(stage.name);
+            try w.print("<li data-stage=\"{s}\" data-status=\"{s}\">", .{ ui.escapeSafe(allocator, stage.name), ui.escapeSafe(allocator, stage.status) });
+            try w.writeAll(STAGE_ICON);
+            try w.print("<div><strong>{s}</strong><span data-stage-state>{s}</span></div>", .{ ui.escapeSafe(allocator, label), ui.escapeSafe(allocator, stageState(stage.status)) });
             if (stage.@"error" != null) try w.print("<p role=\"alert\">{s}</p>", .{ui.escapeSafe(allocator, publicError(stage.@"error"))});
             try w.writeAll("</li>");
         }
         try w.writeAll("</ol>");
-        if (run.pause_reason) |reason| try w.print("<p class=\"cp-run-guidance\"><strong>Paused:</strong> {s} {s} <a href=\"{s}\">Open settings</a>.</p>", .{ ui.escapeSafe(allocator, reason), if (std.mem.eql(u8, reason, "source_processing_disabled")) "Enable source processing before retrying." else "Connect a generation provider if this stage needs one, then retry.", if (std.mem.eql(u8, reason, "source_processing_disabled")) "/settings/learning" else "/settings/providers" });
+        if (std.mem.eql(u8, run.status, "queued")) {
+            const updated_secs = time.parseIsoSecs(run.updated_at);
+            if (updated_secs != null and time.nowSecs() - updated_secs.? >= 60) try w.writeAll("<p class=\"cp-run-guidance\" role=\"status\"><strong>This is taking longer than usual.</strong> Your document is saved. You can leave this page and check again later.</p>");
+        }
+        if (run.pause_reason) |reason| {
+            if (std.mem.eql(u8, reason, "source_processing_disabled")) {
+                try w.writeAll("<p class=\"cp-run-guidance\"><strong>Processing is paused.</strong> Turn source processing back on, then retry. <a href=\"/sources/health#processing-policy\">Open processing controls</a>.</p>");
+            } else {
+                try w.writeAll("<p class=\"cp-run-guidance\"><strong>A generation step is paused.</strong> Check your provider connection, then retry. <a href=\"/settings/providers\">Open provider settings</a>.</p>");
+            }
+        }
         if (run.@"error" != null) try w.print("<p class=\"cp-run-guidance\" role=\"alert\">{s}</p>", .{ui.escapeSafe(allocator, publicError(run.@"error"))});
         try w.writeAll("<div class=\"cp-action-row\">");
         if (std.mem.eql(u8, run.status, "failed") or std.mem.eql(u8, run.status, "paused") or std.mem.eql(u8, run.status, "cancelled")) try w.print("<button class=\"cp-btn cp-btn-primary\" type=\"button\" data-processing-action=\"run.retry\" data-run-id=\"{s}\">Retry failed stage</button>", .{ui.escapeSafe(allocator, run.id)});
@@ -116,11 +181,31 @@ test "succeeded stage actions use only validated outcome identifiers" {
         .{ .id = "3", .name = "flashcards", .position = 4, .status = "succeeded", .attempt_count = 1, .max_attempts = 3, .available_at = "now", .outcome = cards.value },
     };
     const run: types.ProcessingRunResponse = .{ .id = "323e4567-e89b-12d3-a456-426614174000", .source_id = "423e4567-e89b-12d3-a456-426614174000", .source_version_id = "523e4567-e89b-12d3-a456-426614174000", .status = "ready", .current_stage = "flashcards", .attempt_count = 0, .created_at = "now", .updated_at = "now", .stages = &stages };
+    const source: types.SourceResponse = .{ .id = run.source_id, .user_id = "user", .source_type = "pdf", .title = "Lecture 08", .status = "ready" };
     var out: std.Io.Writer.Allocating = .init(allocator);
     defer out.deinit();
-    try render(allocator, &out.writer, &.{run}, "", false);
+    try render(allocator, &out.writer, &.{run}, &.{source}, "", false);
     const html = out.written();
+    try std.testing.expect(std.mem.indexOf(u8, html, "Lecture 08") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, run.source_version_id) == null);
     try std.testing.expect(std.mem.indexOf(u8, html, "href=\"/learning/123e4567-e89b-12d3-a456-426614174000\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "href=\"/wiki/safe-page?enrollment=123e4567-e89b-12d3-a456-426614174000\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "href=\"/flashcards?draft=223e4567-e89b-12d3-a456-426614174000&amp;enrollment=123e4567-e89b-12d3-a456-426614174000#draft-review\"") != null);
+}
+
+test "processing labels remain learner readable" {
+    try std.testing.expectEqualStrings("Source ready", stageLabel("ready"));
+    try std.testing.expectEqualStrings("Not needed", stageState("skipped"));
+    try std.testing.expectEqualStrings("Document read", completedStageLabel("parse_index"));
+}
+
+test "queued processing explains saved state without implementation details" {
+    const stage: types.ProcessingStageResponse = .{ .id = "1", .name = "parse_index", .position = 0, .status = "queued", .attempt_count = 0, .max_attempts = 3, .available_at = "2020-01-01T00:00:00Z" };
+    const run: types.ProcessingRunResponse = .{ .id = "123e4567-e89b-12d3-a456-426614174000", .source_id = "223e4567-e89b-12d3-a456-426614174000", .source_version_id = "323e4567-e89b-12d3-a456-426614174000", .status = "queued", .current_stage = "parse_index", .attempt_count = 0, .created_at = "2020-01-01T00:00:00Z", .updated_at = "2020-01-01T00:00:00Z", .stages = &.{stage} };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try render(std.testing.allocator, &out.writer, &.{run}, &.{}, "", false);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "This is taking longer than usual.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "Your document is saved") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "source version") == null);
 }

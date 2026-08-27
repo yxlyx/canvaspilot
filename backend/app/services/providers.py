@@ -4,7 +4,7 @@ import re
 import socket
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 
 import httpx
 from cryptography.fernet import Fernet, InvalidToken
@@ -679,56 +679,28 @@ async def test_provider(
             raise WikiBaseError(422, "unsafe_endpoint", "Azure endpoint is not allowed")
         await _ensure_public_endpoint(endpoint)
     key = decrypt_provider_key(setting.encrypted_api_key, setting.encryption_key_id, settings)
-    headers: dict[str, str]
-    method = "GET"
-    body = None
-    if provider in {"codegraff", "openai", "openai_compatible", "google_gemini"}:
-        url = f"{endpoint}/models"
-        headers = {"Authorization": f"Bearer {key}"}
-    elif provider == "azure_openai":
-        deployment = quote(setting.model, safe="")
-        url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version=2024-10-21"
-        headers = {"api-key": key}
-        method = "POST"
-        body = {"messages": [{"role": "user", "content": "Reply OK"}], "max_tokens": 1}
+    runtime = GenerationProvider(
+        provider=setting.provider,
+        model=setting.model,
+        endpoint=endpoint,
+        api_key=key,
+        auth_method=setting.auth_method,
+    )
     failure: str | None = None
+    failure_code: str | None = None
     try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
-            response = await client.request(method, url, headers=headers, json=body)
-        valid = 200 <= response.status_code < 300
-        if response.status_code in {401, 403}:
-            failure = "The provider rejected the credential. Check the key and its permissions."
-        elif response.status_code == 404:
-            failure = "The configured endpoint or model was not found."
-        elif response.status_code == 429:
-            failure = "The provider rate limit was reached. Try again after checking its quota."
-        elif response.status_code >= 500:
-            failure = "The provider is temporarily unavailable. Try again later."
-        elif not valid:
-            failure = "The provider rejected the endpoint or model."
-        if valid and provider != "azure_openai":
-            payload = response.json()
-            models = payload.get("data", [])
-            model_ids = {
-                str(item.get("id", "")).removeprefix("models/")
-                for item in models
-                if isinstance(item, dict)
-            }
-            valid = setting.model in model_ids
-            if not valid:
-                failure = "The configured model is not available for this credential."
-    except httpx.TimeoutException:
+        from app.services.llm import probe_generation_provider
+
+        await probe_generation_provider(runtime)
+        valid = True
+    except WikiBaseError as exc:
         valid = False
-        failure = "The connection timed out. Check the endpoint and try again."
-    except (httpx.ConnectError, httpx.NetworkError):
-        valid = False
-        failure = "A network or TLS connection could not be established."
-    except (AttributeError, httpx.HTTPError, ValueError):
-        valid = False
-        failure = "The provider returned an unexpected response."
+        failure = exc.detail
+        failure_code = exc.error
     await lock_provider_selection(user.id, db)
     setting.status = "connected" if valid else "invalid"
     setting.last_error = None if valid else failure
+    setting.last_error_code = None if valid else failure_code
     if not valid:
         setting.active_for_generation = False
     setting.last_tested_at = datetime.now(UTC)

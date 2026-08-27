@@ -117,7 +117,7 @@ async def _create_ready_source(
     user: User,
     title: str,
     content: str,
-    embedding: list[float],
+    embedding: list[float] | None,
     citation_ref: str | None = None,
 ) -> tuple[Source, SourceChunk]:
     source = await create_or_update_source(
@@ -606,6 +606,59 @@ async def test_chat_returns_cited_answer_from_source_chunks(retrieval_client, mo
 
 
 @pytest.mark.asyncio
+async def test_chat_uses_lexical_retrieval_when_embeddings_are_unavailable(
+    retrieval_client, monkeypatch
+):
+    client, session, user, other_user = retrieval_client
+
+    async def unavailable_embedding(_query: str):
+        raise RuntimeError("embedding provider is not configured")
+
+    monkeypatch.setattr("app.services.retrieval.embed_query", unavailable_embedding)
+    captured: dict = {}
+    _install_fake_chat_completion(
+        monkeypatch,
+        ["The verification document confirms the public preview workflow [1]."],
+        captured,
+    )
+    source, chunk = await _create_ready_source(
+        session,
+        user,
+        "Verification Notes",
+        "The verification document confirms the public preview workflow.",
+        None,
+        "Verification Notes Citation: Purpose",
+    )
+    await _create_ready_source(
+        session,
+        other_user,
+        "Private Verification Notes",
+        "A private verification document must remain isolated.",
+        None,
+    )
+
+    response = await client.post(
+        "/api/chat", json={"message": "What does the verification document confirm?"}
+    )
+
+    assert response.status_code == 200
+    events = _parse_sse_events(response.text)
+    citations = next(data["citations"] for event, data in events if event == "citations")
+    assert citations == [
+        {
+            "title": source.title,
+            "url": source.source_url,
+            "snippet": chunk.content[:200],
+            "source_id": str(source.id),
+            "citation_ref": "Verification Notes Citation: Purpose",
+            "reference_number": 1,
+        }
+    ]
+    assert "public preview workflow" in captured["messages"][0]["content"]
+    assert "private verification" not in captured["messages"][0]["content"].lower()
+
+
+@pytest.mark.asyncio
 async def test_chat_preserves_sparse_repeated_reference_numbers(retrieval_client, monkeypatch):
     client, session, user, _ = retrieval_client
     monkeypatch.setattr("app.services.retrieval.embed_query", lambda _: _query_embedding())
@@ -634,9 +687,15 @@ async def test_chat_preserves_sparse_repeated_reference_numbers(retrieval_client
 
 
 @pytest.mark.asyncio
-async def test_chat_no_relevant_source_returns_safe_fallback(retrieval_client, monkeypatch):
+async def test_chat_no_relevant_source_returns_general_answer(retrieval_client, monkeypatch):
     client, session, _, other_user = retrieval_client
     monkeypatch.setattr("app.services.retrieval.embed_query", lambda _: _query_embedding())
+    captured: dict = {}
+    _install_fake_chat_completion(
+        monkeypatch,
+        ["A limit describes the value a function approaches."],
+        captured,
+    )
     await _create_ready_source(
         session,
         other_user,
@@ -650,22 +709,22 @@ async def test_chat_no_relevant_source_returns_safe_fallback(retrieval_client, m
 
     assert response.status_code == 200
     events = _parse_sse_events(response.text)
-    assert events == [
-        (
-            "done",
-            {
-                "grounded": False,
-                "confidence": 0,
-                "message": "No relevant content found in your workspace sources.",
-            },
-        )
-    ]
+    assert [event for event, _ in events] == ["token", "done"]
+    assert events[0][1]["text"] == "A limit describes the value a function approaches."
+    assert events[-1][1] == {"grounded": False, "confidence": 0}
+    assert "Private content" not in captured["messages"][0]["content"]
 
 
 @pytest.mark.asyncio
 async def test_chat_filters_low_similarity_source_chunks(retrieval_client, monkeypatch):
     client, session, user, _ = retrieval_client
     monkeypatch.setattr("app.services.retrieval.embed_query", lambda _: _query_embedding())
+    captured: dict = {}
+    _install_fake_chat_completion(
+        monkeypatch,
+        ["A limit describes the value a function approaches."],
+        captured,
+    )
     await _create_ready_source(
         session,
         user,
@@ -679,8 +738,11 @@ async def test_chat_filters_low_similarity_source_chunks(retrieval_client, monke
 
     assert response.status_code == 200
     events = _parse_sse_events(response.text)
+    assert [event for event, _ in events] == ["token", "done"]
+    assert events[0][1]["text"] == "A limit describes the value a function approaches."
     assert events[-1][1]["grounded"] is False
-    assert events[-1][1]["message"] == "No relevant content found in your workspace sources."
+    assert events[-1][1]["confidence"] == 0
+    assert "Orthogonal Notes" not in captured["messages"][0]["content"]
 
 
 @pytest.mark.asyncio

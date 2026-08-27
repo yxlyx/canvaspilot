@@ -204,6 +204,15 @@ pub fn listProcessingRuns(allocator: std.mem.Allocator, token: []const u8, sourc
     return requestJson([]types.ProcessingRunResponse, allocator, token, .GET, path, null);
 }
 
+pub fn latestProcessingRuns(allocator: std.mem.Allocator, token: []const u8) Result([]types.ProcessingRunResponse) {
+    return requestJson([]types.ProcessingRunResponse, allocator, token, .GET, "/api/processing/runs?latest_per_source=true", null);
+}
+
+pub fn processingRun(allocator: std.mem.Allocator, token: []const u8, run_id: []const u8) Result(types.ProcessingRunResponse) {
+    const path = std.fmt.allocPrint(allocator, "/api/processing/runs/{s}", .{run_id}) catch return .{ .status = 0, .err = "alloc" };
+    return requestJson(types.ProcessingRunResponse, allocator, token, .GET, path, null);
+}
+
 pub fn processingPolicy(allocator: std.mem.Allocator, token: []const u8) Result(types.ProcessingPolicyResponse) {
     return requestJson(types.ProcessingPolicyResponse, allocator, token, .GET, "/api/processing/policy", null);
 }
@@ -379,7 +388,7 @@ pub fn proxy(allocator: std.mem.Allocator, token: []const u8, idempotency_key: [
     const bearer = authHeader(allocator, token) catch return .{ .status = 0, .err = "could not build authorization" };
     var headers_buf: [4]std.http.Header = undefined;
     headers_buf[0] = .{ .name = "Authorization", .value = bearer };
-    headers_buf[1] = .{ .name = "Accept", .value = "application/json, text/markdown, application/zip" };
+    headers_buf[1] = .{ .name = "Accept", .value = "application/json, text/markdown, application/zip, image/png" };
     var n: usize = 2;
     if (idempotency_key.len > 0) {
         headers_buf[n] = .{ .name = "Idempotency-Key", .value = idempotency_key };

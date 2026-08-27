@@ -43,15 +43,17 @@ test("settings pages share the current immutable script version", async () => {
     "app/notifications.zig",
     "app/settings/index.zig",
     "app/settings/appearance.zig",
-    "app/settings/learning.zig",
     "app/settings/notifications.zig",
     "app/settings/data.zig",
   ]) {
     const source = fs.readFileSync(path.join(__dirname, "../..", relative), "utf8");
     expect(source).toContain("/settings.js?v=20260728-1");
   }
+  const learning = fs.readFileSync(path.join(__dirname, "../../app/settings/learning.zig"), "utf8");
+  expect(learning).toContain("/settings.js?v=20260728-1");
+  expect(learning).toContain("/curriculum.js?v=20260728-3");
   const layout = fs.readFileSync(path.join(__dirname, "../../app/layout.zig"), "utf8");
-  expect(layout).toContain("/app.js?v=wikibase-16");
+  expect(layout).toContain("/app.js?v=wikibase-22");
 });
 
 test("explicit demo renders grounded and insufficient study-guide states", async ({ page }) => {
@@ -263,10 +265,20 @@ test("provider form contracts preserve direct keys and the Codegraff device flow
   expect(providerPage).toContain("Use for answers");
   expect(providerPage).toContain("model catalog is temporarily unavailable");
   expect(providerPage).toContain("data-session-expires");
+  expect(providerPage).toContain("data-codegraff-auth-start");
+  expect(providerPage).toContain("Authorized, not tested");
+  expect(providerPage).toContain("Tested, not active");
+  expect(providerPage).toContain("Active for cited answers");
+  expect(providerPage).toContain('data-approval-bootstrap=\\"/settings/providers?opening=codegraff\\"');
+  expect(providerPage).toContain("session.verification_uri_complete orelse session.verification_uri orelse");
   const script = fs.readFileSync(path.join(__dirname, "../../public/m3.js"), "utf8");
   expect(script).toContain('action: "provider.activate"');
   expect(script).toContain('response.status === 401');
   expect(script).toContain("transientFailures > 5");
+  expect(script).toContain('approvalWindow = window.open(form.dataset.approvalBootstrap, "wikibase-codegraff-" + Date.now())');
+  expect(script).toContain("approvalWindow.location.href = approvalUrl");
+  expect(script).toContain("result.verification_uri_complete || result.verification_uri");
+  expect(script).toContain("if (!result.active_for_generation)");
   const styles = fs.readFileSync(path.join(__dirname, "../../app/_styles.css"), "utf8");
   expect(styles).toContain(".cp-provider-page{width:min(100%,880px)");
   expect(styles).toContain(".cp-device-steps>li");
@@ -359,6 +371,23 @@ test("Knowledge recommendations retain contextual destinations", async ({ page }
   await expect(page.getByRole("link", { name: "Review paper evidence" })).toHaveAttribute("href", /\/sources\/papers\/demo-paper-functional-midterm\?mock=1$/);
 });
 
+test("activity timestamps and source-processing guidance stay learner readable", async ({ page }) => {
+  await page.goto("/wiki/activity?mock=1");
+  const times = page.locator(".cp-activity-ledger time");
+  await expect(times).not.toHaveCount(0);
+  for (const time of await times.all()) {
+    await expect(time).toHaveAttribute("datetime", /^\d{4}-\d{2}-\d{2}T/);
+    await expect(time).toHaveAttribute("title", /UTC$/);
+    await expect(time).toHaveText(/(?:ago|in \d)/);
+  }
+
+  await page.goto("/chat?mock=1");
+  await expect(page.locator(".context-sources a").first()).toHaveAttribute("href", /\/sources\?mock=1#processing$/);
+  const wikiSource = fs.readFileSync(path.join(__dirname, "../../app/wiki/index.zig"), "utf8");
+  expect(wikiSource).toContain("Check source processing");
+  expect(wikiSource).toContain("#processing");
+});
+
 test("dark landing closing panel keeps readable editorial contrast", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Switch to dark mode" }).click();
@@ -422,9 +451,11 @@ test("saved account motion preference remains reduced after reload", async ({ pa
   await expect.poll(() => page.locator(".wb-marketing-nav").evaluate((node) => Number.parseFloat(getComputedStyle(node).transitionDuration))).toBeLessThanOrEqual(0.00001);
 });
 
-test("live source preview stays metadata-only and source intake reports its saved indexing state", async ({ page }) => {
+test("live source preview loads the real first page and source intake reports its saved state", async ({ page }) => {
   await page.goto("/login");
   let sourceRequest; let sourceIdempotencyKey;
+  const previewPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+  await page.route("**/api/sources/preview?id=223e4567-e89b-12d3-a456-426614174000", (route) => route.fulfill({ status: 200, contentType: "image/png", body: previewPng }));
   await page.route("**/api/sources/import", (route) => {
     sourceRequest = route.request().postDataJSON();
     sourceIdempotencyKey = route.request().headers()["idempotency-key"];
@@ -437,21 +468,27 @@ test("live source preview stays metadata-only and source intake reports its save
   await page.setContent(`<main>
     <input id="cp-source-search"><select id="cp-source-format"><option value="">All formats</option></select>
     <span id="cp-source-count"></span><h2 id="cp-source-heading"></h2><div id="cp-source-empty" hidden></div>
-    <section id="cp-document-grid"><article class="document-card" data-title="Lecture notes" data-module="CS2040S" data-format="URL" data-status="pending" data-tags="Trees">
-      <button type="button" data-source-preview>Preview</button></article></section>
+    <section id="cp-document-grid"><article class="document-card" data-title="Lecture notes" data-module="CS2040S" data-format="PDF" data-status="pending" data-tags="Trees" data-preview-src="/api/sources/preview?id=223e4567-e89b-12d3-a456-426614174000" data-source-href="/chat">
+      <button class="document-preview-button" type="button" data-source-preview aria-label="Loading preview for Lecture notes"><span class="document-preview-loading">Loading first page</span><img data-document-preview-image src="/api/sources/preview?id=223e4567-e89b-12d3-a456-426614174000" alt="First page of Lecture notes"><span class="document-preview-fallback" hidden>Unavailable</span></button></article></section>
     <div id="cp-source-preview-modal" hidden><section><button type="button" data-close-source-modal>Close</button>
-      <h3 id="cp-preview-paper-title">Source</h3><h2 id="cp-preview-title">Source</h2><p id="cp-preview-detail"></p>
-      <span id="cp-preview-status"></span><dl><dd id="cp-preview-context"></dd><dd id="cp-preview-format"></dd><dd id="cp-preview-topics"></dd></dl>
+      <h2 id="cp-preview-title">Source</h2><p id="cp-preview-detail"></p><span id="cp-preview-loading" hidden>Loading</span><img id="cp-preview-image" alt="" hidden><div id="cp-preview-fallback" hidden>Unavailable</div>
+      <span id="cp-preview-status"></span><dl><dd id="cp-preview-context"></dd><dd id="cp-preview-format"></dd><dd id="cp-preview-topics"></dd></dl><a id="cp-preview-open" href="/sources">Open source</a>
     </section></div>
     <button id="cp-add-source" type="button">Add source</button><div id="cp-add-source-modal"><section>
       <button type="button" data-source-mode="upload">Upload files</button><button type="button" data-source-mode="link">Add link</button><button type="button" data-source-mode="paste">Paste text</button>
       <form id="cp-add-source-form" action="/api/sources/import"><input name="mode" value="upload"><div data-source-panel="upload"></div><div data-source-panel="link" hidden></div><div data-source-panel="paste" hidden></div><input id="cp-new-source-title" value="New source"><input id="cp-new-source-url" value="https://example.test/notes"><input id="cp-new-source-module" value="CS2040S"><button type="submit">Import source</button><p class="cp-form-status"></p></form>
-    </section></div><script src="/app.js"></script></main>`);
+    </section></div><script src="/app.js?preview-test=1"></script></main>`);
 
-  await page.getByRole("button", { name: "Preview" }).click();
+  await expect(page.locator("[data-source-preview]")).toHaveAttribute("aria-label", "Preview first page of Lecture notes");
+  await expect(page.locator("[data-document-preview-image]")).toBeVisible();
+  await expect(page.locator(".document-preview-loading")).toBeHidden();
+  await page.getByRole("button", { name: "Preview first page of Lecture notes" }).click();
   await expect(page.locator("#cp-preview-context")).toHaveText("CS2040S");
-  await expect(page.locator("#cp-preview-format")).toHaveText("URL");
+  await expect(page.locator("#cp-preview-format")).toHaveText("PDF");
   await expect(page.locator("#cp-preview-topics")).toHaveText("Trees");
+  await expect(page.locator("#cp-preview-image")).toHaveAttribute("src", "/api/sources/preview?id=223e4567-e89b-12d3-a456-426614174000");
+  await expect(page.locator("#cp-preview-image")).toBeVisible();
+  await expect(page.locator("#cp-preview-open")).toHaveAttribute("href", "/chat");
   await expect(page.locator("#cp-source-preview-modal")).not.toContainText("linked wiki claims");
   await expect(page.locator("#cp-source-preview-modal")).not.toContainText("Traceability preserved");
 
@@ -489,6 +526,45 @@ test("provider save omits fixed endpoints and preserves custom and Azure endpoin
   expect(requests[1].payload.endpoint).toBe("https://course.openai.azure.com");
 });
 
+test("Codegraff test and use waits for explicit activation", async ({ page }) => {
+  await page.goto("/login");
+  const requests = [];
+  await page.route("**/api/m3", async (route) => {
+    const body = route.request().postDataJSON();
+    requests.push(body);
+    if (body.action === "provider.test") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "connected", active_for_generation: false }) });
+    }
+    if (body.action === "provider.activate") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "connected", active_for_generation: true }) });
+    }
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "configured", active_for_generation: false }) });
+  });
+  await page.setContent(`<main><form data-m3-form data-provider-save data-provider-activate><input name="action" value="provider.save"><input name="provider" value="codegraff"><input name="model" value="deepseek-v4-pro"><button>Test and use</button><p class="cp-form-status"></p></form><script src="/m3.js"></script></main>`);
+  await page.getByRole("button", { name: "Test and use" }).click();
+  await expect.poll(() => requests.map((request) => request.action)).toEqual(["provider.save", "provider.test", "provider.activate"]);
+  await expect(page.locator(".cp-form-status")).toHaveText("Codegraff is ready for cited answers.");
+});
+
+test("provider test and activation report the returned state", async ({ page }) => {
+  await page.goto("/login");
+  await page.route("**/api/m3", async (route) => {
+    const body = route.request().postDataJSON();
+    if (body.action === "provider.test") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "invalid", active_for_generation: false, last_error: "The selected model is unavailable." }) });
+    }
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "connected", active_for_generation: false }) });
+  });
+  await page.setContent(`<main>
+    <form data-m3-form><input name="action" value="provider.test"><input name="id" value="codegraff"><button>Test connection</button><p class="cp-form-status"></p></form>
+    <form data-m3-form><input name="action" value="provider.activate"><input name="id" value="codegraff"><button>Use for answers</button><p class="cp-form-status"></p></form>
+    <script src="/m3.js"></script></main>`);
+  await page.getByRole("button", { name: "Test connection" }).click();
+  await expect(page.locator("form").first().locator(".cp-form-status")).toHaveText("The selected model is unavailable.");
+  await page.getByRole("button", { name: "Use for answers" }).click();
+  await expect(page.locator("form").nth(1).locator(".cp-form-status")).toHaveText("The provider is connected but was not selected for answers.");
+});
+
 test("marked-paper upload and destructive confirmations are guarded", async ({ page }) => {
   await page.goto("/login");
   const requests = [];
@@ -496,7 +572,10 @@ test("marked-paper upload and destructive confirmations are guarded", async ({ p
   await page.setContent(`<main><form data-paper-upload><input type="file" name="paper"><button>Upload</button><p class="cp-form-status"></p></form>
     <form data-m3-form data-confirm="Delete this paper?"><input name="action" value="paper.delete"><input name="id" value="paper-1"><button>Delete paper</button><p class="cp-form-status"></p></form><script src="/m3.js"></script></main>`);
   await page.locator('input[type="file"]').setInputFiles({ name: "paper.md", mimeType: "text/markdown", buffer: Buffer.from("Q1: Explain\n\nFeedback: Good") });
-  await page.getByRole("button", { name: "Upload" }).click();
+  await Promise.all([
+    page.waitForNavigation(),
+    page.getByRole("button", { name: "Upload" }).click(),
+  ]);
   await expect.poll(() => requests.length).toBe(1);
   expect(requests[0]).toMatchObject({ action: "paper.upload", payload: { filename: "paper.md", content_type: "text/markdown" } });
   await page.goto("/login");
@@ -509,7 +588,7 @@ test("demo settings and wiki expose no mutation controls", async ({ page }) => {
   await page.goto("/settings/providers?mock=1");
   await expect(page.locator('input[type="password"]')).toHaveCount(0);
   await expect(page.locator("form[data-m3-form]")).toHaveCount(0);
-  await expect(page.getByText(/Read-only preview/).first()).toBeVisible();
+  await expect(page.getByText(/read-only preview/i).first()).toBeVisible();
   await expect(page.locator("html")).not.toContainText(/sk-[A-Za-z0-9]/);
   await page.goto("/settings/data?mock=1");
   await expect(page.locator("form[data-wiki-export]")).toHaveCount(0);

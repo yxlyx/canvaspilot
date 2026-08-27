@@ -276,6 +276,50 @@
         }, 700);
       });
     }
+
+    const palette = ["#f2747d", "#fb8c5a", "#ffca63", "#9aca99", "#62c4c7", "#6799cc", "#bd8dc1", "#d77c52"];
+    document.querySelectorAll("[data-module-colour-key]").forEach(function (tile, index) {
+      const key = "wikibase-module-colour:" + tile.dataset.moduleColourKey;
+      const swatch = tile.querySelector(".module-colour-swatch");
+      const menu = tile.querySelector(".module-colour-menu");
+      if (!swatch || !menu) return;
+      let selected = palette[index % palette.length];
+      try { selected = localStorage.getItem(key) || selected; } catch (_) {}
+
+      function applyColour(colour) {
+        selected = palette.includes(colour) ? colour : palette[index % palette.length];
+        tile.style.setProperty("--module-colour", selected);
+        menu.querySelectorAll(".module-colour-option").forEach(function (option) {
+          option.setAttribute("aria-pressed", String(option.dataset.colour === selected));
+        });
+        try { localStorage.setItem(key, selected); } catch (_) {}
+      }
+
+      palette.forEach(function (colour) {
+        const option = document.createElement("button");
+        option.type = "button";
+        option.className = "module-colour-option";
+        option.dataset.colour = colour;
+        option.style.setProperty("--choice", colour);
+        option.setAttribute("aria-label", "Use this module colour");
+        option.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 4 5 5-9.5 9.5H5v-5.5L15 4Z"/><path d="m13 6 5 5"/></svg>';
+        option.addEventListener("click", function () {
+          applyColour(colour);
+          menu.hidden = true;
+          swatch.setAttribute("aria-expanded", "false");
+          swatch.focus();
+        });
+        menu.appendChild(option);
+      });
+      applyColour(selected);
+      swatch.addEventListener("click", function () {
+        const open = menu.hidden;
+        document.querySelectorAll(".module-colour-menu:not([hidden])").forEach(function (other) { other.hidden = true; });
+        document.querySelectorAll('.module-colour-swatch[aria-expanded="true"]').forEach(function (other) { other.setAttribute("aria-expanded", "false"); });
+        menu.hidden = !open;
+        swatch.setAttribute("aria-expanded", String(open));
+      });
+    });
   }
 
   function setupSources() {
@@ -380,6 +424,43 @@
       search.focus();
     });
 
+    grid.querySelectorAll("[data-document-preview-image]").forEach(function (image) {
+      const button = image.closest(".document-preview-button");
+      const loading = button && button.querySelector(".document-preview-loading");
+      const fallback = button && button.querySelector(".document-preview-fallback");
+      function ready() {
+        if (loading) loading.hidden = true;
+        if (fallback) fallback.hidden = true;
+        image.hidden = false;
+        if (button) {
+          button.classList.add("is-ready");
+          const card = button.closest(".document-card");
+          button.setAttribute("aria-label", "Preview first page of " + ((card && card.dataset.title) || "source"));
+        }
+      }
+      function unavailable() {
+        if (loading) loading.hidden = true;
+        image.hidden = true;
+        if (fallback) fallback.hidden = false;
+        if (button) button.classList.remove("is-ready");
+        const card = image.closest(".document-card");
+        if (card) card.dataset.previewFailed = "true";
+        if (button) button.setAttribute("aria-label", "Preview unavailable for " + ((card && card.dataset.title) || "source") + ". Select to retry");
+      }
+      image.addEventListener("load", ready);
+      image.addEventListener("error", unavailable);
+      let previewChecks = 0;
+      function checkPreview() {
+        if (image.complete) {
+          if (image.naturalWidth > 0) ready(); else unavailable();
+          return;
+        }
+        previewChecks += 1;
+        if (previewChecks < 100) window.setTimeout(checkPreview, 100);
+      }
+      checkPreview();
+    });
+
     grid.addEventListener("click", function (event) {
       const trigger = event.target.closest("[data-source-preview]");
       if (!trigger) return;
@@ -387,14 +468,16 @@
       if (!card) return;
       const title = card.dataset.title || "Source";
       const titleElement = document.getElementById("cp-preview-title");
-      const paperTitle = document.getElementById("cp-preview-paper-title");
       const detail = document.getElementById("cp-preview-detail");
       const previewStatus = document.getElementById("cp-preview-status");
       const previewContext = document.getElementById("cp-preview-context");
       const previewFormat = document.getElementById("cp-preview-format");
       const previewTopics = document.getElementById("cp-preview-topics");
+      const previewImage = document.getElementById("cp-preview-image");
+      const previewLoading = document.getElementById("cp-preview-loading");
+      const previewFallback = document.getElementById("cp-preview-fallback");
+      const previewOpen = document.getElementById("cp-preview-open");
       if (titleElement) titleElement.textContent = title;
-      if (paperTitle) paperTitle.textContent = title.replace(/^.*?—\s*/, "");
       if (detail) detail.textContent = [card.dataset.module, card.dataset.format, card.dataset.tags].filter(Boolean).join(" · ");
       if (previewContext) previewContext.textContent = card.dataset.module || "Workspace";
       if (previewFormat) previewFormat.textContent = card.dataset.format || "Source";
@@ -403,6 +486,35 @@
         const displayStatus = card.dataset.displayStatus || normalizeStatus(card.dataset.status) || "Ready";
         previewStatus.textContent = displayStatus;
         previewStatus.className = "status-pill status-" + (displayStatus === "Ready" ? "good" : displayStatus === "Pending" || displayStatus === "Importing" ? "info" : "warn");
+      }
+      const previewSrc = card.dataset.previewSrc || "";
+      const retrySrc = previewSrc && card.dataset.previewFailed === "true" ? previewSrc + "&retry=" + Date.now() : previewSrc;
+      if (previewOpen) {
+        const sourceHref = card.dataset.sourceHref || "";
+        previewOpen.href = sourceHref || "/sources";
+        previewOpen.textContent = sourceHref.startsWith("/chat") ? "Ask about source" : "Open source";
+        previewOpen.hidden = !sourceHref;
+      }
+      if (previewImage && previewLoading && previewFallback) {
+        previewImage.onload = function () {
+          previewLoading.hidden = true;
+          previewFallback.hidden = true;
+          previewImage.hidden = false;
+          card.dataset.previewFailed = "false";
+          const cardImage = card.querySelector("[data-document-preview-image]");
+          if (cardImage && cardImage.hidden && retrySrc) cardImage.src = retrySrc;
+        };
+        previewImage.onerror = function () {
+          previewLoading.hidden = true;
+          previewImage.hidden = true;
+          previewFallback.hidden = false;
+        };
+        previewImage.hidden = true;
+        previewFallback.hidden = Boolean(previewSrc);
+        previewLoading.hidden = !previewSrc;
+        previewImage.alt = previewSrc ? "First page of " + title : "";
+        if (retrySrc) previewImage.src = retrySrc;
+        else previewImage.removeAttribute("src");
       }
       openModal(previewModal, trigger);
     });
@@ -745,6 +857,7 @@
     let delay = 1500;
     let timer = 0;
     let stopped = false;
+    let pollingFailed = false;
 
     function key() {
       return "processing-" + (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : Date.now() + "-" + Math.random().toString(16).slice(2));
@@ -768,27 +881,55 @@
         return run.dataset.runStatus === "queued" || run.dataset.runStatus === "running";
       });
     }
+    function stageState(status) {
+      return ({ succeeded: "Done", skipped: "Not needed", running: "In progress", queued: "Waiting", blocked: "Next", failed: "Needs attention", paused: "Paused", cancelled: "Stopped" })[status] || "Saved";
+    }
+    function runState(status) {
+      return ({ ready: "Completed", queued: "Waiting", running: "In progress", failed: "Needs attention", paused: "Paused", cancelled: "Stopped" })[status] || status;
+    }
+    function stageLabel(name) {
+      return ({ parse_index: "Reading document", topic_proposals: "Organising topics", coverage: "Updating coverage", wiki: "Refreshing Wiki", flashcards: "Preparing flashcards", ready: "Source ready" })[name] || name;
+    }
     function apply(run) {
       const node = panel.querySelector('[data-processing-run="' + CSS.escape(run.id) + '"]');
       if (!node) return;
       const previous = node.dataset.runStatus;
+      const previousStage = node.dataset.runStage;
       node.dataset.runStatus = run.status;
+      node.dataset.runStage = run.current_stage || "";
       const pill = node.querySelector("header .status-pill");
       if (pill) {
-        pill.textContent = run.status === "ready" ? "completed" : run.status;
-        pill.className = "status-pill status-" + (run.status === "ready" ? "good" : run.status === "failed" || run.status === "cancelled" ? "warn" : "info");
+        pill.textContent = runState(run.status);
+        pill.className = "status-pill status-" + (run.status === "ready" ? "good" : run.status === "failed" || run.status === "cancelled" || run.status === "paused" ? "warn" : "info");
+      }
+      const currentStage = node.querySelector("[data-current-stage]");
+      if (currentStage) currentStage.textContent = run.status === "ready" ? "All selected steps finished" : stageLabel(run.current_stage);
+      const live = node.querySelector("[data-run-live]");
+      if (live && (previous !== run.status || previousStage !== run.current_stage)) {
+        const sourceName = node.querySelector(".cp-processing-source strong");
+        live.textContent = ((sourceName && sourceName.textContent) || "Source") + ": " + runState(run.status) + ". " + (run.status === "ready" ? "All selected steps finished" : stageLabel(run.current_stage)) + ".";
       }
       (run.stages || []).forEach(function (stage) {
         const item = node.querySelector('[data-stage="' + CSS.escape(stage.name) + '"]');
         if (!item) return;
         item.dataset.status = stage.status;
-        const spans = item.querySelectorAll("span");
-        if (spans[0]) spans[0].textContent = "Status: " + stage.status;
-        if (spans[1]) spans[1].textContent = (stage.completed_at || stage.started_at || stage.available_at) + " · attempt " + stage.attempt_count + " of " + stage.max_attempts;
+        const state = item.querySelector("[data-stage-state]");
+        if (state) state.textContent = stageState(stage.status);
       });
+      const sourceCard = document.querySelector('[data-source-id="' + CSS.escape(run.source_id) + '"]');
+      if (sourceCard && sourceCard.dataset.latestRunId === run.id) {
+        const stageNode = sourceCard.querySelector("[data-source-stage]");
+        const statusNode = sourceCard.querySelector("[data-source-run-status]");
+        const updatedNode = sourceCard.querySelector("[data-source-run-updated]");
+        const summary = sourceCard.querySelector("[data-source-processing]");
+        if (summary) summary.dataset.status = run.status;
+        if (stageNode) stageNode.textContent = run.status === "ready" ? "Source ready" : stageLabel(run.current_stage);
+        if (statusNode) statusNode.textContent = runState(run.status);
+        if (updatedNode) updatedNode.textContent = "just now";
+      }
       if ((run.status === "ready" || run.status === "failed" || run.status === "cancelled" || run.status === "paused") && previous !== run.status) {
         stopped = true;
-        window.location.reload();
+        window.setTimeout(function () { window.location.reload(); }, 1200);
       }
     }
     async function poll() {
@@ -796,17 +937,21 @@
       if (stopped || document.hidden) return;
       const runs = activeRuns();
       if (!runs.length) return;
-      try {
-        const values = await Promise.all(runs.map(function (node) { return request({ action: "run.status", id: node.dataset.processingRun }); }));
-        values.forEach(apply);
+      const results = await Promise.allSettled(runs.map(function (node) { return request({ action: "run.status", id: node.dataset.processingRun }); }));
+      results.forEach(function (result) { if (result.status === "fulfilled") apply(result.value); });
+      const failed = results.find(function (result) { return result.status === "rejected"; });
+      if (!failed) {
         delay = Math.min(Math.round(delay * 1.5), 15000);
+        pollingFailed = false;
         if (errorNode) errorNode.hidden = true;
-      } catch (error) {
+      } else {
         delay = Math.min(delay * 2, 30000);
-        if (errorNode) {
-          errorNode.textContent = (error && error.message ? error.message : "Processing status could not be refreshed.") + " Existing timeline and source content are preserved.";
+        if (errorNode && !pollingFailed) {
+          const error = failed.reason;
+          errorNode.textContent = (error && error.message ? error.message : "Source activity could not be refreshed.") + " Your documents are unchanged.";
           errorNode.hidden = false;
         }
+        pollingFailed = true;
       }
       timer = window.setTimeout(poll, delay);
     }
@@ -837,8 +982,8 @@
         button.disabled = true;
         if (status) status.textContent = "Queueing rebuild…";
         try {
-          const run = await request({ action: "manual.trigger", idempotency_key: key(), payload: { source_id: button.dataset.sourceId } });
-          if (status) status.textContent = "Rebuild queued. Run " + run.id + ". The current Wiki remains available.";
+          await request({ action: "manual.trigger", idempotency_key: key(), payload: { source_id: button.dataset.sourceId } });
+          if (status) status.textContent = "Rebuild queued. The current Wiki remains available while it refreshes.";
           window.setTimeout(function () { window.location.reload(); }, 500);
         } catch (error) {
           if (status) {
@@ -938,17 +1083,23 @@
     const log = document.getElementById("cp-chat-log");
     const input = document.getElementById("cp-chat-input");
     const sendButton = document.getElementById("cp-chat-send");
+    const inputLimit = document.getElementById("cp-chat-input-limit");
     const moduleSelect = document.getElementById("cp-chat-module");
     const moduleCode = document.getElementById("cp-chat-module-code");
     const composerCode = document.getElementById("cp-chat-composer-code");
     const welcome = document.getElementById("cp-chat-welcome");
     const clearButton = document.getElementById("cp-chat-clear");
     if (!form || !log || !input || !sendButton) return;
+    const providerReady = form.dataset.providerReady !== "false";
+    if (!providerReady) input.disabled = true;
 
     const history = [];
     let loading = false;
     let lastFailedMessage = null;
     let requestGeneration = 0;
+    let activeRequest = null;
+    let composing = false;
+    let compositionJustEnded = false;
 
     function selectedCode() {
       if (!moduleSelect) return "CS2040S";
@@ -964,7 +1115,50 @@
     }
 
     function syncSend() {
-      sendButton.disabled = loading || input.value.trim().length === 0;
+      const codepointLength = Array.from(input.value).length;
+      const tooLong = codepointLength > 8000;
+      input.setCustomValidity(tooLong ? "Keep your question to 8,000 characters or fewer." : "");
+      if (tooLong) input.setAttribute("aria-invalid", "true");
+      else input.removeAttribute("aria-invalid");
+      if (inputLimit) {
+        inputLimit.hidden = !tooLong;
+        inputLimit.textContent = tooLong ? codepointLength.toLocaleString() + " / 8,000 characters. Shorten the question to send. " : "";
+      }
+      sendButton.disabled = !providerReady || loading || input.value.trim().length === 0 || tooLong;
+      log.querySelectorAll(".answer-error button").forEach(function (button) {
+        button.disabled = loading;
+      });
+    }
+
+    function resizeComposer() {
+      input.style.height = "auto";
+      const nextHeight = Math.min(Math.max(input.scrollHeight, 52), 180);
+      input.style.height = nextHeight + "px";
+      input.style.overflowY = input.scrollHeight > 180 ? "auto" : "hidden";
+    }
+
+    function cancelActiveRequest() {
+      if (activeRequest) activeRequest.abort();
+      activeRequest = null;
+    }
+
+    function historyContent(content) {
+      return Array.from(String(content || "")).slice(0, 8000).join("");
+    }
+
+    function recentConversationHistory() {
+      const selected = [];
+      const encoder = new TextEncoder();
+      let encodedBytes = 0;
+      for (let end = history.length; end >= 2 && selected.length < 10; end -= 2) {
+        const pair = history.slice(end - 2, end);
+        if (pair[0].role !== "user" || pair[1].role !== "assistant") break;
+        const pairBytes = encoder.encode(JSON.stringify(pair)).length;
+        if (encodedBytes + pairBytes > 64 * 1024) break;
+        selected.unshift(pair[0], pair[1]);
+        encodedBytes += pairBytes;
+      }
+      return selected;
     }
 
     function showConversation() {
@@ -1027,16 +1221,83 @@
       return "#";
     }
 
-    function appendAnswer(message, citations) {
+    function configureAnswerLink(link, raw) {
+      const safeHref = safeCitationUrl(raw);
+      if (safeHref === "#") {
+        link.removeAttribute("href");
+        link.classList.add("chat-link-removed");
+        return false;
+      }
+      const url = new URL(safeHref, window.location.origin);
+      const external = url.origin !== window.location.origin;
+      if (external && window.location.protocol === "https:" && url.protocol !== "https:") {
+        link.removeAttribute("href");
+        link.classList.add("chat-link-removed");
+        return false;
+      }
+      link.href = safeHref;
+      if (external) {
+        link.dataset.externalHost = url.hostname;
+        link.title = "Opens " + url.hostname + " in a new tab";
+        link.target = "_blank";
+        link.rel = "nofollow noopener noreferrer";
+      }
+      return true;
+    }
+
+    function plainAnswer(message) {
+      const paragraph = document.createElement("p");
+      paragraph.className = "chat-answer-plain";
+      paragraph.textContent = message;
+      return paragraph;
+    }
+
+    function renderAnswerMarkdown(message) {
+      if (!window.marked || typeof window.marked.parse !== "function" || !window.DOMPurify) {
+        return plainAnswer(message);
+      }
+
+      const markdown = document.createElement("div");
+      markdown.className = "chat-markdown";
+      try {
+        const rendered = window.marked.parse(String(message || ""), {
+          async: false,
+          breaks: true,
+          gfm: true,
+        });
+        markdown.innerHTML = window.DOMPurify.sanitize(rendered, {
+          ALLOWED_TAGS: ["a", "blockquote", "br", "code", "del", "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "li", "ol", "p", "pre", "strong", "table", "tbody", "td", "th", "thead", "tr", "ul"],
+          ALLOWED_ATTR: ["href", "start", "title"],
+          ALLOW_ARIA_ATTR: false,
+          ALLOW_DATA_ATTR: false,
+        });
+      } catch (_) {
+        return plainAnswer(message);
+      }
+
+      markdown.querySelectorAll("h1, h2, h3, h4, h5, h6").forEach(function (heading) {
+        const level = Number(heading.tagName.slice(1));
+        const replacement = document.createElement(level <= 2 ? "h3" : "h4");
+        while (heading.firstChild) replacement.appendChild(heading.firstChild);
+        heading.replaceWith(replacement);
+      });
+      markdown.querySelectorAll("a[href]").forEach(function (link) {
+        configureAnswerLink(link, link.getAttribute("href"));
+      });
+      markdown.querySelectorAll("pre").forEach(function (codeBlock) {
+        codeBlock.tabIndex = 0;
+      });
+      return markdown;
+    }
+
+    function appendAnswer(message, citations, outcome, grounded) {
       const article = document.createElement("article");
       article.className = "answer-turn chat-dynamic";
       article.appendChild(makeMark("answer"));
       const content = document.createElement("div");
       const label = document.createElement("small");
-      label.textContent = "Grounded answer";
-      const text = document.createElement("p");
-      text.textContent = message;
-      content.append(label, text);
+      label.textContent = outcome === "no_evidence" ? "No matching evidence" : grounded === false ? "General answer" : "Grounded answer";
+      content.append(label, renderAnswerMarkdown(message));
 
       const citationList = Array.isArray(citations) ? citations : [];
       if (citationList.length) {
@@ -1049,9 +1310,10 @@
             ? "/sources?source=" + encodeURIComponent(citation.source_id)
               + (moduleSelect && moduleSelect.value ? "&enrollment_id=" + encodeURIComponent(moduleSelect.value) : "")
             : citation.url || "";
-          link.href = safeCitationUrl(citationUrl);
-          link.target = "_blank";
-          link.rel = "noopener noreferrer";
+          if (configureAnswerLink(link, citationUrl)) {
+            link.target = "_blank";
+            if (!link.rel) link.rel = "noopener noreferrer";
+          }
           const number = document.createElement("span");
           const referenceNumber = Number.isInteger(citation.reference_number) && citation.reference_number > 0
             ? citation.reference_number
@@ -1064,54 +1326,62 @@
         content.appendChild(citationRow);
       }
 
-      const footer = document.createElement("footer");
-      const prompt = document.createElement("span");
-      prompt.textContent = "Was this grounded enough?";
-      const useful = document.createElement("button");
-      useful.type = "button";
-      useful.textContent = "Yes";
-      useful.setAttribute("aria-label", "Answer was useful");
-      const needsWork = document.createElement("button");
-      needsWork.type = "button";
-      needsWork.textContent = "Needs work";
-      needsWork.setAttribute("aria-label", "Answer needs work");
-      footer.append(prompt, useful, needsWork);
-      content.appendChild(footer);
       article.appendChild(content);
       log.appendChild(article);
     }
 
-    function appendError(message, retryMessage) {
+    function appendError(code, message, retryMessage) {
       const article = document.createElement("article");
       article.className = "answer-turn answer-error chat-dynamic";
+      article.dataset.errorCode = code;
       article.appendChild(makeMark("error"));
       const content = document.createElement("div");
       const label = document.createElement("small");
-      label.textContent = "Retrieval interrupted";
+      const labels = {
+        session_expired: "Sign-in required",
+        provider_unavailable: "Answer provider unavailable",
+        backend_unavailable: "Workspace service unavailable",
+        retrieval_unavailable: "Retrieval interrupted",
+      };
+      label.textContent = labels[code] || labels.retrieval_unavailable;
       const text = document.createElement("p");
       text.textContent = message;
-      const retry = document.createElement("button");
-      retry.className = "cp-btn cp-btn-ghost";
-      retry.type = "button";
-      retry.textContent = "Retry";
-      retry.addEventListener("click", function () {
-        article.remove();
-        sendMessage(retryMessage, false);
-      });
-      content.append(label, text, retry);
+      const action = document.createElement(code === "session_expired" || code === "provider_unavailable" ? "a" : "button");
+      action.className = "cp-btn cp-btn-ghost";
+      if (code === "session_expired") {
+        action.href = "/login";
+        action.textContent = "Sign in";
+      } else if (code === "provider_unavailable") {
+        action.href = "/settings/providers";
+        action.textContent = "Open provider settings";
+      } else {
+        action.type = "button";
+        action.textContent = "Retry safely";
+        action.addEventListener("click", function () {
+          article.remove();
+          sendMessage(retryMessage, false);
+        });
+      }
+      content.append(label, text, action);
       article.appendChild(content);
       log.appendChild(article);
     }
 
     async function sendMessage(message, addStudent) {
+      if (loading) return;
+      cancelActiveRequest();
+      const controller = new AbortController();
+      activeRequest = controller;
       const generation = requestGeneration += 1;
       loading = true;
       lastFailedMessage = null;
       input.disabled = true;
       syncSend();
-      const priorHistory = history.slice();
+      const priorHistory = recentConversationHistory();
       if (addStudent !== false) appendStudent(message);
-      history.push({ role: "user", content: message });
+      history.push({ role: "user", content: historyContent(message) });
+      input.value = "";
+      resizeComposer();
       const pending = appendLoading();
       log.scrollTop = log.scrollHeight;
 
@@ -1120,32 +1390,38 @@
         const response = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
           body: JSON.stringify({
             message: message,
             enrollment_id: moduleSelect && moduleSelect.value ? moduleSelect.value : null,
             history: priorHistory,
           }),
         });
-        if (!response.ok) throw new Error("HTTP " + response.status);
-        const data = await response.json();
+        const data = await response.json().catch(function () { return {}; });
+        if (!response.ok) {
+          const failure = new Error(data.detail || "The retrieval step could not complete. Your question is still here.");
+          failure.code = response.status === 401 ? "session_expired" : (data.error || "retrieval_unavailable");
+          throw failure;
+        }
         if (generation !== requestGeneration) return;
         pending.remove();
-        const reply = data.message || "No grounded answer was returned.";
-        appendAnswer(reply, data.citations);
-        history.push({ role: "assistant", content: reply });
-        input.value = "";
+        const reply = data.message || "No matching evidence was found in the selected source scope.";
+        appendAnswer(reply, data.citations, data.outcome, data.grounded);
+        history.push({ role: "assistant", content: historyContent(reply) });
       } catch (error) {
         if (generation !== requestGeneration) return;
         pending.remove();
         history.length = 0;
         history.push.apply(history, priorHistory);
-        appendError("The retrieval step could not complete. Your question is still here, so you can retry safely.", message);
+        appendError(error.code || "retrieval_unavailable", error.message || "The retrieval step could not complete. Your question is still here, so you can retry safely.", message);
         lastFailedMessage = message;
         input.value = message;
+        resizeComposer();
       } finally {
         if (generation === requestGeneration) {
+          activeRequest = null;
           loading = false;
-          input.disabled = false;
+          input.disabled = !providerReady;
           syncSend();
           input.focus();
           log.scrollTop = log.scrollHeight;
@@ -1156,20 +1432,42 @@
     document.querySelectorAll(".suggestion-list [data-prompt]").forEach(function (button) {
       button.addEventListener("click", function () {
         input.value = button.dataset.prompt || "";
+        resizeComposer();
         syncSend();
         input.focus();
       });
     });
 
-    input.addEventListener("input", syncSend);
+    input.addEventListener("input", function () {
+      resizeComposer();
+      syncSend();
+    });
+    input.addEventListener("compositionstart", function () {
+      composing = true;
+      compositionJustEnded = false;
+    });
+    input.addEventListener("compositionend", function () {
+      composing = false;
+      compositionJustEnded = true;
+      window.setTimeout(function () { compositionJustEnded = false; }, 0);
+    });
+    input.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter" || event.shiftKey || composing || compositionJustEnded || event.isComposing || event.keyCode === 229) return;
+      event.preventDefault();
+      if (sendButton.disabled) return;
+      if (typeof form.requestSubmit === "function") form.requestSubmit(sendButton);
+      else sendButton.click();
+    });
     if (moduleSelect) moduleSelect.addEventListener("change", function () {
       requestGeneration += 1;
+      cancelActiveRequest();
       loading = false;
       lastFailedMessage = null;
       log.querySelectorAll(".chat-dynamic").forEach(function (turn) { turn.remove(); });
       history.length = 0;
       input.value = "";
-      input.disabled = false;
+      resizeComposer();
+      input.disabled = !providerReady;
       syncModule();
       syncSend();
       if (welcome) welcome.hidden = false;
@@ -1177,18 +1475,32 @@
     });
     form.addEventListener("submit", function (event) {
       event.preventDefault();
+      syncSend();
+      if (!input.checkValidity()) {
+        input.reportValidity();
+        input.focus();
+        return;
+      }
       const message = input.value.trim();
       if (!message || loading) return;
-      sendMessage(message, true);
+      const retryingFailedQuestion = lastFailedMessage === message;
+      if (retryingFailedQuestion) {
+        const errorTurn = log.querySelector(".answer-error:last-of-type");
+        if (errorTurn) errorTurn.remove();
+      }
+      sendMessage(message, !retryingFailedQuestion);
     });
     if (clearButton) {
       clearButton.addEventListener("click", function () {
         requestGeneration += 1;
+        cancelActiveRequest();
         loading = false;
         lastFailedMessage = null;
         log.querySelectorAll(".chat-dynamic").forEach(function (turn) { turn.remove(); });
         history.length = 0;
-        input.disabled = false;
+        input.value = "";
+        resizeComposer();
+        input.disabled = !providerReady;
         syncSend();
         if (welcome) welcome.hidden = false;
         clearButton.disabled = true;
@@ -1196,6 +1508,7 @@
     }
 
     syncModule();
+    resizeComposer();
     syncSend();
   }
 
@@ -1236,31 +1549,137 @@
     const form = area.querySelector("form");
     const status = area.querySelector("[data-flash-create-status]");
     const effective = area.querySelector("[data-scope-effective]");
+    const queue = document.querySelector("[data-draft-queue]");
+
+    if (queue) {
+      const queueStatus = queue.querySelector("[data-draft-queue-status]");
+      queue.addEventListener("click", async function (event) {
+        const button = event.target.closest("[data-delete-draft]");
+        if (!button) return;
+        const row = button.closest("[data-draft-id]");
+        if (!row || !window.confirm("Delete this draft from the review queue?")) return;
+        button.disabled = true;
+        queueStatus.textContent = "Deleting draft…";
+        try {
+          await flashRequest("archive", { deckId: row.dataset.draftId, revision: Number(row.dataset.draftRevision) });
+          row.remove();
+          queueStatus.textContent = "Draft deleted from the review queue.";
+          const list = queue.querySelector("[data-draft-list]");
+          if (list && !list.querySelector("[data-draft-id]")) {
+            const empty = document.createElement("p");
+            empty.className = "cp-empty-copy";
+            empty.dataset.draftEmpty = "";
+            empty.textContent = "No flashcards are waiting for review.";
+            list.appendChild(empty);
+          }
+        } catch (_) {
+          button.disabled = false;
+          queueStatus.textContent = "The draft could not be deleted. Try again.";
+        }
+      });
+    }
     if (!form || form.querySelector("fieldset:disabled")) return;
-    const enrollment = form.elements.enrollment_id;
-    const topics = form.elements.topic_ids;
-    const chunks = form.elements.source_chunk_ids;
+    const demo = form.hasAttribute("data-demo");
+    const generation = area.querySelector("[data-flash-generation]");
+    const submitButton = form.querySelector('button[type="submit"]');
+
+    function setGenerating(active) {
+      form.setAttribute("aria-busy", active ? "true" : "false");
+      if (generation) generation.hidden = !active;
+      if (submitButton) {
+        submitButton.disabled = active;
+        submitButton.textContent = active ? "Generating…" : "Generate flashcards";
+      }
+    }
+
+    function checkedValues(name) {
+      return Array.from(form.querySelectorAll('[name="' + CSS.escape(name) + '"]:checked')).map(function (input) { return input.value; });
+    }
+
+    function choice(container, type, name, value, title, detail) {
+      const label = document.createElement("label");
+      label.className = "cp-choice-row";
+      const input = document.createElement("input");
+      input.type = type;
+      input.name = name;
+      input.value = value;
+      const check = document.createElement("span");
+      check.className = "cp-choice-check";
+      check.setAttribute("aria-hidden", "true");
+      check.textContent = "✓";
+      const copy = document.createElement("span");
+      const strong = document.createElement("strong");
+      strong.textContent = title;
+      const small = document.createElement("small");
+      small.textContent = detail;
+      copy.append(strong, small);
+      label.append(input, check, copy);
+      container.appendChild(label);
+    }
+
+    function addSearch(container) {
+      if (!container || container.children.length <= 8 || container.previousElementSibling?.matches("[data-choice-search]")) return;
+      const search = document.createElement("input");
+      search.type = "search";
+      search.className = "cp-choice-search";
+      search.dataset.choiceSearch = "";
+      search.placeholder = "Search choices";
+      search.setAttribute("aria-label", "Search available evidence");
+      container.before(search);
+      search.addEventListener("input", function () {
+        const query = search.value.trim().toLowerCase();
+        Array.from(container.children).forEach(function (item) { item.hidden = Boolean(query) && !item.textContent.toLowerCase().includes(query); });
+      });
+    }
+
+    area.querySelectorAll("[data-choice-list]").forEach(addSearch);
 
     async function loadChunks() {
+      const enrollmentId = checkedValues("enrollment_id")[0];
       const topic = form.elements.chunk_topic_id;
       const source = form.elements.chunk_source_id;
+      const chunks = area.querySelector('[data-choice-list="source_chunk_ids"]');
       chunks.innerHTML = "";
-      if (!enrollment.value || !topic.value || !source.value) return;
-      const records = await flashRequest("chunks", { deckId: enrollment.value, payload: { topic_id: topic.value, source_id: source.value } });
-      records.slice(0, 100).forEach(function (record) { chunks.add(new Option(record.citation + " · " + (record.excerpt || "current evidence"), record.chunk_id)); });
+      if (!enrollmentId || !topic.value || !source.value) return;
+      if (demo) {
+        choice(chunks, "checkbox", "source_chunk_ids", "51111111-1111-1111-1111-111111111111", "Lecture 9, section 2", "Immutable lists preserve earlier versions.");
+        choice(chunks, "checkbox", "source_chunk_ids", "61111111-1111-1111-1111-111111111111", "Lab 6 brief", "Functional transformations return new values.");
+        syncEffective();
+        return;
+      }
+      const records = await flashRequest("chunks", { deckId: enrollmentId, payload: { topic_id: topic.value, source_id: source.value } });
+      records.slice(0, 100).forEach(function (record) { choice(chunks, "checkbox", "source_chunk_ids", record.chunk_id, record.citation, record.excerpt || "Current evidence"); });
+      addSearch(chunks);
+      syncEffective();
     }
 
     async function loadEnrollmentScope() {
-      if (!enrollment || !enrollment.value) return;
+      const enrollmentId = checkedValues("enrollment_id")[0];
+      if (!enrollmentId) return;
+      if (demo) {
+        const topics = area.querySelector('[data-choice-list="topic_ids"]');
+        topics.innerHTML = "";
+        choice(topics, "checkbox", "topic_ids", "71111111-1111-1111-1111-111111111111", "Immutable lists", "Canonical CS2030S topic");
+        choice(topics, "checkbox", "topic_ids", "81111111-1111-1111-1111-111111111111", "Lazy streams", "Canonical CS2030S topic");
+        const chunkTopic = form.elements.chunk_topic_id;
+        chunkTopic.innerHTML = '<option value="71111111-1111-1111-1111-111111111111">Immutable lists</option><option value="81111111-1111-1111-1111-111111111111">Lazy streams</option>';
+        const chunkSource = form.elements.chunk_source_id;
+        chunkSource.innerHTML = '<option value="21111111-1111-1111-1111-111111111111">Lecture 9: Immutable Lists and Lazy Streams</option><option value="31111111-1111-1111-1111-111111111111">Lab 6: Functional Collections Brief</option>';
+        await loadChunks();
+        return;
+      }
       try {
-        const loadedTopics = await flashRequest("topics", { deckId: enrollment.value });
+        const loadedTopics = await flashRequest("topics", { deckId: enrollmentId });
+        const topics = area.querySelector('[data-choice-list="topic_ids"]');
         topics.innerHTML = "";
         loadedTopics.filter(function (topic) { return !topic.archived; }).slice(0, 100).forEach(function (topic) {
-          topics.add(new Option(topic.title + " · " + topic.provenance, topic.id));
+          choice(topics, "checkbox", "topic_ids", topic.id, topic.title, topic.provenance);
         });
+        addSearch(topics);
         const chunkTopic = form.elements.chunk_topic_id;
-        chunkTopic.innerHTML = topics.innerHTML;
-        const candidates = await flashRequest("candidates", { deckId: enrollment.value });
+        chunkTopic.innerHTML = "";
+        loadedTopics.filter(function (topic) { return !topic.archived; }).slice(0, 100).forEach(function (topic) { chunkTopic.add(new Option(topic.title, topic.id)); });
+        const candidates = await flashRequest("candidates", { deckId: enrollmentId });
         const chunkSource = form.elements.chunk_source_id;
         chunkSource.innerHTML = "";
         candidates.filter(function (source) { return source.eligible && source.state === "ready"; }).slice(0, 100).forEach(function (source) {
@@ -1271,39 +1690,57 @@
         status.textContent = "Canonical topics or current chunks could not be loaded. Other stable scopes remain available.";
       }
     }
-    enrollment.addEventListener("change", loadEnrollmentScope);
     form.elements.chunk_topic_id.addEventListener("change", function () { loadChunks().catch(function () { status.textContent = "Current chunks could not be loaded."; }); });
     form.elements.chunk_source_id.addEventListener("change", function () { loadChunks().catch(function () { status.textContent = "Current chunks could not be loaded."; }); });
     loadEnrollmentScope();
 
-    form.addEventListener("change", function () {
+    function syncEffective() {
       const selected = form.querySelector('[name="scope_type"]:checked');
       const scope = selected ? selected.value : "";
       form.querySelectorAll("[data-scope]").forEach(function (node) { node.hidden = node.dataset.scope !== scope; });
-      effective.textContent = "Effective scope: " + scope.replaceAll("_", " ") + ". Only the visible bounded selection will be sent.";
+      const count = checkedValues(scope).length;
+      const label = selected?.closest("label")?.querySelector("strong")?.textContent || scope.replaceAll("_", " ");
+      effective.textContent = label + " · " + count + " selected. Only this bounded selection will be sent.";
+      const custom = form.querySelector(".cp-custom-count");
+      if (custom) custom.hidden = form.querySelector('[name="limit_choice"]:checked')?.value !== "custom";
+    }
+    form.addEventListener("change", function (event) {
+      if (event.target.name === "enrollment_id") loadEnrollmentScope();
+      syncEffective();
     });
-    form.dispatchEvent(new Event("change"));
+    syncEffective();
     form.addEventListener("submit", async function (event) {
       event.preventDefault();
       const scope = form.querySelector('[name="scope_type"]:checked').value;
-      const control = form.elements[scope];
-      const values = control && control.multiple ? Array.from(control.selectedOptions).map(function (option) { return option.value; }) : [control && control.value].filter(Boolean);
+      const values = checkedValues(scope);
       if (!values.length) { status.textContent = "Select at least one item in the visible scope."; return; }
       if (form.elements.regenerate.checked && !window.confirm("Regenerate creates a linked successor draft. The current matching draft remains in history. Continue?")) return;
-      const payload = { limit: Number(form.elements.limit.value), regenerate: form.elements.regenerate.checked };
+      const limitChoice = form.querySelector('[name="limit_choice"]:checked')?.value || "10";
+      const limit = Number(limitChoice === "custom" ? form.elements.custom_limit.value : limitChoice);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 20) { status.textContent = "Choose between 1 and 20 cards."; return; }
+      const payload = { limit: limit, regenerate: form.elements.regenerate.checked };
       if (form.elements.deck_title.value.trim()) payload.deck_title = form.elements.deck_title.value.trim();
-      payload[scope] = control.multiple ? values : values[0];
-      form.querySelector('button[type="submit"]').disabled = true;
-      status.textContent = "Creating or replaying the review draft…";
+      payload[scope] = scope === "enrollment_id" || scope === "wiki_page_id" ? values[0] : values;
+      if (demo) {
+        setGenerating(true);
+        await new Promise(function (resolve) { window.setTimeout(resolve, 1800); });
+        setGenerating(false);
+        status.className = "cp-status-banner cp-status-info";
+        status.textContent = "Demo request ready: " + limit + " cards from " + values.length + " selected " + (values.length === 1 ? "item" : "items") + ". Nothing was saved.";
+        return;
+      }
+      setGenerating(true);
+      status.textContent = "";
       try {
         const result = await flashRequest("generate", { payload: payload });
         if (!result.deck) throw new Error("request-failed");
         window.location.href = "/flashcards/drafts/" + encodeURIComponent(result.deck.id);
       } catch (error) {
         const code = error.body && error.body.error;
-        const providerIssue = ["provider_not_configured", "credential_unavailable", "reauth_required", "provider_authentication_failed", "provider_unavailable", "local_codex_unavailable", "local_codex_login_required"].includes(code);
+        const providerIssue = (typeof code === "string" && code.startsWith("provider_")) || ["credential_unavailable", "reauth_required", "local_codex_unavailable", "local_codex_login_required"].includes(code);
+        const providerDetail = error.body && typeof error.body.detail === "string" ? error.body.detail : "The selected answer provider could not generate this draft.";
         status.textContent = providerIssue
-          ? "Connect or reconnect an answer provider before generating this draft. Your scope selection is preserved. "
+          ? providerDetail + " Your scope selection is preserved. "
           : "The draft could not be created. Your scope selection is preserved; try again.";
         if (providerIssue) {
           const settingsLink = document.createElement("a");
@@ -1311,7 +1748,7 @@
           settingsLink.textContent = "Open provider settings";
           status.appendChild(settingsLink);
         }
-        form.querySelector('button[type="submit"]').disabled = false;
+        setGenerating(false);
       }
     });
   }

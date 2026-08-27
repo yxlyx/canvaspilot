@@ -15,6 +15,12 @@ pub const meta: mer.Meta = .{
 const ICON_LAYERS = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"m12 2 9 5-9 5-9-5 9-5Z\"/><path d=\"m3 12 9 5 9-5M3 17l9 5 9-5\"/></svg>";
 const ICON_ARROW = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M5 12h14M13 6l6 6-6 6\"/></svg>";
 const ICON_KEYBOARD = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><rect width=\"20\" height=\"16\" x=\"2\" y=\"4\" rx=\"2\"/><path d=\"M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10\"/></svg>";
+const ICON_SCOPE = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><circle cx=\"12\" cy=\"12\" r=\"8\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M12 2v3M12 19v3M2 12h3M19 12h3\"/></svg>";
+const ICON_TOPIC = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><circle cx=\"6\" cy=\"6\" r=\"2\"/><circle cx=\"18\" cy=\"7\" r=\"2\"/><circle cx=\"12\" cy=\"18\" r=\"2\"/><path d=\"m8 7 8 1M7 8l4 8M17 9l-4 7\"/></svg>";
+const ICON_FILE = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z\"/><path d=\"M14 2v6h6M8 13h8M8 17h6\"/></svg>";
+const ICON_WIKI = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M12 7v14\"/><path d=\"M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3Z\"/><path d=\"M21 18a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1h-5a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3Z\"/></svg>";
+const ICON_CLOCK = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M12 7v5l3 2\"/></svg>";
+const ICON_TRASH = "<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 10v6M14 10v6\"/></svg>";
 
 fn safeUuid(value: []const u8) bool {
     if (value.len != 36) return false;
@@ -36,7 +42,36 @@ pub fn render(req: mer.Request) mer.Response {
     var enrollments: []const lib.types.EnrollmentResponse = &.{};
     var sources: []const lib.types.SourceResponse = &.{};
     var wiki_pages: []const lib.types.WikiPageResponse = &.{};
-    if (!use_mock) {
+    var provider_state: lib.provider_ui.State = if (use_mock) .active else .unavailable;
+    const demo_enrollments = [_]lib.types.EnrollmentResponse{.{
+        .id = "11111111-1111-1111-1111-111111111111",
+        .code = "CS2030S",
+        .title = "Programming Methodology II",
+        .academic_year = "2025-2026",
+        .semester = 1,
+        .provenance = "illustrative",
+        .import_method = "fixture",
+        .topic_state = "ready",
+        .evidence_warning = null,
+        .archived = false,
+        .institution = "NUS",
+        .provider = "fixture",
+        .provider_version = "1",
+        .provider_academic_year = "2025-2026",
+        .source_url = "",
+        .provider_fetched_at = "2026-05-18T10:30:00Z",
+        .payload_sha256 = "illustrative",
+    }};
+    const demo_sources = [_]lib.types.SourceResponse{
+        .{ .id = "21111111-1111-1111-1111-111111111111", .user_id = lib.mock.me.id, .enrollment_id = demo_enrollments[0].id, .source_type = "markdown", .title = "Lecture 9: Immutable Lists and Lazy Streams", .status = "ready" },
+        .{ .id = "31111111-1111-1111-1111-111111111111", .user_id = lib.mock.me.id, .enrollment_id = demo_enrollments[0].id, .source_type = "assignment", .title = "Lab 6: Functional Collections Brief", .status = "ready" },
+    };
+    const demo_wiki_pages = [_]lib.types.WikiPageResponse{.{ .id = "41111111-1111-1111-1111-111111111111", .user_id = lib.mock.me.id, .slug = "immutable-lists", .title = "Immutable Lists and Lazy Streams", .markdown = "" }};
+    if (use_mock) {
+        enrollments = &demo_enrollments;
+        sources = &demo_sources;
+        wiki_pages = &demo_wiki_pages;
+    } else {
         const result = lib.backend.listFlashcardDecks(req.allocator, session.token);
         if (result.value) |parsed| live_decks = parsed.value else return lib.m3.liveError(req, "Flashcards", result.status);
         const enrollment_result = lib.backend.listEnrollments(req.allocator, session.token);
@@ -45,6 +80,8 @@ pub fn render(req: mer.Request) mer.Response {
         if (source_result.value) |parsed| sources = parsed.value else return lib.m3.liveError(req, "Flashcard sources", source_result.status);
         const wiki_result = lib.backend.listWikiPages(req.allocator, session.token);
         if (wiki_result.value) |parsed| wiki_pages = parsed.value else return lib.m3.liveError(req, "Flashcard wiki pages", wiki_result.status);
+        const provider_result = lib.backend.providerSettings(req.allocator, session.token);
+        if (provider_result.value) |items| provider_state = lib.provider_ui.classify(items.value) else if (provider_result.status == 401) return lib.m3.liveError(req, "Flashcards", 401);
     }
 
     var due: usize = 0;
@@ -60,7 +97,7 @@ pub fn render(req: mer.Request) mer.Response {
     const w = &buf.writer;
     lib.m3.demoMarker(req, w) catch return mer.internalError("flashcards render failed");
     w.print("<header class=\"cp-page-header\"><div><p class=\"cp-page-kicker\">{s}{d} approved cards available</p><h1 class=\"cp-page-title\">Flashcard workspace</h1><p class=\"cp-page-sub\">Create a source-bounded draft, review every card, then explicitly start studying an approved deck.</p></div></header>\n", .{ if (use_mock) "Synthetic demo · " else "", due }) catch return mer.internalError("flashcards render failed");
-    renderCreateArea(req, w, use_mock, enrollments, sources, wiki_pages) catch return mer.internalError("flashcards render failed");
+    renderCreateArea(req, w, use_mock, provider_state, enrollments, sources, wiki_pages) catch return mer.internalError("flashcards render failed");
 
     if (!use_mock) {
         if (req.queryParam("attempt")) |attempt| {
@@ -90,23 +127,56 @@ pub fn render(req: mer.Request) mer.Response {
     return lib.m3.privateForSession(req, lib.ui.htmlResponse(&buf));
 }
 
-fn renderCreateArea(req: mer.Request, w: *std.Io.Writer, demo: bool, enrollments: []const lib.types.EnrollmentResponse, sources: []const lib.types.SourceResponse, wiki_pages: []const lib.types.WikiPageResponse) !void {
-    try w.writeAll("<section class=\"cp-flash-create surface\" aria-labelledby=\"create-draft-title\" data-flash-create><header><div><p class=\"eyebrow\">1 · Create from an explicit stable scope</p><h2 id=\"create-draft-title\">Create a review draft</h2><p>Choose exactly one scope. Generation creates or replays a draft; it never starts practice.</p></div></header><form><fieldset");
-    if (demo) try w.writeAll(" disabled");
-    try w.writeAll("><legend>Generation scope</legend><div class=\"cp-scope-tabs\">");
-    const scopes = [_][2][]const u8{ .{ "enrollment_id", "Enrollment" }, .{ "topic_ids", "Topics" }, .{ "source_ids", "Ready sources" }, .{ "source_chunk_ids", "Current chunks" }, .{ "wiki_page_id", "Wiki page" } };
-    for (scopes, 0..) |scope, index| try w.print("<label><input type=\"radio\" name=\"scope_type\" value=\"{s}\"{s}><span>{s}</span></label>", .{ scope[0], if (index == 0) " checked" else "", scope[1] });
-    try w.writeAll("</div><div class=\"cp-scope-selectors\">");
-    try w.writeAll("<label data-scope=\"enrollment_id\"><span>Enrollment</span><select name=\"enrollment_id\" size=\"5\" required>");
-    for (enrollments) |item| if (!item.archived) try w.print("<option value=\"{s}\">{s} · {s}</option>", .{ lib.ui.escapeSafe(req.allocator, item.id), lib.ui.escapeSafe(req.allocator, item.code), lib.ui.escapeSafe(req.allocator, item.title) });
-    try w.writeAll("</select></label><label data-scope=\"topic_ids\" hidden><span>Canonical topics</span><select name=\"topic_ids\" size=\"6\" multiple></select><small>Select an enrollment above first; its canonical topics load here.</small></label>");
-    try w.writeAll("<label data-scope=\"source_ids\" hidden><span>READY sources</span><select name=\"source_ids\" size=\"6\" multiple>");
-    for (sources) |item| if (std.ascii.eqlIgnoreCase(item.status, "ready")) try w.print("<option value=\"{s}\">{s}</option>", .{ lib.ui.escapeSafe(req.allocator, item.id), lib.ui.escapeSafe(req.allocator, item.title) });
-    try w.writeAll("</select></label><div data-scope=\"source_chunk_ids\" hidden><label><span>Topic for evidence lookup</span><select name=\"chunk_topic_id\"></select></label><label><span>READY candidate source</span><select name=\"chunk_source_id\"></select></label><label><span>Current evidence chunks</span><select name=\"source_chunk_ids\" size=\"6\" multiple></select></label><small>Only currently selectable chunks returned for this enrollment, topic, and READY source are offered.</small></div><label data-scope=\"wiki_page_id\" hidden><span>Wiki page</span><select name=\"wiki_page_id\" size=\"6\">");
-    for (wiki_pages) |item| try w.print("<option value=\"{s}\">{s}</option>", .{ lib.ui.escapeSafe(req.allocator, item.id), lib.ui.escapeSafe(req.allocator, item.title) });
-    try w.writeAll("</select></label></div><label class=\"cp-field\"><span>Draft title (optional)</span><input name=\"deck_title\" maxlength=\"1000\"></label><label class=\"cp-field\"><span>Card limit</span><input name=\"limit\" type=\"number\" min=\"1\" max=\"20\" value=\"10\"></label><details><summary>Regenerate instead of replaying</summary><label class=\"cp-check-row\"><input type=\"checkbox\" name=\"regenerate\"><span>Create a linked successor draft<small>This intentionally supersedes the matching draft; the earlier draft remains in history.</small></span></label></details><p class=\"cp-scope-effective\" data-scope-effective role=\"status\">Effective scope: enrollment.</p><button class=\"cp-btn cp-btn-primary\" type=\"submit\">Generate review draft</button></fieldset></form><p data-flash-create-status aria-live=\"polite\"></p>");
-    if (demo) try w.writeAll("<p class=\"cp-demo-rating-note\">Synthetic demo fixture · read-only. Draft generation and all mutations are disabled.</p>");
+fn renderCreateArea(req: mer.Request, w: *std.Io.Writer, demo: bool, provider_state: lib.provider_ui.State, enrollments: []const lib.types.EnrollmentResponse, sources: []const lib.types.SourceResponse, wiki_pages: []const lib.types.WikiPageResponse) !void {
+    try w.writeAll("<section class=\"cp-flash-create surface\" aria-labelledby=\"create-draft-title\" data-flash-create><header><div><p class=\"eyebrow\">New study material</p><h2 id=\"create-draft-title\">Create a review draft</h2><p>Choose a bounded evidence scope, create a draft, then review every card before practice.</p></div></header>");
+    if (provider_state != .active) {
+        try lib.provider_ui.renderBoundary(w, provider_state, "Your existing drafts, approved decks, citations, and review practice remain available below.");
+        try w.writeAll("</section>");
+        return;
+    }
+    try w.writeAll("<form");
+    if (demo) try w.writeAll(" data-demo");
+    try w.writeAll("><fieldset><legend class=\"sr-only\">Create a source-backed flashcard draft</legend><section class=\"cp-flash-step\"><header><span>1</span><div><h3>Choose scope</h3><p>Pick the kind of evidence that should bound this draft.</p></div></header><div class=\"cp-scope-cards\">");
+    const scopes = [_]struct { value: []const u8, title: []const u8, detail: []const u8, icon: []const u8 }{
+        .{ .value = "enrollment_id", .title = "Enrollment", .detail = "One complete module scope", .icon = ICON_SCOPE },
+        .{ .value = "topic_ids", .title = "Topics", .detail = "Selected canonical concepts", .icon = ICON_TOPIC },
+        .{ .value = "source_ids", .title = "Ready sources", .detail = "One or more indexed documents", .icon = ICON_FILE },
+        .{ .value = "source_chunk_ids", .title = "Current chunks", .detail = "Specific evidence excerpts", .icon = ICON_LAYERS },
+        .{ .value = "wiki_page_id", .title = "Wiki page", .detail = "One compiled article", .icon = ICON_WIKI },
+    };
+    for (scopes, 0..) |scope, index| try w.print("<label><input type=\"radio\" name=\"scope_type\" value=\"{s}\"{s}><span class=\"cp-scope-card-icon\">{s}</span><span><strong>{s}</strong><small>{s}</small></span></label>", .{ scope.value, if (index == 0) " checked" else "", scope.icon, scope.title, scope.detail });
+    try w.writeAll("</div></section><section class=\"cp-flash-step\"><header><span>2</span><div><h3>Select evidence</h3><p>Only the selected evidence is sent for draft creation.</p></div></header><div class=\"cp-scope-selectors\">");
+    try w.writeAll("<div data-scope=\"enrollment_id\"><div class=\"cp-choice-grid\" data-choice-list=\"enrollment_id\">");
+    var first_enrollment = true;
+    for (enrollments) |item| if (!item.archived) {
+        try renderChoice(req, w, "radio", "enrollment_id", item.id, item.code, item.title, first_enrollment);
+        first_enrollment = false;
+    };
+    if (first_enrollment) try w.writeAll("<div class=\"cp-choice-empty\"><strong>No enrollment is available</strong><span>Import a module before creating an enrollment-scoped draft.</span><a href=\"/settings/learning\">Manage modules</a></div>");
+    try w.writeAll("</div></div><div data-scope=\"topic_ids\" hidden><div class=\"cp-choice-grid\" data-choice-list=\"topic_ids\"></div><p class=\"cp-empty-copy\" data-choice-empty>Select an enrollment first; its canonical topics will appear here.</p></div><div data-scope=\"source_ids\" hidden><div class=\"cp-choice-grid\" data-choice-list=\"source_ids\">");
+    var ready_sources: usize = 0;
+    for (sources) |item| if (std.ascii.eqlIgnoreCase(item.status, "ready")) {
+        ready_sources += 1;
+        try renderChoice(req, w, "checkbox", "source_ids", item.id, item.title, "Ready for cited study", false);
+    };
+    if (ready_sources == 0) try w.writeAll("<div class=\"cp-choice-empty\"><strong>No ready source is available</strong><span>Add or finish processing a source first.</span><a href=\"/sources\">Open Sources</a></div>");
+    try w.writeAll("</div></div><div data-scope=\"source_chunk_ids\" hidden><div class=\"cp-chunk-filters\"><label class=\"cp-field\"><span>Topic</span><select name=\"chunk_topic_id\"></select></label><label class=\"cp-field\"><span>Ready source</span><select name=\"chunk_source_id\"></select></label></div><div class=\"cp-choice-grid\" data-choice-list=\"source_chunk_ids\"></div><p class=\"cp-empty-copy\" data-choice-empty>Choose a topic and source to load current evidence chunks.</p></div><div data-scope=\"wiki_page_id\" hidden><div class=\"cp-choice-grid\" data-choice-list=\"wiki_page_id\">");
+    var first_wiki = true;
+    for (wiki_pages) |item| {
+        try renderChoice(req, w, "radio", "wiki_page_id", item.id, item.title, "Compiled from cited evidence", first_wiki);
+        first_wiki = false;
+    }
+    if (first_wiki) try w.writeAll("<div class=\"cp-choice-empty\"><strong>No Wiki page is available</strong><span>Compile a cited article before using this scope.</span><a href=\"/wiki\">Open Wiki</a></div>");
+    try w.writeAll("</div></div><p class=\"cp-scope-effective\" data-scope-effective role=\"status\">Enrollment · 0 selected</p></div></section><section class=\"cp-flash-step\"><header><span>3</span><div><h3>Create draft</h3><p>Name the draft if useful and choose a concise review size.</p></div></header><label class=\"cp-field\"><span>Draft title <small>Optional</small></span><input name=\"deck_title\" maxlength=\"1000\"></label><fieldset class=\"cp-count-choices\"><legend>Number of cards</legend>");
+    const limits = [_]usize{ 5, 10, 15, 20 };
+    for (limits) |limit| try w.print("<label><input type=\"radio\" name=\"limit_choice\" value=\"{d}\"{s}><span>{d}</span></label>", .{ limit, if (limit == 10) " checked" else "", limit });
+    try w.writeAll("<label><input type=\"radio\" name=\"limit_choice\" value=\"custom\"><span>Custom</span></label><label class=\"cp-custom-count\" hidden><span class=\"sr-only\">Custom card count</span><input name=\"custom_limit\" type=\"number\" min=\"1\" max=\"20\" value=\"10\"></label></fieldset><details class=\"cp-flash-advanced\"><summary>Advanced</summary><label class=\"cp-check-row\"><input type=\"checkbox\" name=\"regenerate\"><span>Create a linked successor draft<small>Use this only when you intentionally want to supersede a matching draft. The earlier draft remains in history.</small></span></label></details><div class=\"cp-flash-submit\"><button class=\"cp-btn cp-btn-primary\" type=\"submit\">Generate flashcards</button><p>Review the generated cards before adding them to practice.</p></div><div class=\"cp-flash-generation\" data-flash-generation hidden role=\"status\" aria-live=\"polite\"><span class=\"cp-spinner\" aria-hidden=\"true\"></span><div><strong>Generating flashcards</strong><span>Reading the selected evidence and preparing your review draft.</span></div><span class=\"cp-generation-track\" aria-hidden=\"true\"><i></i></span></div></section></fieldset></form><p data-flash-create-status aria-live=\"polite\"></p>");
+    if (demo) try w.writeAll("<p class=\"cp-demo-rating-note\">Synthetic demo fixture · configure the request freely. Previewing it does not create or save a draft.</p>");
     try w.writeAll("</section>");
+}
+
+fn renderChoice(req: mer.Request, w: *std.Io.Writer, kind: []const u8, name: []const u8, value: []const u8, title: []const u8, detail: []const u8, checked: bool) !void {
+    try w.print("<label class=\"cp-choice-row\"><input type=\"{s}\" name=\"{s}\" value=\"{s}\"{s}><span class=\"cp-choice-check\" aria-hidden=\"true\">✓</span><span><strong>{s}</strong><small>{s}</small></span></label>", .{ kind, name, lib.ui.escapeSafe(req.allocator, value), if (checked) " checked" else "", lib.ui.escapeSafe(req.allocator, title), lib.ui.escapeSafe(req.allocator, detail) });
 }
 
 fn renderEmptyPage(w: *std.Io.Writer) !void {
@@ -161,15 +231,15 @@ fn renderLivePage(req: mer.Request, w: *std.Io.Writer, decks: []const lib.types.
         if ((selected_id.len == 0 and active == null) or std.mem.eql(u8, deck.id, selected_id)) active = deck;
     }
     const active_id = if (active) |deck| deck.id else "";
-    try w.writeAll("<section class=\"cp-draft-decks surface\" aria-labelledby=\"draft-decks-title\"><header><div><p class=\"eyebrow\">Pipeline stage · Flashcard draft generation</p><h2 id=\"draft-decks-title\">Draft decks awaiting review</h2><p>Draft cards never enter the practice queue until you approve and publish the deck.</p></div></header><div class=\"cp-draft-list\">");
+    try w.print("<section class=\"cp-draft-decks surface\" aria-labelledby=\"draft-decks-title\" data-draft-queue><header class=\"cp-review-queue-head\"><span class=\"cp-review-pending-icon\">{s}</span><div><p class=\"eyebrow\">Pending review</p><h2 id=\"draft-decks-title\">Review generated flashcards</h2><p>Check each draft, then publish the cards you want to practise.</p></div></header><div class=\"cp-draft-list\" data-draft-list>", .{ICON_CLOCK});
     var draft_count: usize = 0;
     for (decks) |deck| if (std.mem.eql(u8, deck.lifecycle, "draft")) {
         draft_count += 1;
         const updated = lib.time.formatRelative(req.allocator, deck.updated_at, lib.time.nowSecs()) catch "—";
-        try w.print("<article><div><strong>{s}</strong><span>{d} draft cards · revision {d} · updated {s}</span></div><a class=\"cp-btn cp-btn-ghost\" href=\"/flashcards/drafts/{s}\">Review draft</a></article>", .{ lib.ui.escapeSafe(req.allocator, deck.title), deck.card_count, deck.revision, lib.ui.escapeSafe(req.allocator, updated), lib.ui.escapeSafe(req.allocator, deck.id) });
+        try w.print("<article data-draft-id=\"{s}\" data-draft-revision=\"{d}\"><span class=\"cp-review-pending-icon cp-review-pending-icon-small\">{s}</span><div><strong>{s}</strong><span>{d} cards · updated {s}</span></div><div class=\"cp-draft-actions\"><a class=\"cp-btn cp-btn-ghost\" href=\"/flashcards/drafts/{s}\">Review cards</a><button class=\"cp-icon-button cp-draft-delete\" type=\"button\" data-delete-draft aria-label=\"Delete {s} from the review queue\">{s}</button></div></article>", .{ lib.ui.escapeSafe(req.allocator, deck.id), deck.revision, ICON_CLOCK, lib.ui.escapeSafe(req.allocator, deck.title), deck.card_count, lib.ui.escapeSafe(req.allocator, updated), lib.ui.escapeSafe(req.allocator, deck.id), lib.ui.escapeSafe(req.allocator, deck.title), ICON_TRASH });
     };
-    if (draft_count == 0) try w.writeAll("<p class=\"cp-empty-copy\">No draft decks are awaiting review.</p>");
-    try w.writeAll("</div><p id=\"draft-review\" class=\"cp-inline-status\">Draft review surface reserved for the review workflow. Publishing remains an explicit action.</p></section>");
+    if (draft_count == 0) try w.writeAll("<p class=\"cp-empty-copy\" data-draft-empty>No flashcards are waiting for review.</p>");
+    try w.writeAll("</div><p class=\"cp-draft-queue-status\" data-draft-queue-status aria-live=\"polite\"></p></section>");
     try renderPageStart(w);
     for (decks) |deck| {
         if (!std.mem.eql(u8, deck.lifecycle, "approved")) continue;

@@ -94,11 +94,27 @@ test("polling advances queued to running without wiping the timeline on failure"
     if (calls === 1) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(run("running", [stage("running")])) });
     return route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"offline"}' });
   });
-  await page.setContent(`<main><section data-processing-panel><p data-processing-error role="alert" hidden></p><article data-processing-run="${run().id}" data-run-status="queued"><header><span class="status-pill">queued</span></header><ol><li data-stage="parse_index" data-status="queued"><strong>Parse and index</strong><span>Status: queued</span><span>time</span></li></ol></article></section><script src="/app.js"></script></main>`);
+  await page.setContent(`<main><article data-source-id="${run().source_id}" data-latest-run-id="${run().id}"><p data-source-processing data-status="queued"><span data-source-stage>Reading document</span><span data-source-run-status>Waiting</span><span data-source-run-updated>1m ago</span></p></article><section data-processing-panel><p data-processing-error role="alert" hidden></p><article data-processing-run="${run().id}" data-run-status="queued"><header><span data-current-stage>Reading document</span><span class="status-pill">Waiting</span></header><ol><li data-stage="parse_index" data-status="queued"><strong>Reading document</strong><span data-stage-state>Waiting</span></li></ol></article></section><script src="/app.js"></script></main>`);
   await expect(page.locator("[data-processing-run]")).toHaveAttribute("data-run-status", "running");
-  await expect(page.locator("[data-stage='parse_index']")).toContainText("Status: running");
-  await expect(page.locator("[data-processing-error]")).toContainText("preserved", { timeout: 7000 });
-  await expect(page.getByText("Parse and index")).toBeVisible();
+  await expect(page.locator("[data-stage='parse_index'] [data-stage-state]")).toHaveText("In progress");
+  await expect(page.locator("[data-source-run-status]")).toHaveText("In progress");
+  await expect(page.locator("[data-source-run-updated]")).toHaveText("just now");
+  await expect(page.locator("[data-processing-error]")).toContainText("unchanged", { timeout: 7000 });
+  await expect(page.locator("[data-stage='parse_index'] strong")).toHaveText("Reading document");
+});
+
+test("a selected historical run never overwrites the latest source-card state", async ({ page }) => {
+  await page.goto("/login");
+  const latest = run("running", [stage("running")]);
+  const historical = { ...run("running", [stage("running")]), id: "623e4567-e89b-12d3-a456-426614174000", current_stage: "wiki" };
+  await page.route("**/api/processing", async (route) => {
+    const body = route.request().postDataJSON();
+    const value = body.id === historical.id ? historical : latest;
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(value) });
+  });
+  await page.setContent(`<main><article data-source-id="${latest.source_id}" data-latest-run-id="${latest.id}"><span data-source-stage>Queued</span><span data-source-run-status>queued</span><span data-source-run-updated>1m ago</span></article><section data-processing-panel><p data-processing-error hidden></p><article data-processing-run="${latest.id}" data-run-status="queued"><header><span class="status-pill">queued</span></header></article><article data-processing-run="${historical.id}" data-run-status="queued"><header><span class="status-pill">queued</span></header></article></section><script src="/app.js"></script></main>`);
+  await expect(page.locator("[data-source-stage]")).toHaveText("Reading document");
+  await expect(page.locator("[data-source-run-status]")).toHaveText("In progress");
 });
 
 test("paused provider runs expose guidance and retry remains explicit", async ({ page }) => {
@@ -120,7 +136,7 @@ test("Wiki content remains visible when status polling fails", async ({ page }) 
   await page.route("**/api/processing", (route) => route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"offline"}' }));
   await page.setContent(`<main><article><h1>Prior valid Wiki</h1><p>Cited content remains readable.</p></article><section data-processing-panel><p data-processing-error role="alert" hidden></p><article data-processing-run="${run().id}" data-run-status="running"><header><span class="status-pill">running</span></header></article></section><script src="/app.js"></script></main>`);
   await expect(page.getByRole("heading", { name: "Prior valid Wiki" })).toBeVisible();
-  await expect(page.locator("[data-processing-error]")).toContainText("preserved");
+  await expect(page.locator("[data-processing-error]")).toContainText("unchanged");
   await expect(page.getByText("Cited content remains readable.")).toBeVisible();
 });
 
@@ -137,16 +153,47 @@ test("policy controls save independent durable values", async ({ page }) => {
   expect(body.payload).toEqual({ process_sources: false, map_topics: true, compile_wiki: true, flashcard_mode: "draft" });
 });
 
-test("explicit learning demo disables policy and target fieldsets semantically", async ({ page }) => {
+test("module settings stays focused and disables only the demo importer", async ({ page }) => {
   await page.goto("/settings/learning?mock=1");
-  const policy = page.getByRole("group", { name: "Processing policy controls" });
-  const defaults = page.getByRole("group", { name: "Default learning scope and daily target" });
-  await expect(policy).toHaveAttribute("disabled", "");
+  const importer = page.getByRole("group", { name: "Choose an import method" });
+  await expect(importer).toHaveAttribute("disabled", "");
+  for (const control of await importer.locator("input, select, button").all()) await expect(control).toBeDisabled();
+  await expect(page.getByRole("heading", { name: "Your local modules" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Choose what happens after intake" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Your daily starting point" })).toBeVisible();
+  const defaults = page.getByRole("group", { name: "Default module and daily review target" });
   await expect(defaults).toHaveAttribute("disabled", "");
+});
+
+test("source health owns the relocated processing controls", async ({ page }) => {
+  await page.goto("/sources/health?mock=1");
+  const policy = page.getByRole("group", { name: "Source processing defaults" });
+  await expect(page.getByRole("heading", { name: "Source processing defaults" })).toBeVisible();
+  await expect(policy).toHaveAttribute("disabled", "");
   await expect(policy.locator("input, select")).toHaveCount(4);
-  await expect(defaults.locator("input, select")).toHaveCount(2);
   for (const control of await policy.locator("input, select").all()) await expect(control).toBeDisabled();
-  for (const control of await defaults.locator("input, select").all()) await expect(control).toBeDisabled();
+});
+
+test("source activity uses concise words and distinct visual states", async ({ page }) => {
+  await page.goto("/sources?mock=1");
+  await expect(page.getByRole("heading", { name: "What happened to your sources" })).toBeVisible();
+  await expect(page.getByText("Current and recent runs")).toHaveCount(0);
+  await expect(page.getByText(/Source version/)).toHaveCount(0);
+  const completed = page.locator('.cp-stage-list [data-status="succeeded"] .cp-stage-indicator');
+  const waiting = page.locator('.cp-stage-list [data-status="blocked"] .cp-stage-indicator');
+  const running = page.locator('.cp-stage-list [data-status="running"] .cp-stage-indicator');
+  await expect(completed).toBeVisible();
+  await expect(waiting).toBeVisible();
+  await expect(running).toBeVisible();
+  const colors = await Promise.all([completed, waiting].map((item) => item.locator("svg:visible").evaluate((node) => getComputedStyle(node).color)));
+  expect(colors[0]).not.toBe(colors[1]);
+  await expect(running.locator(".cp-state-icon-progress")).toBeVisible();
+  const alignment = await running.evaluate((node) => {
+    const box = node.getBoundingClientRect();
+    const icon = node.querySelector("svg:where(.cp-state-icon-progress)").getBoundingClientRect();
+    return Math.abs((box.left + box.width / 2) - (icon.left + icon.width / 2));
+  });
+  expect(alignment).toBeLessThanOrEqual(1);
 });
 
 test("exact source context focuses and opens the owned source record", async ({ page }) => {
