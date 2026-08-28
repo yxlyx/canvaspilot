@@ -131,13 +131,22 @@ The backend runs as two processes: the FastAPI application serves requests, whil
 
 ## Quick start
 
+> [!IMPORTANT]
+> Launch WikiBase from the `feature/frontend-learning-settings-cleanup` branch.
+
+Clone the launch branch and enter the repository:
+
+```bash
+git clone --branch feature/frontend-learning-settings-cleanup --single-branch https://github.com/yxlyx/canvaspilot.git
+cd canvaspilot
+```
+
 ### Preview the interface
 
 The explicit fixture mode lets you explore the complete UI without a database or model provider.
 
 ```bash
-git clone https://github.com/yxlyx/canvaspilot.git
-cd canvaspilot/frontend
+cd frontend
 WIKIBASE_MOCK_ENABLED=true zig build serve
 ```
 
